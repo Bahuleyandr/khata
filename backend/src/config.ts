@@ -19,7 +19,21 @@ export const config = {
     .split(",")
     .map((id) => parseInt(id.trim(), 10)),
   databaseUrl: requireEnv("DATABASE_URL"),
-  anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
+  openrouterApiKey: requireEnv("OPENROUTER_API_KEY"),
+  // Per-intent model selection (OpenRouter model IDs). Defaults: Haiku 4.5
+  // for the hot text path, Sonnet 4.6 for vision and statement normalization.
+  // Override any of these per-deployment to swap providers (e.g. minimax/m1,
+  // openai/gpt-4o-mini) without code changes.
+  models: {
+    parseExpense: process.env["MODEL_PARSE_EXPENSE"] ?? "anthropic/claude-haiku-4-5",
+    classifyMessage: process.env["MODEL_CLASSIFY_MESSAGE"] ?? "anthropic/claude-haiku-4-5",
+    normalizeTransactions:
+      process.env["MODEL_NORMALIZE_TRANSACTIONS"] ?? "anthropic/claude-sonnet-4-6",
+    extractTextFromImage:
+      process.env["MODEL_EXTRACT_TEXT_FROM_IMAGE"] ?? "anthropic/claude-sonnet-4-6",
+    ocrReceiptImage:
+      process.env["MODEL_OCR_RECEIPT_IMAGE"] ?? "anthropic/claude-sonnet-4-6",
+  },
   sessionSecret: requireEnvMinLen("SESSION_SECRET", 32),
   allowedOrigins: (process.env["ALLOWED_ORIGINS"] ?? "https://bahuleyan.com,http://localhost:3000")
     .split(",")

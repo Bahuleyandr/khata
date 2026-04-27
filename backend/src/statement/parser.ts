@@ -1,9 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { PDFParse } from "pdf-parse";
 import { config } from "../config.js";
+import { llm } from "../ai/client.js";
+import { logUsage, logUsageError } from "../ai/usage.js";
 import type { ParsedTransaction } from "./types.js";
-
-const client = new Anthropic({ apiKey: config.anthropicApiKey, maxRetries: 5 });
 
 const NORMALIZATION_SYSTEM = `You are a financial data extractor. Extract all debit/credit transactions from bank or credit card statement text.
 
@@ -32,52 +31,75 @@ export async function extractTextFromImage(
   imageBuffer: Buffer,
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
 ): Promise<string> {
-  const base64 = imageBuffer.toString("base64");
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: { type: "base64", media_type: mediaType, data: base64 },
-          },
-          {
-            type: "text",
-            text: "Extract all text from this bank/credit card statement image. Preserve table structure using spaces and newlines.",
-          },
-        ],
-      },
-    ],
-  });
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected Claude response type");
-  return block.text;
+  const dataUrl = `data:${mediaType};base64,${imageBuffer.toString("base64")}`;
+  const model = config.models.extractTextFromImage;
+  const start = Date.now();
+  let response;
+  try {
+    response = await llm.chat.completions.create({
+      model,
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: dataUrl } },
+            {
+              type: "text",
+              text: "Extract all text from this bank/credit card statement image. Preserve table structure using spaces and newlines.",
+            },
+          ],
+        },
+      ],
+    });
+  } catch (err) {
+    logUsageError("extractTextFromImage", model, err, Date.now() - start);
+    throw err;
+  }
+  logUsage("extractTextFromImage", model, response, Date.now() - start);
+
+  const content = response.choices[0]?.message?.content;
+  if (typeof content !== "string") {
+    throw new Error("Unexpected response type from vision call");
+  }
+  return content;
 }
 
 export async function normalizeTransactions(rawText: string): Promise<ParsedTransaction[]> {
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    system: NORMALIZATION_SYSTEM,
-    messages: [{ role: "user", content: rawText }],
-  });
-  const block = response.content[0];
-  if (block.type !== "text") throw new Error("Unexpected Claude response type");
+  const model = config.models.normalizeTransactions;
+  const start = Date.now();
+  let response;
+  try {
+    response = await llm.chat.completions.create({
+      model,
+      max_tokens: 4096,
+      messages: [
+        { role: "system", content: NORMALIZATION_SYSTEM },
+        { role: "user", content: rawText },
+      ],
+    });
+  } catch (err) {
+    logUsageError("normalizeTransactions", model, err, Date.now() - start);
+    throw err;
+  }
+  logUsage("normalizeTransactions", model, response, Date.now() - start);
 
-  const trimmed = block.text.trim();
+  const text = response.choices[0]?.message?.content;
+  if (typeof text !== "string") {
+    throw new Error("Unexpected response type from normalization call");
+  }
+
+  const trimmed = text.trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    // Claude may have wrapped in a code fence despite instructions
+    // Some models wrap in a code fence despite instructions
     const match = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (!match) throw new Error(`Claude returned non-JSON: ${trimmed.slice(0, 200)}`);
-    parsed = JSON.parse(match[1]);
+    if (!match) throw new Error(`Model returned non-JSON: ${trimmed.slice(0, 200)}`);
+    parsed = JSON.parse(match[1]!);
   }
-  if (!Array.isArray(parsed)) throw new Error("Expected JSON array from Claude");
+  if (!Array.isArray(parsed)) throw new Error("Expected JSON array from normalization");
   return parsed as ParsedTransaction[];
 }
 
