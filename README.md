@@ -1,11 +1,11 @@
 # khata
 
-Engineering monorepo for Khata.
+Personal expense tracker. Capture spending via Telegram (text, voice notes, photos of receipts, forwarded UPI / bank-card SMS), browse it on a Next.js dashboard. Single-user, India-first (INR), deployed Tailnet-only on homelab k3s.
 
 | Service | Description |
 |---|---|
-| `/` (root) | Next.js 15 frontend — marketing / dashboard UI |
-| `backend/` | Fastify API + Telegram bot — expense tracker ingress |
+| `/` (root) | Next.js 15 dashboard — transactions, categories, tags, monthly Excel export |
+| `backend/` | Fastify API + grammy Telegram bot — capture, parse, classify, store |
 
 ## Quick start
 
@@ -59,7 +59,7 @@ Business logic lives in `lib/` — framework-agnostic, easy to unit test. Pages 
 - Node 22, npm
 - Docker (for local Postgres) — or a running Postgres instance
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
-- An S3-compatible bucket (Cloudflare R2, MinIO, AWS S3)
+- An S3-compatible bucket — MinIO is bundled in the k3s deploy; locally, any S3-compatible store works (point `S3_*` env vars at it)
 
 ### Local dev setup
 
@@ -96,7 +96,7 @@ npm run dev
 
 ### Deploy
 
-Deployed to **k3s on Dalekdefender** (Ubuntu 26.04, single-node) and accessible only over **Tailscale** — no public DNS, no public ingress. The bot runs in long-polling mode (no webhook). MiniMax handles every LLM call: text via the OpenAI-compat chat endpoint, vision via the `minimax-coding-plan-mcp` MCP server (`understand_image` tool) running as a subprocess inside the backend Pod.
+Deployed to **k3s on Dalekdefender** (Ubuntu 26.04, single-node) and accessible only over **Tailscale** — no public DNS, no public ingress. The bot runs in long-polling mode (no webhook), so the deployment uses `strategy: type: Recreate` (Telegram allows only one long-polling client per bot). MiniMax handles every LLM call: text via the OpenAI-compat chat endpoint, vision via the `minimax-coding-plan-mcp` MCP server (`understand_image` tool) running as a subprocess inside the backend Pod. Voice notes transcribe locally via `whisper.cpp` (ggml-tiny) baked into the image, with `ffmpeg` converting Telegram OGG/Opus to 16 kHz mono WAV. Receipt blobs live in an in-cluster MinIO and are served to the dashboard through an authenticated `/api/receipts/:id/image` proxy route (no presigned URLs).
 
 Setup, manifests, and the day-to-day `make deploy` flow live in [deploy/README.md](deploy/README.md).
 
@@ -108,6 +108,13 @@ See `backend/.env.example` for the full list. Never commit a `.env` file — it 
 
 GitHub Actions runs lint + tests on every push that touches `backend/`. See [`.github/workflows/backend-ci.yml`](.github/workflows/backend-ci.yml).
 
+> **Note (2026-04):** GHA on this account is currently billing-blocked, so every workflow run fails before it starts. **Red checks are not a code signal** — verification is local:
+>
+> ```bash
+> npm ci && npm run lint && npm test -- --run        # frontend
+> cd backend && npm ci && npm run lint && npm test && npm run build
+> ```
+
 Pushing CI workflow files requires a token with `workflow` scope:
 
 ```bash
@@ -117,7 +124,7 @@ git push origin main
 
 ## Frontend deploy
 
-**Deployed in-cluster** alongside the backend on Dalekdefender — built into a Docker image (multi-stage: Next.js static export → nginx) and served via Traefik path routing on the same Tailscale hostname as the backend (frontend at `/`, backend at `/api/*`). See [deploy/Dockerfile.frontend](deploy/Dockerfile.frontend) and [deploy/k8s/40-frontend.yaml](deploy/k8s/40-frontend.yaml). `next.config.ts` stays locked to `output: 'export'`.
+**Deployed in-cluster** alongside the backend on Dalekdefender — built into a Docker image (multi-stage: Next.js static export → nginx). Path routing happens **inside the frontend Pod's nginx**: it serves the static export at `/` and reverse-proxies `/api/*` + `/health` to the `khata-backend` Service. Tailscale Serve binds the Pod's port 80 to the VIP service `khata.hippocampus-monitor.ts.net`, which is distinct from the box's apex tailnet hostname (so it doesn't collide with other workloads on Dalekdefender). See [deploy/Dockerfile.frontend](deploy/Dockerfile.frontend) and [deploy/k8s/40-frontend.yaml](deploy/k8s/40-frontend.yaml). `next.config.ts` stays locked to `output: 'export'`.
 
 ## Runbook
 
