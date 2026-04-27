@@ -33,7 +33,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
   return (
     <>
       <nav className="nav">
-        <span className="brand">RaaReeRum</span>
+        <span className="brand">Khata</span>
         <Link href="/dashboard" className={pathname === '/dashboard' ? 'active' : ''}>Dashboard</Link>
         <Link href="/transactions" className={pathname === '/transactions' ? 'active' : ''}>Transactions</Link>
         <Link href="/receipts" className={pathname === '/receipts' ? 'active' : ''}>Receipts</Link>
