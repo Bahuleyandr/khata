@@ -3,7 +3,7 @@ import { PDFParse } from "pdf-parse";
 import { config } from "../config.js";
 import type { ParsedTransaction } from "./types.js";
 
-const client = new Anthropic({ apiKey: config.anthropicApiKey });
+const client = new Anthropic({ apiKey: config.anthropicApiKey, maxRetries: 5 });
 
 const NORMALIZATION_SYSTEM = `You are a financial data extractor. Extract all debit/credit transactions from bank or credit card statement text.
 
