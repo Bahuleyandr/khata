@@ -40,12 +40,23 @@ import-frontend:
 
 deploy: build import
 	kubectl apply -f $(DEPLOY_DIR)/k8s/00-namespace.yaml
+	kubectl apply -f $(DEPLOY_DIR)/k8s/15-minio.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/20-postgres.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/30-backend.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/40-frontend.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/50-ingress.yaml
 	kubectl rollout restart deployment/khata-backend  -n $(NS)
 	kubectl rollout restart deployment/khata-frontend -n $(NS)
+
+# Create the khata-statements bucket inside MinIO. Idempotent — re-running is
+# safe (mc mb -p does nothing if the bucket exists). Run once after `make
+# secrets` and the MinIO Pod is Ready.
+minio-bucket:
+	@AK=$$(kubectl get secret khata-secrets -n $(NS) -o jsonpath='{.data.S3_ACCESS_KEY_ID}'     | base64 -d); \
+	SK=$$(kubectl get secret khata-secrets -n $(NS) -o jsonpath='{.data.S3_SECRET_ACCESS_KEY}' | base64 -d); \
+	BK=$$(kubectl get secret khata-secrets -n $(NS) -o jsonpath='{.data.S3_BUCKET}'            | base64 -d); \
+	kubectl exec -n $(NS) deploy/khata-minio -- /bin/sh -c \
+		"mc alias set local http://localhost:9000 '$$AK' '$$SK' >/dev/null && mc mb -p local/$$BK"
 
 migrate:
 	kubectl exec -n $(NS) deploy/khata-backend -- npm run migrate
@@ -67,29 +78,34 @@ restart:
 undeploy:
 	kubectl delete namespace $(NS)
 
-# One-time: create the khata-secrets Secret. Reads each value interactively.
+# One-time: create the khata-secrets Secret.
+#
+# Auto-generates ephemeral values for everything internal (POSTGRES_PASSWORD,
+# SESSION_SECRET, S3_ACCESS_KEY_ID/SECRET — these are shared between MinIO
+# and the backend). S3_ENDPOINT/BUCKET/REGION default to in-cluster MinIO.
+# Only prompts for the three things you actually have to provide:
+# Telegram bot token, your TG user IDs, and your MiniMax API key.
 secrets:
-	@read -s -p "POSTGRES_PASSWORD: " POSTGRES_PASSWORD; echo; \
+	@POSTGRES_PASSWORD=$$(openssl rand -hex 16); \
+	SESSION_SECRET=$$(openssl rand -hex 32); \
+	S3_ACCESS_KEY_ID=khata-$$(openssl rand -hex 6); \
+	S3_SECRET_ACCESS_KEY=$$(openssl rand -hex 24); \
 	read -p  "TELEGRAM_BOT_TOKEN: " TELEGRAM_BOT_TOKEN; \
 	read -p  "ALLOWED_TELEGRAM_USER_IDS (comma-separated): " ALLOWED_TELEGRAM_USER_IDS; \
-	read -s -p "SESSION_SECRET (openssl rand -hex 32): " SESSION_SECRET; echo; \
 	read -p  "MINIMAX_API_KEY: " MINIMAX_API_KEY; \
-	read -p  "S3_ENDPOINT: " S3_ENDPOINT; \
-	read -p  "S3_BUCKET [khata-statements]: " S3_BUCKET; S3_BUCKET=$${S3_BUCKET:-khata-statements}; \
-	read -p  "S3_REGION [auto]: " S3_REGION; S3_REGION=$${S3_REGION:-auto}; \
-	read -p  "S3_ACCESS_KEY_ID: " S3_ACCESS_KEY_ID; \
-	read -s -p "S3_SECRET_ACCESS_KEY: " S3_SECRET_ACCESS_KEY; echo; \
 	kubectl create secret generic khata-secrets -n $(NS) \
 		--from-literal=POSTGRES_PASSWORD="$$POSTGRES_PASSWORD" \
 		--from-literal=TELEGRAM_BOT_TOKEN="$$TELEGRAM_BOT_TOKEN" \
 		--from-literal=ALLOWED_TELEGRAM_USER_IDS="$$ALLOWED_TELEGRAM_USER_IDS" \
 		--from-literal=SESSION_SECRET="$$SESSION_SECRET" \
 		--from-literal=MINIMAX_API_KEY="$$MINIMAX_API_KEY" \
-		--from-literal=S3_ENDPOINT="$$S3_ENDPOINT" \
-		--from-literal=S3_BUCKET="$$S3_BUCKET" \
-		--from-literal=S3_REGION="$$S3_REGION" \
+		--from-literal=S3_ENDPOINT="http://khata-minio.khata.svc.cluster.local:9000" \
+		--from-literal=S3_BUCKET="khata-statements" \
+		--from-literal=S3_REGION="us-east-1" \
 		--from-literal=S3_ACCESS_KEY_ID="$$S3_ACCESS_KEY_ID" \
 		--from-literal=S3_SECRET_ACCESS_KEY="$$S3_SECRET_ACCESS_KEY"
+	@echo ""
+	@echo "Secret created. Now run: make minio-bucket  (after MinIO Pod is Ready)"
 
 # Bind Tailscale Serve to localhost:80 (where k3s Traefik listens). After this,
 # the dashboard is reachable at https://<your-host>.<tailnet>.ts.net from any
