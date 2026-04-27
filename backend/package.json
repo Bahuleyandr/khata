@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/node-cron": "^3",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
     "eslint": "^9",
