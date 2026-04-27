@@ -96,14 +96,47 @@ vi.mock("../db/overrides.js", () => ({
 }));
 
 vi.mock("../ai/parse.js", () => ({
-  parseExpense: vi.fn().mockResolvedValue({
-    amount: 45,
-    currency: "INR",
-    description: "lunch",
-    merchant: null,
-    occurred_at: "2026-04-27",
-    category: "Food",
+  classifyMessage: vi.fn().mockResolvedValue({
+    type: "expense",
+    data: {
+      amount: 45,
+      currency: "INR",
+      description: "lunch",
+      merchant: null,
+      occurred_at: "2026-04-27",
+      category: "Food",
+    },
   }),
+}));
+
+vi.mock("../db/query.js", () => ({
+  totalSpendInCategory: vi.fn().mockResolvedValue([
+    { total_cents: "452300", currency: "INR", count: 12 },
+  ]),
+  topExpenses: vi.fn().mockResolvedValue([
+    {
+      id: "exp-1",
+      description: "Swiggy order",
+      merchant: "Swiggy",
+      occurred_at: new Date("2026-04-23T12:00:00Z"),
+      amount_cents: "120000",
+      currency: "INR",
+      category: "Food",
+    },
+    {
+      id: "exp-2",
+      description: "Ola ride",
+      merchant: "Ola",
+      occurred_at: new Date("2026-04-20T12:00:00Z"),
+      amount_cents: "89000",
+      currency: "INR",
+      category: "Transport",
+    },
+  ]),
+  spendByCategory: vi.fn().mockResolvedValue([
+    { category: "Food", total_cents: "452300", currency: "INR", count: 12 },
+    { category: "Transport", total_cents: "210000", currency: "INR", count: 5 },
+  ]),
 }));
 
 import {
@@ -121,6 +154,7 @@ import {
 import { pendingEdits } from "./session.js";
 import { clearPendingImport } from "../statement/session.js";
 import * as mockAI from "../ai/parse.js";
+import * as mockQuery from "../db/query.js";
 
 function makeCtx(overrides: Partial<Context> = {}): Context {
   return {
@@ -138,15 +172,45 @@ beforeEach(() => {
   pendingEdits.clear();
   importStore.clear();
   vi.clearAllMocks();
-  // Restore default AI parse mock (clearAllMocks wipes mockReturnValueOnce queues only)
-  vi.mocked(mockAI.parseExpense).mockResolvedValue({
-    amount: 45,
-    currency: "INR",
-    description: "lunch",
-    merchant: null,
-    occurred_at: "2026-04-27",
-    category: "Food",
+  // Restore default classification mock (clearAllMocks wipes mockReturnValueOnce queues only)
+  vi.mocked(mockAI.classifyMessage).mockResolvedValue({
+    type: "expense",
+    data: {
+      amount: 45,
+      currency: "INR",
+      description: "lunch",
+      merchant: null,
+      occurred_at: "2026-04-27",
+      category: "Food",
+    },
   });
+  vi.mocked(mockQuery.totalSpendInCategory).mockResolvedValue([
+    { total_cents: "452300", currency: "INR", count: 12 },
+  ]);
+  vi.mocked(mockQuery.topExpenses).mockResolvedValue([
+    {
+      id: "exp-1",
+      description: "Swiggy order",
+      merchant: "Swiggy",
+      occurred_at: new Date("2026-04-23T12:00:00Z"),
+      amount_cents: "120000",
+      currency: "INR",
+      category: "Food",
+    },
+    {
+      id: "exp-2",
+      description: "Ola ride",
+      merchant: "Ola",
+      occurred_at: new Date("2026-04-20T12:00:00Z"),
+      amount_cents: "89000",
+      currency: "INR",
+      category: "Transport",
+    },
+  ]);
+  vi.mocked(mockQuery.spendByCategory).mockResolvedValue([
+    { category: "Food", total_cents: "452300", currency: "INR", count: 12 },
+    { category: "Transport", total_cents: "210000", currency: "INR", count: 5 },
+  ]);
 });
 
 // ── Start / Help ──────────────────────────────────────────────────────────────
@@ -299,8 +363,8 @@ describe("handleTextMessage", () => {
     expect(text).toContain("2026-04-26");
   });
 
-  it("replies with friendly message when AI returns null", async () => {
-    vi.mocked(mockAI.parseExpense).mockResolvedValueOnce(null);
+  it("replies with friendly message when AI returns unknown classification", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({ type: "unknown" });
     const ctx = makeCtx({
       message: { text: "hello world not an expense" } as Context["message"],
     });
@@ -336,6 +400,122 @@ describe("handleTextMessage", () => {
     expect(vi.mocked(clearPendingImport)).toHaveBeenCalledWith(111111);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text.toLowerCase()).toContain("cancel");
+  });
+});
+
+// ── Query intent handler ──────────────────────────────────────────────────────
+
+describe("handleTextMessage — query intent", () => {
+  it("returns total spend for a category query", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({
+      type: "query",
+      intent: {
+        category: "Food",
+        time_range_label: "this month",
+        start_date: "2026-04-01",
+        end_date: "2026-04-27",
+      },
+    });
+    const ctx = makeCtx({
+      message: { text: "how much on food this month?" } as Context["message"],
+    });
+    await handleTextMessage(ctx);
+    expect(ctx.reply).toHaveBeenCalledOnce();
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Food");
+    expect(text).toContain("this month");
+    expect(text).toContain("4,523");
+  });
+
+  it("returns total spend across all categories when no category given", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({
+      type: "query",
+      intent: {
+        time_range_label: "this month",
+        start_date: "2026-04-01",
+        end_date: "2026-04-27",
+      },
+    });
+    const ctx = makeCtx({
+      message: { text: "how much did I spend this month?" } as Context["message"],
+    });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("this month");
+    expect(text).toContain("4,523");
+  });
+
+  it("returns top N expenses when top_n is set", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({
+      type: "query",
+      intent: {
+        time_range_label: "last week",
+        start_date: "2026-04-21",
+        end_date: "2026-04-27",
+        top_n: 5,
+      },
+    });
+    const ctx = makeCtx({
+      message: { text: "top 5 expenses last week" } as Context["message"],
+    });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Top");
+    expect(text).toContain("Swiggy");
+    expect(text).toContain("last week");
+  });
+
+  it("returns category breakdown when group_by_category is set", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({
+      type: "query",
+      intent: {
+        time_range_label: "this month",
+        start_date: "2026-04-01",
+        end_date: "2026-04-27",
+        group_by_category: true,
+      },
+    });
+    const ctx = makeCtx({
+      message: { text: "show spending by category this month" } as Context["message"],
+    });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Food");
+    expect(text).toContain("Transport");
+    expect(text).toContain("this month");
+    expect(text).toContain("Total");
+  });
+
+  it("replies with clarification question when AI returns clarify type", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({
+      type: "clarify",
+      question: "Which month did you mean?",
+    });
+    const ctx = makeCtx({
+      message: { text: "how much did I spend?" } as Context["message"],
+    });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Which month");
+  });
+
+  it("replies 'no expenses found' when query returns empty rows", async () => {
+    vi.mocked(mockAI.classifyMessage).mockResolvedValueOnce({
+      type: "query",
+      intent: {
+        category: "Entertainment",
+        time_range_label: "last year",
+        start_date: "2025-01-01",
+        end_date: "2025-12-31",
+      },
+    });
+    vi.mocked(mockQuery.totalSpendInCategory).mockResolvedValueOnce([]);
+    const ctx = makeCtx({
+      message: { text: "how much on entertainment last year?" } as Context["message"],
+    });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text.toLowerCase()).toContain("no expenses");
   });
 });
 

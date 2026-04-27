@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { InlineKeyboard } from "grammy";
 import type { Context } from "grammy";
 import { uploadStatement } from "../storage/index.js";
@@ -29,9 +30,12 @@ import {
   updateExpenseAmount,
   updateExpenseCategory,
   updateExpenseDate,
+  findExpenseByContentHash,
 } from "../db/expenses.js";
 import { getOverrides, upsertOverride } from "../db/overrides.js";
-import { parseExpense } from "../ai/parse.js";
+import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
+import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
+import { ocrReceiptImage } from "../receipt/ocr.js";
 import { pendingEdits } from "./session.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -233,6 +237,69 @@ export async function handleDeleteCategory(ctx: Context): Promise<void> {
   );
 }
 
+// ── Query handler ─────────────────────────────────────────────────────────────
+
+async function handleQueryIntent(
+  ctx: Context,
+  userId: number,
+  intent: QueryIntent,
+): Promise<void> {
+  const { category, time_range_label, start_date, end_date, group_by_category, top_n } = intent;
+  try {
+    if (top_n) {
+      const rows = await topExpenses(userId, start_date, end_date, top_n);
+      if (rows.length === 0) {
+        await ctx.reply(`No expenses found for ${time_range_label}.`);
+        return;
+      }
+      const lines = rows.map((r, i) => {
+        const name = r.merchant ?? r.description;
+        const date = new Date(r.occurred_at).toISOString().split("T")[0]!;
+        return `${i + 1}. ${name} — ${formatAmount(Number(r.amount_cents), r.currency)} (${date})`;
+      });
+      await ctx.reply(
+        `*Top ${rows.length} expenses — ${time_range_label}*\n${lines.join("\n")}`,
+        { parse_mode: "Markdown" },
+      );
+    } else if (group_by_category) {
+      const rows = await spendByCategory(userId, start_date, end_date);
+      if (rows.length === 0) {
+        await ctx.reply(`No expenses found for ${time_range_label}.`);
+        return;
+      }
+      const lines = rows.map(
+        (r) => `- ${r.category}: ${formatAmount(Number(r.total_cents), r.currency)}`,
+      );
+      const total = rows.reduce((s, r) => s + Number(r.total_cents), 0);
+      const currency = rows[0]!.currency;
+      await ctx.reply(
+        `*Spend by category — ${time_range_label}*\n${lines.join("\n")}\n\n*Total: ${formatAmount(total, currency)}*`,
+        { parse_mode: "Markdown" },
+      );
+    } else {
+      const rows = await totalSpendInCategory(userId, category, start_date, end_date);
+      if (rows.length === 0) {
+        const catLabel = category ? ` on *${category}*` : "";
+        await ctx.reply(
+          `No expenses found${catLabel} for ${time_range_label}.`,
+          { parse_mode: "Markdown" },
+        );
+        return;
+      }
+      const row = rows[0]!;
+      const catLabel = category ? ` on *${category}*` : "";
+      const txn = Number(row.count);
+      await ctx.reply(
+        `*${formatAmount(Number(row.total_cents), row.currency)}*${catLabel} — ${time_range_label} (${txn} transaction${txn !== 1 ? "s" : ""})`,
+        { parse_mode: "Markdown" },
+      );
+    }
+  } catch (err) {
+    console.error("Query error:", err);
+    await ctx.reply("⚠️ I couldn't fetch that data. Please try again.");
+  }
+}
+
 // ── Text message handler ──────────────────────────────────────────────────────
 
 export async function handleTextMessage(ctx: Context): Promise<void> {
@@ -337,28 +404,71 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     }
   }
 
-  // Parse as new expense
+  // "category: X" quick correction for the last logged expense
+  if (/^category\s*:/i.test(text)) {
+    const catName = text.replace(/^category\s*:\s*/i, "").trim();
+    if (!pendingEdit) {
+      await ctx.reply("No recent expense to recategorize. Log one first.");
+      return;
+    }
+    const cat = await getCategoryByName(userId, catName);
+    if (!cat) {
+      const allCats = await getUserCategories(userId);
+      await ctx.reply(
+        `⚠️ "${catName}" not found. Your categories: ${allCats.map((c) => c.name).join(", ")}`,
+      );
+      return;
+    }
+    const ok = await updateExpenseCategory(pendingEdit.expenseId, userId, cat.id);
+    if (ok) {
+      await upsertOverride(userId, pendingEdit.description.toLowerCase(), cat.name).catch(
+        console.error,
+      );
+      pendingEdit.category = cat.name;
+    }
+    await ctx.reply(ok ? `✅ Category updated to "${cat.name}"` : "⚠️ Failed to update category");
+    return;
+  }
+
+  // Classify the message (expense vs spending query vs unknown)
   await seedDefaultCategories(userId).catch(console.error);
   const [cats, overrides] = await Promise.all([getUserCategories(userId), getOverrides(userId)]);
 
-  let parsed;
+  let classification;
   try {
-    parsed = await parseExpense(text, cats.map((c) => c.name), overrides, todayString());
+    classification = await classifyMessage(
+      text,
+      cats.map((c) => c.name),
+      overrides,
+      todayString(),
+    );
   } catch (err) {
-    console.error("AI parse error:", err);
+    console.error("AI classify error:", err);
     await ctx.reply("⚠️ I had trouble parsing that. Try: `$45 lunch` or `paid 1200 for uber`");
     return;
   }
 
-  if (!parsed) {
+  if (classification.type === "query") {
+    await handleQueryIntent(ctx, userId, classification.intent);
+    return;
+  }
+
+  if (classification.type === "clarify") {
+    await ctx.reply(classification.question);
+    return;
+  }
+
+  if (classification.type !== "expense") {
     await ctx.reply(
       "🤔 That doesn't look like an expense. Try: `$45 lunch` or `paid 1200 for uber`",
     );
     return;
   }
 
+  const parsed = classification.data;
+
   const cat =
-    cats.find((c) => c.name.toLowerCase() === parsed!.category.toLowerCase()) ??
+    cats.find((c) => c.name.toLowerCase() === parsed.category.toLowerCase()) ??
     cats.find((c) => c.name === "Other") ??
     null;
 
@@ -460,6 +570,125 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   await ctx.answerCallbackQuery();
 }
 
+// ── Receipt OCR pipeline ──────────────────────────────────────────────────────
+
+async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string): Promise<void> {
+  const userId = ctx.from!.id;
+
+  await ctx.reply("📷 Reading receipt…");
+
+  let buffer: Buffer;
+  try {
+    ({ buffer } = await downloadTelegramFile(fileId));
+  } catch (err) {
+    await ctx.reply(`❌ Could not download the image: ${String(err)}`);
+    return;
+  }
+
+  // Idempotency: skip if the exact same image was already logged
+  const contentHash = createHash("sha256").update(buffer).digest("hex");
+  const existing = await findExpenseByContentHash(userId, contentHash);
+  if (existing) {
+    await ctx.reply("⚠️ This receipt was already logged. Skipping duplicate.");
+    return;
+  }
+
+  // Upload original image to S3
+  const receiptId = crypto.randomUUID();
+  const s3Key = `receipts/${userId}/${receiptId}`;
+  try {
+    await uploadStatement(s3Key, buffer, mimeType);
+  } catch (err) {
+    await ctx.reply(`❌ Could not store the image: ${String(err)}`);
+    return;
+  }
+
+  // OCR via Claude vision with a receipt-specific prompt
+  let ocrText: string;
+  try {
+    const imageMime = (["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mimeType)
+      ? mimeType
+      : "image/jpeg") as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+    ocrText = await ocrReceiptImage(buffer, imageMime);
+  } catch (err) {
+    await ctx.reply(`❌ OCR failed: ${String(err)}\n\nPlease try a clearer, well-lit photo.`);
+    return;
+  }
+
+  if (ocrText.trim().length < 20) {
+    await ctx.reply(
+      "⚠️ I couldn't read enough text from this image. Please send a clearer photo of the receipt.",
+    );
+    return;
+  }
+
+  // Parse extracted text using the same NL layer as text expenses
+  await seedDefaultCategories(userId).catch(console.error);
+  const [cats, overrides] = await Promise.all([getUserCategories(userId), getOverrides(userId)]);
+
+  let parsed;
+  try {
+    parsed = await parseExpense(ocrText, cats.map((c) => c.name), overrides, todayString());
+  } catch (err) {
+    console.error("Receipt parse error:", err);
+    await ctx.reply(
+      "⚠️ Could not extract expense details from this image. Is this a receipt or bill? Try a clearer photo.",
+    );
+    return;
+  }
+
+  if (!parsed) {
+    await ctx.reply(
+      "🤔 This doesn't look like a receipt or bill. If it is, try a clearer photo.\n\nFor manual entry, just type the amount and description.",
+    );
+    return;
+  }
+
+  const cat =
+    cats.find((c) => c.name.toLowerCase() === parsed!.category.toLowerCase()) ??
+    cats.find((c) => c.name === "Other") ??
+    null;
+  const amount_cents = Math.round(parsed.amount * 100);
+  const occurred_at = new Date(parsed.occurred_at + "T12:00:00Z");
+
+  let expenseId: string;
+  try {
+    expenseId = await insertExpense({
+      userId,
+      amount_cents,
+      currency: parsed.currency,
+      description: parsed.description,
+      merchant: parsed.merchant,
+      category_id: cat?.id ?? null,
+      occurred_at,
+      source: "receipt",
+      raw_text: ocrText,
+      image_key: s3Key,
+      content_hash: contentHash,
+    });
+  } catch (err) {
+    await ctx.reply(`❌ Failed to save expense: ${String(err)}`);
+    return;
+  }
+
+  pendingEdits.set(userId, {
+    expenseId,
+    amount_cents,
+    currency: parsed.currency,
+    category: cat?.name ?? "Other",
+    description: parsed.description,
+    occurred_at,
+  });
+
+  const merchantPart = parsed.merchant ? ` at ${parsed.merchant}` : "";
+  await ctx.reply(
+    `✅ Receipt logged: ${formatAmount(amount_cents, parsed.currency)}${merchantPart} — ${cat?.name ?? "Other"}\n` +
+      `Date: ${parsed.occurred_at}\n\n` +
+      `Reply \`category: <name>\` to change category, or use the buttons below.`,
+    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
+  );
+}
+
 // ── Document / Photo ──────────────────────────────────────────────────────────
 
 export async function handleDocument(ctx: Context): Promise<void> {
@@ -487,5 +716,5 @@ export async function handlePhoto(ctx: Context): Promise<void> {
   }
 
   const photo = photos[photos.length - 1]!;
-  await runStatementPipeline(ctx, photo.file_id, "image/jpeg", "photo.jpg");
+  await runReceiptPipeline(ctx, photo.file_id, "image/jpeg");
 }
