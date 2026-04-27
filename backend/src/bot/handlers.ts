@@ -294,9 +294,27 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     return;
   }
 
+  const currency = rows[0]!.currency;
   const total = rows.reduce((s, r) => s + Number(r.amount_cents), 0);
-  const totalStr = formatAmount(total, rows[0]!.currency);
+  const totalStr = formatAmount(total, currency);
 
+  // Per-category aggregate, sorted highest spend first.
+  const byCategory = new Map<string, { totalCents: number; count: number }>();
+  for (const r of rows) {
+    const cur = byCategory.get(r.category) ?? { totalCents: 0, count: 0 };
+    cur.totalCents += Number(r.amount_cents);
+    cur.count += 1;
+    byCategory.set(r.category, cur);
+  }
+  const categoryLines = [...byCategory.entries()]
+    .sort((a, b) => b[1].totalCents - a[1].totalCents)
+    .map(
+      ([name, agg]) =>
+        `• ${name} — ${formatAmount(agg.totalCents, currency)} (${agg.count})`,
+    )
+    .join("\n");
+
+  // Per-expense lines, newest first.
   const lines = rows.map((r) => {
     const d = new Date(r.occurred_at);
     const day = String(d.getUTCDate()).padStart(2, "0");
@@ -307,27 +325,34 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     return `\`${day} ${monAbbr}\` ${amt} — ${trimmed} _(${r.category})_`;
   });
 
-  // Telegram caps a single message at 4096 chars; leave room for header
-  const MAX_BODY = 3700;
-  const fullBody = lines.join("\n");
-  let body: string;
-  if (fullBody.length <= MAX_BODY) {
-    body = fullBody;
+  const noun = rows.length === 1 ? "expense" : "expenses";
+  const header = `📊 *${monthLabel} — ${rows.length} ${noun}, ${totalStr}*\n\n`;
+  const categorySection = `*By category:*\n${categoryLines}\n\n`;
+
+  // Telegram caps a single message at 4096 chars; leave a safety margin.
+  const MAX_TOTAL = 3950;
+  const baseLength = header.length + categorySection.length;
+  const MAX_INDIVIDUAL = MAX_TOTAL - baseLength;
+
+  const fullIndividual = lines.join("\n");
+  let individualBody: string;
+  if (fullIndividual.length <= MAX_INDIVIDUAL) {
+    individualBody = fullIndividual;
   } else {
     let acc = "";
     let kept = 0;
+    const FOOTER_RESERVE = 80;
     for (const line of lines) {
-      if (acc.length + line.length + 1 > MAX_BODY) break;
+      if (acc.length + line.length + 1 > MAX_INDIVIDUAL - FOOTER_RESERVE) break;
       acc += line + "\n";
       kept++;
     }
-    body = acc.trimEnd() +
-      `\n\n_…showing ${kept} of ${rows.length} entries. Use /export for the full CSV._`;
+    individualBody =
+      acc.trimEnd() +
+      `\n\n_…showing ${kept} of ${rows.length} entries. Use /export for full CSV._`;
   }
 
-  const noun = rows.length === 1 ? "expense" : "expenses";
-  const header = `📊 *${monthLabel} — ${rows.length} ${noun}, ${totalStr}*\n\n`;
-  await ctx.reply(header + body, { parse_mode: "Markdown" });
+  await ctx.reply(header + categorySection + individualBody, { parse_mode: "Markdown" });
 }
 
 // ── Query handler ─────────────────────────────────────────────────────────────
