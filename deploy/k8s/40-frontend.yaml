@@ -39,9 +39,11 @@ metadata:
   name: khata-frontend
   namespace: khata
 spec:
+  type: NodePort
   selector:
     app: khata-frontend
   ports:
     - port: 80
       targetPort: 80
+      nodePort: 30080 # fixed so `tailscale serve` can target a stable URL
       name: http
