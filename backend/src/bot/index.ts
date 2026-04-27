@@ -13,6 +13,7 @@ import {
   handleCallbackQuery,
   handleDocument,
   handlePhoto,
+  handleExport,
 } from "./handlers.js";
 
 export const bot = new Bot(config.telegramBotToken);
@@ -33,6 +34,7 @@ bot.command("add", handleAddCategory);
 bot.command("rename", handleRenameCategory);
 bot.command("delete", handleDeleteCategory);
 bot.command("budget", handleBudget);
+bot.command("export", handleExport);
 
 bot.on("callback_query:data", handleCallbackQuery);
 bot.on("message:text", handleTextMessage);

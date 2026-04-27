@@ -89,3 +89,34 @@ export async function spendByCategory(
     ORDER BY SUM(e.amount_cents) DESC
   `;
 }
+
+export interface ExportRow {
+  date: string;
+  amount_cents: number;
+  currency: string;
+  category: string;
+  description: string;
+  source: string;
+}
+
+export async function getExpensesForExport(
+  userId: number,
+  start: string,
+  end: string,
+): Promise<ExportRow[]> {
+  return sql<ExportRow[]>`
+    SELECT
+      e.occurred_at::date::text AS date,
+      e.amount_cents::int       AS amount_cents,
+      e.currency,
+      COALESCE(c.name, 'Uncategorized') AS category,
+      COALESCE(e.description, '')       AS description,
+      e.source
+    FROM expenses e
+    LEFT JOIN categories c ON e.category_id = c.id
+    WHERE e.user_id = ${userId}
+      AND e.occurred_at >= ${start}::date
+      AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+    ORDER BY e.occurred_at ASC
+  `;
+}

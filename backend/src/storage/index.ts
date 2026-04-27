@@ -43,3 +43,14 @@ export async function getStatementDownloadUrl(key: string, expiresIn = 3600): Pr
 export async function deleteStatement(key: string): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: config.s3.bucket, Key: key }));
 }
+
+export async function uploadExport(key: string, body: string): Promise<void> {
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: config.s3.bucket,
+      Key: key,
+      Body: body,
+      ContentType: "text/csv",
+    }),
+  );
+}
