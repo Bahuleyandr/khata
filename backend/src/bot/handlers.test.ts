@@ -587,7 +587,7 @@ describe("handleCallbackQuery", () => {
     await handleCallbackQuery(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("amount");
-    expect((editStore.get(111111) as { waitingFor?: string })?.waitingFor).toBe("amount");
+    expect((editStore.get(111111) as { waitingFor?: string } | undefined)?.waitingFor).toBe("amount");
   });
 
   it("prompts for date on editdt callback", async () => {
@@ -603,7 +603,7 @@ describe("handleCallbackQuery", () => {
     await handleCallbackQuery(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("date");
-    expect((editStore.get(111111) as { waitingFor?: string })?.waitingFor).toBe("date");
+    expect((editStore.get(111111) as { waitingFor?: string } | undefined)?.waitingFor).toBe("date");
   });
 });
 

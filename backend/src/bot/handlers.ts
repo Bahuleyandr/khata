@@ -38,7 +38,7 @@ import { getOverrides, upsertOverride } from "../db/overrides.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory, getExpensesForExport } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
-import { getPendingEdit, setPendingEdit } from "./session.js";
+import { getPendingEdit, setPendingEdit, clearPendingEdit } from "./session.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

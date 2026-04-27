@@ -10,33 +10,36 @@ export interface PendingEdit {
   waitingFor?: "amount" | "date";
 }
 
+const KIND = "pending_edit";
+
+function key(userId: number): string {
+  return `edit:${userId}`;
+}
+
 export async function getPendingEdit(userId: number): Promise<PendingEdit | undefined> {
-  const key = `edit:${userId}`;
-  const rows = await sql<{ payload: Record<string, unknown> }[]>`
+  const rows = await sql<{ payload: PendingEdit }[]>`
     SELECT payload FROM bot_sessions
-    WHERE session_key = ${key} AND expires_at > NOW()
+    WHERE session_key = ${key(userId)}
+      AND kind = ${KIND}
+      AND expires_at > NOW()
   `;
-  if (!rows[0]) return undefined;
-  const raw = rows[0].payload;
-  return {
-    ...(raw as unknown as PendingEdit),
-    occurred_at: new Date(raw["occurred_at"] as string),
-  };
+  const row = rows[0];
+  if (!row) return undefined;
+  const p = row.payload;
+  return { ...p, occurred_at: new Date(p.occurred_at as unknown as string) };
 }
 
 export async function setPendingEdit(userId: number, data: PendingEdit): Promise<void> {
-  const key = `edit:${userId}`;
-  const payload = JSON.stringify(data);
+  const payload = { ...data, occurred_at: data.occurred_at.toISOString() };
   await sql`
     INSERT INTO bot_sessions (session_key, kind, payload, expires_at)
-    VALUES (${key}, 'pending_edit', ${payload}::jsonb, NOW() + INTERVAL '30 minutes')
+    VALUES (${key(userId)}, ${KIND}, ${sql.json(payload as never)}, NOW() + INTERVAL '30 minutes')
     ON CONFLICT (session_key) DO UPDATE
       SET payload = EXCLUDED.payload,
-          expires_at = NOW() + INTERVAL '30 minutes'
+          expires_at = EXCLUDED.expires_at
   `;
 }
 
 export async function clearPendingEdit(userId: number): Promise<void> {
-  const key = `edit:${userId}`;
-  await sql`DELETE FROM bot_sessions WHERE session_key = ${key}`;
+  await sql`DELETE FROM bot_sessions WHERE session_key = ${key(userId)}`;
 }
