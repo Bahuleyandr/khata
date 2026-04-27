@@ -10,18 +10,7 @@ import {
   type CategoryTotal,
 } from '../../../lib/api'
 
-const BarChart = dynamic(
-  () => import('recharts').then((m) => m.BarChart),
-  { ssr: false },
-)
-const Bar = dynamic(() => import('recharts').then((m) => m.Bar), { ssr: false })
-const XAxis = dynamic(() => import('recharts').then((m) => m.XAxis), { ssr: false })
-const YAxis = dynamic(() => import('recharts').then((m) => m.YAxis), { ssr: false })
-const Tooltip = dynamic(() => import('recharts').then((m) => m.Tooltip), { ssr: false })
-const ResponsiveContainer = dynamic(
-  () => import('recharts').then((m) => m.ResponsiveContainer),
-  { ssr: false },
-)
+const SpendingChart = dynamic(() => import('./SpendingChart'), { ssr: false })
 
 function mtdTotal(categories: CategoryTotal[]): number {
   return categories.reduce((sum, c) => sum + parseInt(c.total_cents, 10), 0)
@@ -68,14 +57,7 @@ export default function DashboardPage() {
               {summary.mtd.length === 0 ? (
                 <p style={{ color: '#9ca3af', fontSize: '0.9rem' }}>No expenses this month.</p>
               ) : (
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={top5(summary.mtd)} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
-                    <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip formatter={(v) => [`₹${v}`, 'Amount']} />
-                    <Bar dataKey="value" fill="#7c3aed" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <SpendingChart data={top5(summary.mtd)} />
               )}
             </div>
 
