@@ -47,6 +47,7 @@ import {
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { chatWithData } from "../ai/chat.js";
 import { transcribeVoice } from "../voice/transcribe.js";
+import { tryParseUpi, type UpiParse } from "../upi/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { getPendingEdit, setPendingEdit } from "./session.js";
@@ -266,6 +267,69 @@ export async function handleDeleteCategory(ctx: Context): Promise<void> {
     ok
       ? `✅ Deleted category "${name}"`
       : `⚠️ "${name}" not found or is a built-in category (cannot delete defaults)`,
+  );
+}
+
+// ── Forwarded UPI receipt fast path ───────────────────────────────────────────
+
+async function processUpiForward(
+  ctx: Context,
+  userId: number,
+  rawText: string,
+  upi: UpiParse,
+): Promise<void> {
+  await seedDefaultCategories(userId).catch(console.error);
+  const [cats, overrides] = await Promise.all([
+    getUserCategories(userId),
+    getOverrides(userId),
+  ]);
+
+  // If we have a merchant and a matching override hint, prefer that category.
+  let categoryName = "Other";
+  if (upi.merchant) {
+    const merchLower = upi.merchant.toLowerCase();
+    const override = overrides.find(
+      (o) =>
+        merchLower.includes(o.hint_text.toLowerCase()) ||
+        o.hint_text.toLowerCase().includes(merchLower),
+    );
+    if (override) categoryName = override.category_name;
+  }
+  const cat =
+    cats.find((c) => c.name === categoryName) ??
+    cats.find((c) => c.name === "Other") ??
+    null;
+
+  const amount_cents = Math.round(upi.amountRupees * 100);
+  const occurred_at = new Date(); // forwards are usually same-day; user can edit
+
+  const description = upi.merchant ?? `UPI payment (${upi.app})`;
+
+  const expenseId = await insertExpense({
+    userId,
+    amount_cents,
+    currency: "INR",
+    description,
+    merchant: upi.merchant,
+    category_id: cat?.id ?? null,
+    occurred_at,
+    source: "telegram",
+    raw_text: rawText,
+  });
+
+  await setPendingEdit(userId, {
+    expenseId,
+    amount_cents,
+    currency: "INR",
+    category: cat?.name ?? "Other",
+    description,
+    occurred_at,
+  });
+
+  await ctx.reply(
+    `✅ UPI logged: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${upi.app}_\n` +
+      `Reply \`category: <name>\` or use the buttons.`,
+    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
   );
 }
 
@@ -506,6 +570,18 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   // Skip commands — registered separately on the bot
   if (text.startsWith("/")) return;
+
+  // Forwarded UPI/bank-payment receipt fast path — regex parse, skip LLM.
+  // Only triggers on FORWARDED messages (forward_origin set) so casual
+  // chat mentioning ₹/UPI doesn't auto-log.
+  const isForwarded = !!(ctx.message as { forward_origin?: unknown })?.forward_origin;
+  if (isForwarded) {
+    const upi = tryParseUpi(text);
+    if (upi) {
+      await processUpiForward(ctx, userId, text, upi);
+      return;
+    }
+  }
 
   const chatId = ctx.chat?.id;
   const pendingEdit = await getPendingEdit(userId);

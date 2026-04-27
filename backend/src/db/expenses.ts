@@ -35,6 +35,22 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
   return row.id;
 }
 
+/**
+ * Returns true if the user has logged at least one expense today (by
+ * `occurred_at::date`). Used by the nightly nudge cron — skip the nudge
+ * if they've already logged something today.
+ */
+export async function userHasExpenseToday(userId: number): Promise<boolean> {
+  const [row] = await sql<Array<{ exists: boolean }>>`
+    SELECT EXISTS(
+      SELECT 1 FROM expenses
+      WHERE user_id = ${userId}
+        AND occurred_at::date = CURRENT_DATE
+    ) AS exists
+  `;
+  return row?.exists ?? false;
+}
+
 export async function findExpenseByContentHash(
   userId: number,
   contentHash: string,

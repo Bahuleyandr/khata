@@ -7,7 +7,9 @@ import {
   getDistinctUsersWithBudgets,
 } from "../db/budgets.js";
 import { getDistinctUsersWithExpensesIn } from "../db/query.js";
+import { userHasExpenseToday } from "../db/expenses.js";
 import { buildMonthlyXlsx, previousMonthBounds } from "../export/xlsx.js";
+import { config } from "../config.js";
 import { sql } from "../db/index.js";
 
 function currentYearMonth(): string {
@@ -121,6 +123,26 @@ export async function runMonthlyExport(botApi: Api): Promise<void> {
   }
 }
 
+/**
+ * Daily 9pm IST nudge — for each allowlisted user that hasn't logged
+ * anything today, send a gentle "anything to log?" prompt. Kills the
+ * "I forgot to log it" failure mode that wrecks most personal trackers.
+ */
+export async function runNightlyNudge(botApi: Api): Promise<void> {
+  for (const userId of config.allowedTelegramUserIds) {
+    try {
+      if (await userHasExpenseToday(userId)) continue;
+      await botApi.sendMessage(
+        userId,
+        "👀 Anything to log today?\n_If not, all good — see you tomorrow._",
+        { parse_mode: "Markdown" },
+      );
+    } catch (err) {
+      console.error(`Nightly nudge for user ${userId}:`, err);
+    }
+  }
+}
+
 export function startBudgetCrons(botApi: Api): void {
   // Daily nudge + session expiry at 09:00 UTC
   schedule("0 9 * * *", () => {
@@ -142,7 +164,14 @@ export function startBudgetCrons(botApi: Api): void {
     );
   });
 
+  // Daily 9pm IST nudge (= 15:30 UTC) — "anything to log today?"
+  schedule("30 15 * * *", () => {
+    runNightlyNudge(botApi).catch((err) =>
+      console.error("Nightly nudge cron error:", err),
+    );
+  });
+
   console.log(
-    "Crons registered: daily nudge + session expiry @09:00 UTC, monthly digest + xlsx export @08:00 UTC on 1st.",
+    "Crons registered: budget nudge + session expiry @09:00 UTC, monthly digest + xlsx export @08:00 UTC on 1st, nightly nudge @15:30 UTC (21:00 IST).",
   );
 }
