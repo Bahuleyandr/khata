@@ -25,6 +25,7 @@ import {
   addCategory,
   deleteCategory,
 } from "../db/categories.js";
+import { setBudget, listBudgets, clearBudget } from "../db/budgets.js";
 import {
   insertExpense,
   updateExpenseAmount,
@@ -717,4 +718,83 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   const photo = photos[photos.length - 1]!;
   await runReceiptPipeline(ctx, photo.file_id, "image/jpeg");
+}
+
+// ── Budget commands ───────────────────────────────────────────────────────────
+
+export async function handleBudget(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const text = ctx.message?.text ?? "";
+  const args = text.replace(/^\/budget\s*/i, "").trim();
+  const lower = args.toLowerCase();
+
+  // /budget list (or bare /budget)
+  if (lower === "list" || lower === "") {
+    const budgets = await listBudgets(userId);
+    if (budgets.length === 0) {
+      await ctx.reply(
+        "No budgets set yet. Use /budget set <category> <amount> to add one.",
+      );
+      return;
+    }
+    const lines = budgets.map(
+      (b) => `• *${b.category_name}*: ${formatAmount(b.target_cents, "INR")}/month`,
+    );
+    await ctx.reply(`💰 *Your budgets:*\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+    return;
+  }
+
+  // /budget clear <category>
+  const clearMatch = args.match(/^clear\s+(.+)$/i);
+  if (clearMatch) {
+    const catName = clearMatch[1]!.trim();
+    const cat = await getCategoryByName(userId, catName);
+    if (!cat) {
+      await ctx.reply(`⚠️ Category "${catName}" not found.`);
+      return;
+    }
+    const ok = await clearBudget(userId, cat.id);
+    await ctx.reply(
+      ok
+        ? `✅ Budget for "${cat.name}" cleared.`
+        : `⚠️ No budget was set for "${cat.name}".`,
+    );
+    return;
+  }
+
+  // /budget set <category> <amount>
+  const setMatch = args.match(/^set\s+(.+?)\s+([\d]+(?:\.\d+)?)\s*(?:[A-Za-z]{3})?$/i);
+  if (setMatch) {
+    const catName = setMatch[1]!.trim();
+    const amount = parseFloat(setMatch[2]!);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply("Amount must be a positive number, e.g. /budget set Food 5000");
+      return;
+    }
+    const cat = await getCategoryByName(userId, catName);
+    if (!cat) {
+      const allCats = await getUserCategories(userId);
+      await ctx.reply(
+        `⚠️ Category "${catName}" not found. Your categories: ${allCats.map((c) => c.name).join(", ")}`,
+      );
+      return;
+    }
+    const targetCents = Math.round(amount * 100);
+    await setBudget(userId, cat.id, targetCents);
+    await ctx.reply(
+      `✅ Budget set: *${cat.name}* → ${formatAmount(targetCents, "INR")}/month`,
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+
+  await ctx.reply(
+    "💰 *Budget commands:*\n" +
+      "• `/budget set <category> <amount>` — set monthly budget\n" +
+      "• `/budget list` — view all budgets\n" +
+      "• `/budget clear <category>` — remove a budget",
+    { parse_mode: "Markdown" },
+  );
 }

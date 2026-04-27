@@ -124,6 +124,14 @@ vi.mock("../ai/parse.js", () => ({
   }),
 }));
 
+vi.mock("../db/budgets.js", () => ({
+  setBudget: vi.fn().mockResolvedValue(undefined),
+  listBudgets: vi.fn().mockResolvedValue([
+    { id: "budget-1", category_id: "cat-food", category_name: "Food", target_cents: 500000, period: "monthly" },
+  ]),
+  clearBudget: vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock("../db/query.js", () => ({
   totalSpendInCategory: vi.fn().mockResolvedValue([
     { total_cents: "452300", currency: "INR", count: 12 },
@@ -161,6 +169,7 @@ import {
   handleAddCategory,
   handleRenameCategory,
   handleDeleteCategory,
+  handleBudget,
   handleTextMessage,
   handleCallbackQuery,
   handleDocument,
@@ -172,6 +181,7 @@ import * as mockAI from "../ai/parse.js";
 import * as mockQuery from "../db/query.js";
 import * as mockExpenses from "../db/expenses.js";
 import * as mockOcr from "../receipt/ocr.js";
+import * as mockBudgets from "../db/budgets.js";
 
 function makeCtx(overrides: Partial<Context> = {}): Context {
   return {
@@ -731,5 +741,54 @@ describe("handleTextMessage — category: shortcut", () => {
     await handleTextMessage(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text.toLowerCase()).toContain("no recent expense");
+  });
+});
+
+describe("handleBudget", () => {
+  it("lists budgets with /budget list", async () => {
+    const ctx = makeCtx({ message: { text: "/budget list" } as Context["message"] });
+    await handleBudget(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Food");
+    expect(text).toContain("₹");
+  });
+
+  it("shows empty message when no budgets", async () => {
+    vi.mocked(mockBudgets.listBudgets).mockResolvedValueOnce([]);
+    const ctx = makeCtx({ message: { text: "/budget" } as Context["message"] });
+    await handleBudget(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text.toLowerCase()).toContain("no budgets");
+  });
+
+  it("sets a budget with /budget set Food 5000", async () => {
+    const ctx = makeCtx({ message: { text: "/budget set Food 5000" } as Context["message"] });
+    await handleBudget(ctx);
+    expect(vi.mocked(mockBudgets.setBudget)).toHaveBeenCalledWith(111111, "cat-food", 500000);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Food");
+  });
+
+  it("rejects unknown category in /budget set", async () => {
+    vi.mocked((await import("../db/categories.js")).getCategoryByName).mockResolvedValueOnce(null);
+    const ctx = makeCtx({ message: { text: "/budget set Nonexistent 100" } as Context["message"] });
+    await handleBudget(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("not found");
+  });
+
+  it("clears a budget with /budget clear Food", async () => {
+    const ctx = makeCtx({ message: { text: "/budget clear Food" } as Context["message"] });
+    await handleBudget(ctx);
+    expect(vi.mocked(mockBudgets.clearBudget)).toHaveBeenCalledWith(111111, "cat-food");
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text.toLowerCase()).toContain("cleared");
+  });
+
+  it("shows usage help on unrecognised subcommand", async () => {
+    const ctx = makeCtx({ message: { text: "/budget foo bar" } as Context["message"] });
+    await handleBudget(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text.toLowerCase()).toContain("budget set");
   });
 });

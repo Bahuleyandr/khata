@@ -19,6 +19,7 @@
     "@types/pdf-parse": "^1.1.5",
     "fastify": "^4.28.0",
     "grammy": "^1.26.0",
+    "node-cron": "^3.0.3",
     "pdf-parse": "^2.4.5",
     "postgres": "^3.4.4"
   },
