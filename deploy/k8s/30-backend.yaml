@@ -5,6 +5,12 @@ metadata:
   namespace: khata
 spec:
   replicas: 1
+  strategy:
+    # Telegram only allows one long-poll client per bot at a time. A rolling
+    # update starts the new pod before killing the old one, which races on
+    # `getUpdates` and 409s the new pod (it crashes once, then recovers when
+    # the old pod is gone). Recreate kills the old pod first — no overlap.
+    type: Recreate
   selector:
     matchLabels:
       app: khata-backend
