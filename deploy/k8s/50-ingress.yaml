@@ -1,0 +1,43 @@
+# Path-based routing. Tailscale Serve forwards external HTTPS traffic to
+# host port 80, where Traefik (k3s default ingress controller, bound to host
+# port via Klipper service-LB) picks it up and matches by path:
+#
+#   /health   → khata-backend  (so Tailscale's own health-check sees the API)
+#   /api/*    → khata-backend
+#   anything else (incl. /, /dashboard, /transactions, /receipts, /login)
+#             → khata-frontend (nginx serving the Next.js static export)
+#
+# Host header is intentionally unset — matches whatever Tailscale hostname
+# the request lands on, so this manifest is portable across tailnets.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: khata
+  namespace: khata
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: khata-backend
+                port:
+                  number: 3001
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: khata-backend
+                port:
+                  number: 3001
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: khata-frontend
+                port:
+                  number: 80

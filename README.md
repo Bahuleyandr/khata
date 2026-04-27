@@ -83,21 +83,6 @@ npm run dev
 # Health check: curl http://localhost:3001/health
 ```
 
-### Register the Telegram webhook
-
-After deploying, run once to point Telegram at your server:
-
-```bash
-curl -X POST "https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://your-backend-host.fly.dev/telegram/webhook",
-    "secret_token": "<YOUR_TELEGRAM_WEBHOOK_SECRET>"
-  }'
-```
-
-Then send `/start` to your bot — it should reply with a hello message.
-
 ### Backend scripts
 
 | Command | What it does |
@@ -109,16 +94,11 @@ Then send `/start` to your bot — it should reply with a hello message.
 | `npm run lint` | ESLint check |
 | `npm test` | Vitest unit tests |
 
-### Deploy to Fly.io
+### Deploy
 
-```bash
-cd backend
-fly launch --no-deploy       # first time only — creates app
-fly secrets set TELEGRAM_BOT_TOKEN=... TELEGRAM_WEBHOOK_SECRET=... \
-  ALLOWED_TELEGRAM_USER_IDS=... DATABASE_URL=... \
-  S3_ENDPOINT=... S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=...
-fly deploy
-```
+Deployed to **k3s on Dalekdefender** (Ubuntu 26.04, single-node) and accessible only over **Tailscale** — no public DNS, no public ingress. The bot runs in long-polling mode (no webhook). MiniMax handles every LLM call: text via the OpenAI-compat chat endpoint, vision via the `minimax-coding-plan-mcp` MCP server (`understand_image` tool) running as a subprocess inside the backend Pod.
+
+Setup, manifests, and the day-to-day `make deploy` flow live in [deploy/README.md](deploy/README.md).
 
 ### Environment variables
 
@@ -137,10 +117,7 @@ git push origin main
 
 ## Frontend deploy
 
-**Deploy target: GitHub Pages**.
-Build: `npm run build` → Next.js static export → `out/` directory.
-The `.github/workflows/deploy.yml` pushes `out/` to the `gh-pages` branch on every push to `main`.
-`next.config.ts` is locked to `output: 'export'` — do not change this to server mode.
+**Deployed in-cluster** alongside the backend on Dalekdefender — built into a Docker image (multi-stage: Next.js static export → nginx) and served via Traefik path routing on the same Tailscale hostname as the backend (frontend at `/`, backend at `/api/*`). See [deploy/Dockerfile.frontend](deploy/Dockerfile.frontend) and [deploy/k8s/40-frontend.yaml](deploy/k8s/40-frontend.yaml). `next.config.ts` stays locked to `output: 'export'`.
 
 ## Runbook
 

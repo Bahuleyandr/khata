@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: khata-frontend
+  namespace: khata
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: khata-frontend
+  template:
+    metadata:
+      labels:
+        app: khata-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: khata-frontend:latest
+          imagePullPolicy: Never # built locally + loaded via `k3s ctr images import`
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: khata-frontend
+  namespace: khata
+spec:
+  selector:
+    app: khata-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      name: http
