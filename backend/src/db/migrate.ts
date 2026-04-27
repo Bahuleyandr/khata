@@ -24,8 +24,9 @@ async function migrate() {
   // One-time rename guard: update old filenames to new filenames if present
   const renames: Array<[string, string]> = [
     ['002_statement_status.sql', '003_statement_status.sql'],
-    ['003_receipt_ocr.sql', '005_receipt_ocr.sql'],
-    ['004_receipt_ocr.sql', '005_receipt_ocr.sql'],
+    ['003_receipt_ocr.sql', '006_receipt_ocr.sql'],
+    ['004_receipt_ocr.sql', '006_receipt_ocr.sql'],
+    ['005_receipt_ocr.sql', '006_receipt_ocr.sql'],
     ['006_bot_sessions.sql', '005_bot_sessions.sql'],
   ];
   for (const [oldName, newName] of renames) {
