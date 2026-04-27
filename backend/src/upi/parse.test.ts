@@ -70,4 +70,39 @@ describe("tryParseUpi", () => {
   it("rejects implausibly large amounts (>1 crore)", () => {
     expect(tryParseUpi("Sent Rs 99999999 to X via UPI")).toBeNull();
   });
+
+  it("parses a multi-line HDFC UPI debit notification (real-world format)", () => {
+    const text = [
+      "Sent Rs.11942.89",
+      "From HDFC Bank A/C *6420",
+      "To AMERICAN EXPRESS  CREDIT",
+      "On 27/04/26",
+      "Ref 112749168520",
+      "Not You?",
+      "Call 18002586161/SMS BLOCK UPI to 7308080808",
+    ].join("\n");
+    const r = tryParseUpi(text);
+    expect(r).not.toBeNull();
+    expect(r!.amountRupees).toBe(11942.89);
+    expect(r!.merchant).toBe("AMERICAN EXPRESS CREDIT"); // double-space collapsed
+    expect(r!.app).toBe("upi");
+  });
+
+  it("parses an AmEx bill-payment confirmation OCR (INR): amount pattern", () => {
+    const text = [
+      "Dear Cardmember,",
+      "As requested, we have processed your American Express Card Bill payment.",
+      "Following are the details of your payment:",
+      "Last 5 digits of your Card: xxxx xxxx xxxx 91007",
+      "Payment Amount (INR): 11942.89",
+      "Payment Date: 27th April 2026",
+      "Payment Through: HDFC UPI",
+      "Transaction Identification Number: CHD53OR1IHJ2Z1",
+    ].join("\n");
+    const r = tryParseUpi(text);
+    expect(r).not.toBeNull();
+    expect(r!.amountRupees).toBe(11942.89);
+    // No "to <merchant>" pattern in this OCR — merchant null is acceptable
+    expect(r!.app).toBe("upi");
+  });
 });

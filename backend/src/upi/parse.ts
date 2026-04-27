@@ -21,8 +21,11 @@ export interface UpiParse {
 const PAYMENT_SIGNAL =
   /\b(?:UPI|GPay|G\s?Pay|Google\s?Pay|PhonePe|Phone\s?Pe|Paytm|debited|credited|transferred|payment\s+successful)\b/i;
 
+// Allow up to 5 chars of whitespace + punctuation between the currency marker
+// and the digits — covers "Rs.500", "Rs 500", "Rs:500", "INR): 11942.89",
+// "(INR) 200", "₹ 500", etc. that show up in real bank/app/OCR text.
 const AMOUNT_RE =
-  /(?:rs\.?|inr|₹|rupees?)\s*([\d,]+(?:\.\d{1,2})?)|([\d,]+(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹|rupees?)/i;
+  /(?:rs\.?|inr|₹|rupees?)[\s\W]{0,5}([\d,]+(?:\.\d{1,2})?)|([\d,]+(?:\.\d{1,2})?)[\s\W]{0,5}(?:rs\.?|inr|₹|rupees?)/i;
 
 // "to <merchant>" — merchant is letters/numbers/space/&/-/'/. up until a
 // terminator (via / on <date> / for / ref / UPI / Acct / period / EOL).
