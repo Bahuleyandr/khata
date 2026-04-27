@@ -78,6 +78,16 @@ async function downloadTelegramFile(fileId: string): Promise<{ buffer: Buffer; m
   return { buffer, mimeType };
 }
 
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+async function rejectIfOversize(ctx: Context, buffer: Buffer): Promise<boolean> {
+  if (buffer.length <= MAX_UPLOAD_BYTES) return false;
+  const sizeMB = (buffer.length / 1024 / 1024).toFixed(1);
+  const limitMB = (MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0);
+  await ctx.reply(`⚠️ File too large (${sizeMB}MB; max ${limitMB}MB). Please send a smaller one.`);
+  return true;
+}
+
 async function runStatementPipeline(
   ctx: Context,
   fileId: string,
@@ -96,6 +106,8 @@ async function runStatementPipeline(
     await ctx.reply(`❌ Could not download the file: ${String(err)}`);
     return;
   }
+
+  if (await rejectIfOversize(ctx, buffer)) return;
 
   const statementId = await createStatementRecord(userId, "");
   const s3Key = `statements/${userId}/${statementId}`;
@@ -583,6 +595,8 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     await ctx.reply(`❌ Could not download the image: ${String(err)}`);
     return;
   }
+
+  if (await rejectIfOversize(ctx, buffer)) return;
 
   // Idempotency: skip if the exact same image was already logged
   const contentHash = createHash("sha256").update(buffer).digest("hex");
