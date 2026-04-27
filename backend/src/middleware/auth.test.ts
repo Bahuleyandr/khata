@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // We mock config so the test doesn't require real env vars
 vi.mock("../config.js", () => ({
