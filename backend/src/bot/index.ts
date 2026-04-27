@@ -10,6 +10,7 @@ import {
   handleDeleteCategory,
   handleListExpenses,
   handleListTags,
+  handleAsk,
   handleBudget,
   handleTextMessage,
   handleCallbackQuery,
@@ -37,6 +38,7 @@ bot.command("rename", handleRenameCategory);
 bot.command("delete", handleDeleteCategory);
 bot.command("expenses", handleListExpenses);
 bot.command("tags", handleListTags);
+bot.command("ask", handleAsk);
 bot.command("budget", handleBudget);
 bot.command("export", handleExport);
 

@@ -25,6 +25,7 @@ export const config = {
   models: {
     parseExpense: process.env["MODEL_PARSE_EXPENSE"] ?? "MiniMax-M2.7-highspeed",
     classifyMessage: process.env["MODEL_CLASSIFY_MESSAGE"] ?? "MiniMax-M2.7-highspeed",
+    chatWithData: process.env["MODEL_CHAT_WITH_DATA"] ?? "MiniMax-M2.7-highspeed",
     normalizeTransactions:
       process.env["MODEL_NORMALIZE_TRANSACTIONS"] ?? "MiniMax-M2.7-highspeed",
     // Vision intents go through the MCP `understand_image` tool — MiniMax

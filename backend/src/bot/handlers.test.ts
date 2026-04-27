@@ -109,6 +109,14 @@ vi.mock("../db/overrides.js", () => ({
   upsertOverride: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../ai/chat.js", () => ({
+  chatWithData: vi.fn().mockResolvedValue({
+    text: "(stub answer)",
+    toolsUsed: [],
+    iterations: 1,
+  }),
+}));
+
 vi.mock("../ai/parse.js", () => ({
   parseExpense: vi.fn().mockResolvedValue({
     amount: 250,
