@@ -6,6 +6,7 @@ import { uploadStatement, uploadExport, getStatementDownloadUrl } from "../stora
 import { sql } from "../db/index.js";
 import { parseStatementBuffer } from "../statement/parser.js";
 import { dedupeTransactions } from "../statement/dedup.js";
+import { redactError } from "../statement/redact.js";
 import {
   clearPendingImport,
   getPendingImport,
@@ -37,7 +38,7 @@ import { getOverrides, upsertOverride } from "../db/overrides.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory, getExpensesForExport } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
-import { pendingEdits } from "./session.js";
+import { getPendingEdit, setPendingEdit } from "./session.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -102,7 +103,7 @@ async function runStatementPipeline(
     await uploadStatement(s3Key, buffer, mimeType);
     await sql`UPDATE statements SET file_key = ${s3Key} WHERE id = ${statementId}`;
   } catch (err) {
-    await updateStatementStatus(statementId, "failed", undefined, String(err));
+    await updateStatementStatus(statementId, "failed", undefined, redactError(err));
     await ctx.reply(`❌ Upload failed: ${String(err)}`);
     return;
   }
@@ -113,7 +114,7 @@ async function runStatementPipeline(
   try {
     transactions = await parseStatementBuffer(buffer, mimeType);
   } catch (err) {
-    await updateStatementStatus(statementId, "failed", undefined, String(err));
+    await updateStatementStatus(statementId, "failed", undefined, redactError(err));
     await ctx.reply(`❌ Parsing failed: ${String(err)}`);
     return;
   }
@@ -130,7 +131,7 @@ async function runStatementPipeline(
   const alreadyLoggedCount = results.filter((r) => r.alreadyLogged).length;
   const newCount = results.length - alreadyLoggedCount;
 
-  setPendingImport(chatId, {
+  await setPendingImport(chatId, {
     statementId,
     results,
     totalCount: results.length,
@@ -312,7 +313,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   if (text.startsWith("/")) return;
 
   const chatId = ctx.chat?.id;
-  const pendingEdit = pendingEdits.get(userId);
+  const pendingEdit = await getPendingEdit(userId);
 
   // "edit" shortcut — re-show edit keyboard for last logged expense
   if (text.toLowerCase() === "edit") {
@@ -338,9 +339,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     const currency = match[2]?.toUpperCase() ?? pendingEdit.currency;
     const ok = await updateExpenseAmount(pendingEdit.expenseId, userId, amount_cents, currency);
     if (ok) {
-      pendingEdit.amount_cents = amount_cents;
-      pendingEdit.currency = currency;
-      pendingEdit.waitingFor = undefined;
+      await setPendingEdit(userId, { ...pendingEdit, amount_cents, currency, waitingFor: undefined });
     }
     await ctx.reply(
       ok ? `✅ Updated to ${formatAmount(amount_cents, currency)}` : "⚠️ Failed to update amount",
@@ -356,8 +355,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     const occurred_at = new Date(text + "T12:00:00Z");
     const ok = await updateExpenseDate(pendingEdit.expenseId, userId, occurred_at);
     if (ok) {
-      pendingEdit.occurred_at = occurred_at;
-      pendingEdit.waitingFor = undefined;
+      await setPendingEdit(userId, { ...pendingEdit, occurred_at, waitingFor: undefined });
     }
     await ctx.reply(ok ? `✅ Date updated to ${text}` : "⚠️ Failed to update date");
     return;
@@ -365,7 +363,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   // Check for a pending statement import confirmation
   if (chatId) {
-    const pendingImport = getPendingImport(chatId);
+    const pendingImport = await getPendingImport(chatId);
     if (pendingImport) {
       const lower = text.toLowerCase();
       if (lower === "yes" || lower === "y") {
@@ -381,7 +379,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
             "imported",
             pendingImport.totalCount,
           );
-          clearPendingImport(chatId);
+          await clearPendingImport(chatId);
           await ctx.reply(
             `✅ Imported ${inserted} new transaction${inserted !== 1 ? "s" : ""}.`,
           );
@@ -390,9 +388,9 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
             pendingImport.statementId,
             "failed",
             undefined,
-            String(err),
+            redactError(err),
           );
-          clearPendingImport(chatId);
+          await clearPendingImport(chatId);
           await ctx.reply(`❌ Import failed: ${String(err)}`);
         }
       } else if (lower === "no" || lower === "n") {
@@ -425,7 +423,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       await upsertOverride(userId, pendingEdit.description.toLowerCase(), cat.name).catch(
         console.error,
       );
-      pendingEdit.category = cat.name;
+      await setPendingEdit(userId, { ...pendingEdit, category: cat.name });
     }
     await ctx.reply(ok ? `✅ Category updated to "${cat.name}"` : "⚠️ Failed to update category");
     return;
@@ -488,7 +486,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     raw_text: text,
   });
 
-  pendingEdits.set(userId, {
+  await setPendingEdit(userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,
@@ -513,11 +511,11 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     return;
   }
 
-  const pending = pendingEdits.get(userId);
+  const pending = await getPendingEdit(userId);
 
   if (data.startsWith("editcat:")) {
     const expenseId = data.slice(8);
-    if (pending) pending.expenseId = expenseId;
+    if (pending) await setPendingEdit(userId, { ...pending, expenseId });
     const cats = await getUserCategories(userId);
     const keyboard = new InlineKeyboard();
     cats.forEach((c, i) => {
@@ -547,7 +545,7 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
           console.error,
         );
       }
-      pending.category = cat.name;
+      await setPendingEdit(userId, { ...pending, category: cat.name });
     }
     await ctx.answerCallbackQuery();
     await ctx.reply(ok ? `✅ Category updated to "${cat.name}"` : "⚠️ Failed to update category");
@@ -555,14 +553,14 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   }
 
   if (data.startsWith("editamt:")) {
-    if (pending) pending.waitingFor = "amount";
+    if (pending) await setPendingEdit(userId, { ...pending, waitingFor: "amount" });
     await ctx.answerCallbackQuery();
     await ctx.reply("Enter new amount (e.g. `200` or `200 USD`):");
     return;
   }
 
   if (data.startsWith("editdt:")) {
-    if (pending) pending.waitingFor = "date";
+    if (pending) await setPendingEdit(userId, { ...pending, waitingFor: "date" });
     await ctx.answerCallbackQuery();
     await ctx.reply("Enter new date (YYYY-MM-DD, e.g. `2026-04-26`):");
     return;
@@ -672,7 +670,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
-  pendingEdits.set(userId, {
+  await setPendingEdit(userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,
