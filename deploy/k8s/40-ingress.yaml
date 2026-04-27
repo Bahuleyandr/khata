@@ -1,0 +1,25 @@
+# Traefik (k3s default) routes by Host header. cloudflared on the host
+# forwards Cloudflare Tunnel traffic for api.khata.bahulyean.com to
+# http://localhost:80, where Traefik (via k3s Klipper service-LB) picks it
+# up and matches this rule.
+#
+# TLS is terminated at Cloudflare's edge — no in-cluster cert needed.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: khata-backend
+  namespace: khata
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: api.khata.bahulyean.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: khata-backend
+                port:
+                  number: 3001

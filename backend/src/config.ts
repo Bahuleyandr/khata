@@ -35,7 +35,7 @@ export const config = {
       process.env["MODEL_OCR_RECEIPT_IMAGE"] ?? "anthropic/claude-sonnet-4-6",
   },
   sessionSecret: requireEnvMinLen("SESSION_SECRET", 32),
-  allowedOrigins: (process.env["ALLOWED_ORIGINS"] ?? "https://bahuleyan.com,http://localhost:3000")
+  allowedOrigins: (process.env["ALLOWED_ORIGINS"] ?? "https://khata.bahulyean.com,http://localhost:3000")
     .split(",")
     .map((o) => o.trim()),
   s3: {

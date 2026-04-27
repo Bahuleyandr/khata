@@ -109,16 +109,11 @@ Then send `/start` to your bot — it should reply with a hello message.
 | `npm run lint` | ESLint check |
 | `npm test` | Vitest unit tests |
 
-### Deploy to Fly.io
+### Deploy
 
-```bash
-cd backend
-fly launch --no-deploy       # first time only — creates app
-fly secrets set TELEGRAM_BOT_TOKEN=... TELEGRAM_WEBHOOK_SECRET=... \
-  ALLOWED_TELEGRAM_USER_IDS=... DATABASE_URL=... \
-  S3_ENDPOINT=... S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=...
-fly deploy
-```
+Deployed to **k3s on Dalekdefender** (single-node, Ubuntu 26.04) behind a Cloudflare Tunnel — backend at `api.khata.bahulyean.com`, frontend at `khata.bahulyean.com` (GitHub Pages).
+
+Setup, manifests, and the day-to-day `make deploy` flow live in [deploy/README.md](deploy/README.md).
 
 ### Environment variables
 

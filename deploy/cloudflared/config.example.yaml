@@ -1,0 +1,25 @@
+# /etc/cloudflared/config.yml on Dalekdefender
+#
+# Setup:
+#   1. cloudflared tunnel login                       (opens browser, OAuth to your Cloudflare account)
+#   2. cloudflared tunnel create khata                (creates tunnel; emits a UUID and credentials JSON)
+#   3. Copy this file to /etc/cloudflared/config.yml, fill in <TUNNEL-UUID>
+#   4. cloudflared tunnel route dns khata api.khata.bahulyean.com
+#   5. sudo cloudflared service install               (registers systemd unit /etc/systemd/system/cloudflared.service)
+#   6. sudo systemctl enable --now cloudflared
+#
+# Verify:  sudo systemctl status cloudflared
+#          curl -I https://api.khata.bahulyean.com/health   # should 200 OK once backend is up
+
+tunnel: <TUNNEL-UUID>
+credentials-file: /etc/cloudflared/<TUNNEL-UUID>.json
+
+ingress:
+  # Forward api.khata.bahulyean.com → host port 80 → Traefik → khata-backend Service.
+  - hostname: api.khata.bahulyean.com
+    service: http://localhost:80
+    originRequest:
+      # Preserve the Host header so Traefik can route by it
+      httpHostHeader: api.khata.bahulyean.com
+  # Default catch-all
+  - service: http_status:404
