@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Context } from "grammy";
 
 // vi.hoisted lets us share state between the mock factory and test body.
-const { importStore } = vi.hoisted(() => ({
+const { importStore, editStore } = vi.hoisted(() => ({
   importStore: new Map<number, unknown>(),
+  editStore: new Map<number, unknown>(),
 }));
 
 vi.mock("../config.js", () => ({
@@ -62,6 +63,12 @@ vi.mock("../statement/session.js", () => ({
   setPendingImport: vi.fn((chatId: number, data: unknown) => importStore.set(chatId, data)),
   getPendingImport: vi.fn((chatId: number) => importStore.get(chatId)),
   clearPendingImport: vi.fn((chatId: number) => importStore.delete(chatId)),
+}));
+
+vi.mock("./session.js", () => ({
+  getPendingEdit: vi.fn((userId: number) => editStore.get(userId)),
+  setPendingEdit: vi.fn((userId: number, data: unknown) => { editStore.set(userId, data); }),
+  clearPendingEdit: vi.fn((userId: number) => { editStore.delete(userId); }),
 }));
 
 vi.mock("../statement/importer.js", () => ({
@@ -175,7 +182,6 @@ import {
   handleDocument,
   handlePhoto,
 } from "./handlers.js";
-import { pendingEdits } from "./session.js";
 import { clearPendingImport } from "../statement/session.js";
 import * as mockAI from "../ai/parse.js";
 import * as mockQuery from "../db/query.js";
@@ -196,7 +202,7 @@ function makeCtx(overrides: Partial<Context> = {}): Context {
 }
 
 beforeEach(() => {
-  pendingEdits.clear();
+  editStore.clear();
   importStore.clear();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
@@ -332,7 +338,7 @@ describe("handleTextMessage", () => {
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("Logged");
     expect(text).toContain("Food");
-    expect(pendingEdits.has(111111)).toBe(true);
+    expect(editStore.has(111111)).toBe(true);
   });
 
   it("does nothing when text is missing", async () => {
@@ -355,7 +361,7 @@ describe("handleTextMessage", () => {
   });
 
   it("shows edit keyboard when user types 'edit' after logging", async () => {
-    pendingEdits.set(111111, {
+    editStore.set(111111, {
       expenseId: "exp-1",
       amount_cents: 4500,
       currency: "INR",
@@ -371,7 +377,7 @@ describe("handleTextMessage", () => {
   });
 
   it("handles amount edit follow-up", async () => {
-    pendingEdits.set(111111, {
+    editStore.set(111111, {
       expenseId: "exp-1",
       amount_cents: 4500,
       currency: "INR",
@@ -388,7 +394,7 @@ describe("handleTextMessage", () => {
   });
 
   it("handles date edit follow-up", async () => {
-    pendingEdits.set(111111, {
+    editStore.set(111111, {
       expenseId: "exp-1",
       amount_cents: 4500,
       currency: "INR",
@@ -569,7 +575,7 @@ describe("handleCallbackQuery", () => {
   });
 
   it("prompts for amount on editamt callback", async () => {
-    pendingEdits.set(111111, {
+    editStore.set(111111, {
       expenseId: "exp-1",
       amount_cents: 4500,
       currency: "INR",
@@ -581,11 +587,11 @@ describe("handleCallbackQuery", () => {
     await handleCallbackQuery(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("amount");
-    expect(pendingEdits.get(111111)?.waitingFor).toBe("amount");
+    expect((editStore.get(111111) as { waitingFor?: string })?.waitingFor).toBe("amount");
   });
 
   it("prompts for date on editdt callback", async () => {
-    pendingEdits.set(111111, {
+    editStore.set(111111, {
       expenseId: "exp-1",
       amount_cents: 4500,
       currency: "INR",
@@ -597,7 +603,7 @@ describe("handleCallbackQuery", () => {
     await handleCallbackQuery(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("date");
-    expect(pendingEdits.get(111111)?.waitingFor).toBe("date");
+    expect((editStore.get(111111) as { waitingFor?: string })?.waitingFor).toBe("date");
   });
 });
 
@@ -667,7 +673,7 @@ describe("handlePhoto — receipt pipeline", () => {
     const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
     expect(lastReply).toContain("Receipt logged");
     expect(lastReply).toContain("Food");
-    expect(pendingEdits.has(111111)).toBe(true);
+    expect(editStore.has(111111)).toBe(true);
   });
 
   it("skips duplicate image and does not insert an expense", async () => {
@@ -717,7 +723,7 @@ describe("handlePhoto — receipt pipeline", () => {
 
 describe("handleTextMessage — category: shortcut", () => {
   it("updates category when a pending expense exists", async () => {
-    pendingEdits.set(111111, {
+    editStore.set(111111, {
       expenseId: "exp-receipt-1",
       amount_cents: 25000,
       currency: "INR",
