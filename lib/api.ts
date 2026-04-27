@@ -181,6 +181,20 @@ export async function postTelegramAuth(data: Record<string, string>): Promise<vo
   })
 }
 
+/**
+ * Telegram Mini App auth: sends the WebApp `initData` query-string to the
+ * backend, which validates the HMAC signature against the bot token and
+ * issues the same session cookie the OAuth flow uses. Throws on rejection
+ * (allowlist denial, expired auth_date, bad signature, etc.).
+ */
+export async function postTelegramWebApp(initData: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>('/api/auth/telegram-webapp', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ initData }),
+  })
+}
+
 export function formatCents(cents: string | number, currency = 'INR'): string {
   const amount = typeof cents === 'string' ? parseInt(cents, 10) : cents
   return new Intl.NumberFormat('en-IN', {

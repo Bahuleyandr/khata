@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
+import { verifyWebAppInitData } from "../auth/telegram-webapp.js";
 
 // ─── Session helpers ─────────────────────────────────────────────────────────
 
@@ -118,5 +119,41 @@ export async function authRoutes(app: FastifyInstance) {
     const session = verifySession(token);
     if (!session) return reply.status(401).send({ error: "Unauthorized" });
     return { telegram_user_id: session.userId, first_name: session.firstName };
+  });
+
+  // POST /api/auth/telegram-webapp — used by the Telegram Mini App. The
+  // browser-side WebApp SDK exposes `Telegram.WebApp.initData` (a signed
+  // query-string); we validate it server-side, allowlist-check, and issue
+  // the same session cookie the Telegram-Login OAuth flow uses.
+  app.post("/api/auth/telegram-webapp", async (request, reply) => {
+    const body = (request.body ?? {}) as { initData?: string };
+    if (!body.initData) {
+      return reply.status(400).send({ error: "Missing initData" });
+    }
+
+    const result = verifyWebAppInitData(body.initData);
+    if (!result.ok) {
+      return reply.status(401).send({ error: result.error });
+    }
+
+    if (!config.allowedTelegramUserIds.includes(result.user.id)) {
+      return reply.status(403).send({ error: "User not allowed" });
+    }
+
+    const iat = Math.floor(Date.now() / 1000);
+    const isProd = process.env.NODE_ENV === "production";
+    reply.setCookie(
+      "session",
+      signSession(result.user.id, result.user.first_name, iat),
+      {
+        httpOnly: true,
+        sameSite: isProd ? "none" : "lax",
+        secure: isProd,
+        maxAge: 604800,
+        path: "/",
+      },
+    );
+
+    return { ok: true };
   });
 }

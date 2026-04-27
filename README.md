@@ -126,6 +126,24 @@ git push origin main
 
 **Deployed in-cluster** alongside the backend on Dalekdefender — built into a Docker image (multi-stage: Next.js static export → nginx). Path routing happens **inside the frontend Pod's nginx**: it serves the static export at `/` and reverse-proxies `/api/*` + `/health` to the `khata-backend` Service. Tailscale Serve binds the Pod's port 80 to the VIP service `khata.hippocampus-monitor.ts.net`, which is distinct from the box's apex tailnet hostname (so it doesn't collide with other workloads on Dalekdefender). See [deploy/Dockerfile.frontend](deploy/Dockerfile.frontend) and [deploy/k8s/40-frontend.yaml](deploy/k8s/40-frontend.yaml). `next.config.ts` stays locked to `output: 'export'`.
 
+## Telegram Mini App
+
+The dashboard also runs as a **Telegram Mini App** — a webview embedded directly in Telegram, with auto-auth via the WebApp `initData` query-string. No separate login screen, no Tailscale on the user's phone. The capture surface (the bot) and the review surface (the dashboard) live in one place.
+
+**Setup (one-time, on the backend):**
+1. Make sure the dashboard URL is **publicly reachable** (Telegram's webview loads it on the user's device, not from the bot server). The simplest path is `sudo tailscale funnel --bg 443 on` on Dalekdefender — same hostname, now publicly resolvable + TLS-terminated.
+2. Set `MINI_APP_URL` in `khata-secrets`:
+   ```bash
+   kubectl edit secret khata-secrets -n khata
+   # add: MINI_APP_URL=https://khata.hippocampus-monitor.ts.net
+   kubectl rollout restart deployment/khata-backend -n khata
+   ```
+3. The bot will register a global chat menu button on startup. Users see a "Dashboard" button next to the message input in the bot's chat.
+
+**Open the Mini App:** tap the menu button next to the bot's chat input, or send `/dashboard` and tap the inline "Open Dashboard" button. The dashboard opens inside Telegram, auto-authenticated as the Telegram user — same allowlist, same session cookie as the OAuth path.
+
+**Auth model:** the WebApp `initData` is HMAC-signed by Telegram with the bot token. `verifyWebAppInitData` ([backend/src/auth/telegram-webapp.ts](backend/src/auth/telegram-webapp.ts)) validates the signature server-side, then enforces the `ALLOWED_TELEGRAM_USER_IDS` allowlist before issuing a session cookie. Only initData younger than 24h is accepted.
+
 ## Runbook
 
 ### Local test run (frontend)

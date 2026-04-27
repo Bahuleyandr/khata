@@ -65,6 +65,30 @@ function todayString(): string {
   return new Date().toISOString().split("T")[0]!;
 }
 
+// ── /dashboard — open the Telegram Mini App ──────────────────────────────────
+
+/**
+ * Sends an inline reply with a `web_app` button. Tapping the button opens the
+ * dashboard inside Telegram's webview (Mini App). Auth happens automatically
+ * via Telegram.WebApp.initData on the dashboard side — no separate login.
+ *
+ * Falls back to a plain message if MINI_APP_URL isn't configured (the bot
+ * works fine without the Mini App; this command just won't be useful).
+ */
+export async function handleDashboard(ctx: Context): Promise<void> {
+  if (!config.miniAppUrl) {
+    await ctx.reply(
+      "📊 The Mini App URL isn't configured on the server yet (`MINI_APP_URL` env var). " +
+        "Ask the operator to set it, then try again.",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+  await ctx.reply("📊 Open your dashboard inside Telegram:", {
+    reply_markup: new InlineKeyboard().webApp("Open Dashboard", config.miniAppUrl),
+  });
+}
+
 /**
  * After an explicit category correction (reply "category: X" or inline
  * keyboard pick), persist the user's choice on the canonical merchant so that
