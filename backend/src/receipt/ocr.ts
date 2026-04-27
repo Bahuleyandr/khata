@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 
-const client = new Anthropic({ apiKey: config.anthropicApiKey });
+const client = new Anthropic({ apiKey: config.anthropicApiKey, maxRetries: 5 });
 
 const RECEIPT_OCR_PROMPT =
   "Extract all visible text from this receipt or bill image. Include merchant name, date, itemised amounts, totals, taxes, and any other printed details, preserving layout with line breaks.";

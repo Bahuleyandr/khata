@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import { config } from "./config.js";
+import { sql } from "./db/index.js";
 import { telegramRoutes } from "./routes/telegram.js";
 import { bot } from "./bot/index.js";
 import { startBudgetCrons } from "./cron/budgets.js";
@@ -17,7 +18,16 @@ await app.register(cors, {
 
 await app.register(cookie);
 
-app.get("/health", async () => ({ status: "ok" }));
+app.get("/health", async (_request, reply) => {
+  try {
+    await sql`SELECT 1`;
+    return { status: "ok", db: "ok" };
+  } catch (err) {
+    app.log.error({ err }, "health check: db probe failed");
+    reply.status(503);
+    return { status: "degraded", db: "unreachable" };
+  }
+});
 
 await app.register(telegramRoutes);
 await app.register(dashboardRoutes);
