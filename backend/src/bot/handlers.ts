@@ -35,6 +35,14 @@ import {
   findExpenseByContentHash,
 } from "../db/expenses.js";
 import { getOverrides, upsertOverride } from "../db/overrides.js";
+import {
+  attachTagToExpense,
+  detachTagFromExpense,
+  findTagByName,
+  getOrCreateTag,
+  getTagsForExpenses,
+  listTagsWithCounts,
+} from "../db/tags.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory, getExpensesForExport } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
@@ -185,8 +193,11 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "• `paid 1200 inr for uber yesterday`\n\n" +
       "*After logging:* Tap the edit buttons or type `edit` to change details.\n\n" +
       "*Statement import:* Upload a PDF or image — I'll extract and dedupe transactions.\n\n" +
+      "*Tag an expense:* After logging, reply `tag: <name>` (or comma-separated: `tag: work, lunch`).\n" +
+      "Untag with `untag: <name>`.\n\n" +
       "*Commands:*\n" +
       "/expenses — list expenses from the 1st of the month till today\n" +
+      "/tags — list your tags with counts\n" +
       "/categories — list your categories\n" +
       "/add <name> — add a category\n" +
       "/rename <old> <new> — rename a category\n" +
@@ -252,9 +263,27 @@ export async function handleDeleteCategory(ctx: Context): Promise<void> {
   );
 }
 
+// ── Tag commands ──────────────────────────────────────────────────────────────
+
+export async function handleListTags(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const tags = await listTagsWithCounts(userId);
+  if (tags.length === 0) {
+    await ctx.reply(
+      "📋 No tags yet. Tag an expense by replying `tag: <name>` after logging it.",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+  const lines = tags.map((t) => `• #${t.name} — ${t.count} expense${t.count !== 1 ? "s" : ""}`);
+  await ctx.reply(`🏷️ *Your tags:*\n${lines.join("\n")}`, { parse_mode: "Markdown" });
+}
+
 // ── List expenses (month-to-date) ─────────────────────────────────────────────
 
 interface ExpenseListRow {
+  id: string;
   occurred_at: Date;
   amount_cents: string;
   currency: string;
@@ -275,7 +304,8 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
   const monthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
 
   const rows = await sql<ExpenseListRow[]>`
-    SELECT e.occurred_at,
+    SELECT e.id,
+           e.occurred_at,
            e.amount_cents::text AS amount_cents,
            e.currency,
            e.description,
@@ -314,6 +344,9 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     )
     .join("\n");
 
+  // Bulk-fetch tags for all expenses in one query (Map<expenseId, names[]>)
+  const tagMap = await getTagsForExpenses(rows.map((r) => r.id));
+
   // Per-expense lines, newest first.
   const lines = rows.map((r) => {
     const d = new Date(r.occurred_at);
@@ -322,7 +355,9 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     const name = r.merchant ?? r.description ?? "—";
     const trimmed = name.length > 40 ? name.slice(0, 38) + "…" : name;
     const amt = formatAmount(Number(r.amount_cents), r.currency);
-    return `\`${day} ${monAbbr}\` ${amt} — ${trimmed} _(${r.category})_`;
+    const tagNames = tagMap.get(r.id) ?? [];
+    const tagSuffix = tagNames.length ? ` ${tagNames.map((n) => `#${n}`).join(" ")}` : "";
+    return `\`${day} ${monAbbr}\` ${amt} — ${trimmed} _(${r.category})_${tagSuffix}`;
   });
 
   const noun = rows.length === 1 ? "expense" : "expenses";
@@ -517,6 +552,59 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       }
       return;
     }
+  }
+
+  // "tag: X" or "tag: a, b, c" — attach one or more tags to the last logged expense
+  if (/^tag\s*:/i.test(text)) {
+    if (!pendingEdit) {
+      await ctx.reply("No recent expense to tag. Log one first.");
+      return;
+    }
+    const names = text
+      .replace(/^tag\s*:\s*/i, "")
+      .split(/[,;]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (names.length === 0) {
+      await ctx.reply("Usage: `tag: <name>` (or comma-separated: `tag: work, lunch`)", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+    const attached: string[] = [];
+    for (const name of names) {
+      const tagId = await getOrCreateTag(userId, name);
+      if (!tagId) continue;
+      await attachTagToExpense(pendingEdit.expenseId, tagId);
+      attached.push(name.toLowerCase().trim().replace(/\s+/g, " "));
+    }
+    if (attached.length === 0) {
+      await ctx.reply("⚠️ No valid tag names provided.");
+    } else {
+      await ctx.reply(`✅ Tagged with ${attached.map((n) => `#${n}`).join(" ")}`);
+    }
+    return;
+  }
+
+  // "untag: X" — detach a tag from the last logged expense
+  if (/^untag\s*:/i.test(text)) {
+    if (!pendingEdit) {
+      await ctx.reply("No recent expense to untag. Log one first.");
+      return;
+    }
+    const name = text.replace(/^untag\s*:\s*/i, "").trim();
+    if (!name) {
+      await ctx.reply("Usage: `untag: <name>`", { parse_mode: "Markdown" });
+      return;
+    }
+    const tag = await findTagByName(userId, name);
+    if (!tag) {
+      await ctx.reply(`⚠️ Tag "${name}" not found.`);
+      return;
+    }
+    const removed = await detachTagFromExpense(pendingEdit.expenseId, tag.id);
+    await ctx.reply(removed ? `✅ Removed #${tag.name}` : `⚠️ #${tag.name} wasn't on this expense.`);
+    return;
   }
 
   // "category: X" quick correction for the last logged expense
