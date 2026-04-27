@@ -34,6 +34,8 @@ import {
   updateExpenseCategory,
   updateExpenseDate,
   findExpenseByContentHash,
+  findExpenseByUpiRef,
+  attachReceiptToExpense,
 } from "../db/expenses.js";
 import { getOverrides, upsertOverride } from "../db/overrides.js";
 import {
@@ -285,6 +287,30 @@ async function processUpiPayment(
   upi: UpiParse,
   opts: UpiInsertOpts,
 ): Promise<void> {
+  // Dedup by UPI reference — if the same txn already arrived via the other
+  // channel (SMS first, then receipt photo, or vice versa), attach the new
+  // image if we have one and stop. Refs without bank ids (some SMS omit them)
+  // fall through to the normal insert path.
+  if (upi.reference) {
+    const existing = await findExpenseByUpiRef(userId, upi.reference);
+    if (existing) {
+      let attached = false;
+      if (opts.imageKey && opts.contentHash && !existing.image_key) {
+        attached = await attachReceiptToExpense(
+          existing.id,
+          userId,
+          opts.imageKey,
+          opts.contentHash,
+        ).catch(() => false);
+      }
+      const note = attached
+        ? `📎 Receipt attached — same UPI txn (\`${upi.reference}\`) was already logged.`
+        : `🔁 Already logged (UPI ref \`${upi.reference}\`).`;
+      await ctx.reply(note, { parse_mode: "Markdown" });
+      return;
+    }
+  }
+
   await seedDefaultCategories(userId).catch(console.error);
   const [cats, overrides] = await Promise.all([
     getUserCategories(userId),
@@ -323,6 +349,7 @@ async function processUpiPayment(
     raw_text: rawText,
     image_key: opts.imageKey ?? null,
     content_hash: opts.contentHash ?? null,
+    upi_reference_id: upi.reference,
   });
 
   await setPendingEdit(userId, {

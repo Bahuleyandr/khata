@@ -16,6 +16,14 @@ export interface UpiParse {
   amountRupees: number;
   merchant: string | null;
   app: "gpay" | "phonepe" | "paytm" | "upi" | "bank";
+  /**
+   * UPI ref / UTR / txn-id when present in the source text. Used as a stable
+   * dedup key so the same transaction arriving via two channels (forwarded SMS
+   * + photo of the same receipt) collapses to one row. Null when the source
+   * doesn't include one — those payments fall through to the existing
+   * source-specific dedup (image content_hash, etc.).
+   */
+  reference: string | null;
 }
 
 const PAYMENT_SIGNAL =
@@ -33,6 +41,18 @@ const AMOUNT_RE =
 // between consecutive digits, so the date branch needs its own form.
 const TO_MERCHANT_RE =
   /\bto\s+([A-Z][\w\s.&'@-]{1,60}?)(?=\s+(?:via|using|through|from|UPI|ref|on\s+account|account|a\/c)\b|\s+on\s+\d|\s*[.\n]|$)/i;
+
+// UPI ref / UTR / txn-id capture. Common shapes seen in real bank SMS and
+// receipt OCR:
+//   "Ref 112749168520"           (HDFC UPI debit SMS)
+//   "Transaction Identification Number: CHD53OR1IHJ2Z1"  (AmEx receipt)
+//   "UTR: HDFC0000123456"
+//   "RRN 123456789012"
+//   "Txn ID: ABC12345"
+// 6-char floor on the captured token avoids matching short noise; the
+// preceding label keyword keeps it specific to actual ref fields.
+const REF_RE =
+  /\b(?:ref(?:erence)?|utr|rrn|txn|transaction)(?:\s+(?:no\.?|id|identification(?:\s+number)?|number|#))?[\s:.#]+([A-Z0-9]{6,})\b/i;
 
 function detectApp(text: string): UpiParse["app"] {
   if (/G\s?Pay|Google\s?Pay/i.test(text)) return "gpay";
@@ -55,9 +75,13 @@ export function tryParseUpi(text: string): UpiParse | null {
   const merchMatch = TO_MERCHANT_RE.exec(text);
   const merchant = merchMatch?.[1]?.trim().replace(/\s+/g, " ") ?? null;
 
+  const refMatch = REF_RE.exec(text);
+  const reference = refMatch?.[1]?.toUpperCase() ?? null;
+
   return {
     amountRupees,
     merchant: merchant && merchant.length >= 2 ? merchant : null,
     app: detectApp(text),
+    reference,
   };
 }
