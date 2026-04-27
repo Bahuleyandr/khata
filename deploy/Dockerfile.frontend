@@ -7,12 +7,10 @@ COPY app ./app
 COPY lib ./lib
 COPY next.config.ts tsconfig.json eslint.config.mjs vitest.config.ts ./
 
-# In production the frontend is served from the same Tailscale hostname as the
-# backend (Traefik path routes /api/* to backend, everything else to frontend),
-# so the API base is a relative path. Override at build time if you split
-# hostnames later.
-ARG NEXT_PUBLIC_API_URL=/api
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# In production the frontend is served from the same hostname as the backend
+# (nginx in this image proxies /api/* to khata-backend), so the API base is
+# implicit (same-origin, empty string). lib/api.ts now defaults to ''
+# correctly when this is unset — no ARG needed unless you split hostnames.
 
 # Bot username for the Telegram Login Widget — must match the bot the auth
 # domain (BotFather /setdomain) is registered to.
