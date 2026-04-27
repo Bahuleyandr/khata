@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { sql } from "./db/index.js";
 import { bot } from "./bot/index.js";
 import { startBudgetCrons } from "./cron/budgets.js";
+import { startInsightsCron } from "./cron/insights.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { shutdownMcp } from "./ai/mcp.js";
 
@@ -32,6 +33,7 @@ app.get("/health", async (_request, reply) => {
 await app.register(dashboardRoutes);
 
 startBudgetCrons(bot.api);
+startInsightsCron();
 
 // Bot runs in long-polling mode (no public webhook needed → works behind NAT
 // and on Tailscale-only deployments). Drop any leftover webhook registration

@@ -116,6 +116,56 @@ export function getCategories(): Promise<Category[]> {
   return apiFetch<Category[]>('/api/categories')
 }
 
+// Insights — populated by the nightly cron (backend/src/cron/insights.ts).
+// `kind` discriminates which payload shape to read.
+
+export interface MtdVsLastMonthPayload {
+  mtd_cents: number
+  last_month_cents: number
+  delta_pct: number | null
+  categories: Array<{
+    name: string
+    mtd_cents: number
+    last_month_cents: number
+    delta_pct: number | null
+  }>
+}
+
+export interface TopMerchantsMtdPayload {
+  merchants: Array<{ name: string; total_cents: number; count: number }>
+}
+
+export interface RecurringPayload {
+  merchants: Array<{
+    name: string
+    count: number
+    total_cents: number
+    first_seen: string
+    last_seen: string
+  }>
+}
+
+export type InsightPayload =
+  | MtdVsLastMonthPayload
+  | TopMerchantsMtdPayload
+  | RecurringPayload
+
+export interface Insight {
+  kind: string
+  payload: InsightPayload
+  period_start: string | null
+  period_end: string | null
+  computed_at: string
+}
+
+export interface InsightsResponse {
+  insights: Insight[]
+}
+
+export function getInsights(): Promise<InsightsResponse> {
+  return apiFetch<InsightsResponse>('/api/insights')
+}
+
 export function getReceipts(params: { page?: number; limit?: number }): Promise<ReceiptPage> {
   const q = new URLSearchParams()
   if (params.page) q.set('page', String(params.page))
