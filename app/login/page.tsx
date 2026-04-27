@@ -47,7 +47,7 @@ export default function LoginPage() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <h1>RaaReeRum</h1>
+        <h1>Khata</h1>
         <p>Sign in with your Telegram account to view your expenses.</p>
         <div ref={widgetRef} />
       </div>

@@ -1,6 +1,6 @@
-# raareerum
+# khata
 
-Engineering monorepo for RaaReeRum Enterprises.
+Engineering monorepo for Khata.
 
 | Service | Description |
 |---|---|
@@ -12,8 +12,8 @@ Engineering monorepo for RaaReeRum Enterprises.
 You need **Node 20** and **npm** installed.
 
 ```bash
-git clone https://github.com/Bahuleyandr/raareerum.git
-cd raareerum
+git clone https://github.com/Bahuleyandr/khata.git
+cd khata
 npm install
 npm run dev
 ```
@@ -137,7 +137,7 @@ git push origin main
 
 ## Frontend deploy
 
-**Deploy target: GitHub Pages** (`bahuleyan.com/raareerum/`).
+**Deploy target: GitHub Pages**.
 Build: `npm run build` → Next.js static export → `out/` directory.
 The `.github/workflows/deploy.yml` pushes `out/` to the `gh-pages` branch on every push to `main`.
 `next.config.ts` is locked to `output: 'export'` — do not change this to server mode.

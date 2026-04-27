@@ -2,8 +2,8 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'RaaReeRum',
-  description: 'RaaReeRum Expenses',
+  title: 'Khata',
+  description: 'Khata — personal expense tracker',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
