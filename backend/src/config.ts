@@ -4,6 +4,12 @@ function requireEnv(key: string): string {
   return value;
 }
 
+function requireEnvMinLen(key: string, minLen: number): string {
+  const value = requireEnv(key);
+  if (value.length < minLen) throw new Error(`${key} must be at least ${minLen} characters`);
+  return value;
+}
+
 export const config = {
   port: parseInt(process.env["PORT"] ?? "3001", 10),
   telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
@@ -14,6 +20,10 @@ export const config = {
     .map((id) => parseInt(id.trim(), 10)),
   databaseUrl: requireEnv("DATABASE_URL"),
   anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
+  sessionSecret: requireEnvMinLen("SESSION_SECRET", 32),
+  allowedOrigins: (process.env["ALLOWED_ORIGINS"] ?? "https://bahuleyan.com,http://localhost:3000")
+    .split(",")
+    .map((o) => o.trim()),
   s3: {
     endpoint: requireEnv("S3_ENDPOINT"),
     bucket: requireEnv("S3_BUCKET"),
