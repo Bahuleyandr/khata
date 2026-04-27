@@ -13,6 +13,7 @@ export const config = {
     .split(",")
     .map((id) => parseInt(id.trim(), 10)),
   databaseUrl: requireEnv("DATABASE_URL"),
+  anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
   s3: {
     endpoint: requireEnv("S3_ENDPOINT"),
     bucket: requireEnv("S3_BUCKET"),
