@@ -21,6 +21,19 @@ async function migrate() {
     )
   `;
 
+  // One-time rename guard: update old filenames to new filenames if present
+  const renames: Array<[string, string]> = [
+    ['002_statement_status.sql', '003_statement_status.sql'],
+    ['003_receipt_ocr.sql', '004_receipt_ocr.sql'],
+  ];
+  for (const [oldName, newName] of renames) {
+    await sql`
+      UPDATE schema_migrations SET filename = ${newName}
+      WHERE filename = ${oldName}
+        AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = ${newName})
+    `;
+  }
+
   const migrationsDir = join(__dirname, "migrations");
   const files = (await readdir(migrationsDir))
     .filter((f) => f.endsWith(".sql"))
