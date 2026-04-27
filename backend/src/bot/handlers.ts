@@ -270,13 +270,20 @@ export async function handleDeleteCategory(ctx: Context): Promise<void> {
   );
 }
 
-// ── Forwarded UPI receipt fast path ───────────────────────────────────────────
+// ── UPI / bank-payment fast path (text OR receipt OCR) ───────────────────────
 
-async function processUpiForward(
+interface UpiInsertOpts {
+  source: "telegram" | "receipt";
+  imageKey?: string;
+  contentHash?: string;
+}
+
+async function processUpiPayment(
   ctx: Context,
   userId: number,
   rawText: string,
   upi: UpiParse,
+  opts: UpiInsertOpts,
 ): Promise<void> {
   await seedDefaultCategories(userId).catch(console.error);
   const [cats, overrides] = await Promise.all([
@@ -284,7 +291,7 @@ async function processUpiForward(
     getOverrides(userId),
   ]);
 
-  // If we have a merchant and a matching override hint, prefer that category.
+  // Prefer override-hinted category for the merchant; fall back to "Other".
   let categoryName = "Other";
   if (upi.merchant) {
     const merchLower = upi.merchant.toLowerCase();
@@ -301,8 +308,7 @@ async function processUpiForward(
     null;
 
   const amount_cents = Math.round(upi.amountRupees * 100);
-  const occurred_at = new Date(); // forwards are usually same-day; user can edit
-
+  const occurred_at = new Date(); // same-day; user can edit
   const description = upi.merchant ?? `UPI payment (${upi.app})`;
 
   const expenseId = await insertExpense({
@@ -313,8 +319,10 @@ async function processUpiForward(
     merchant: upi.merchant,
     category_id: cat?.id ?? null,
     occurred_at,
-    source: "telegram",
+    source: opts.source,
     raw_text: rawText,
+    image_key: opts.imageKey ?? null,
+    content_hash: opts.contentHash ?? null,
   });
 
   await setPendingEdit(userId, {
@@ -326,8 +334,9 @@ async function processUpiForward(
     occurred_at,
   });
 
+  const sourceLabel = opts.source === "receipt" ? "Receipt logged" : "UPI logged";
   await ctx.reply(
-    `✅ UPI logged: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${upi.app}_\n` +
+    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${upi.app}_\n` +
       `Reply \`category: <name>\` or use the buttons.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
   );
@@ -571,16 +580,14 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   // Skip commands — registered separately on the bot
   if (text.startsWith("/")) return;
 
-  // Forwarded UPI/bank-payment receipt fast path — regex parse, skip LLM.
-  // Only triggers on FORWARDED messages (forward_origin set) so casual
-  // chat mentioning ₹/UPI doesn't auto-log.
-  const isForwarded = !!(ctx.message as { forward_origin?: unknown })?.forward_origin;
-  if (isForwarded) {
-    const upi = tryParseUpi(text);
-    if (upi) {
-      await processUpiForward(ctx, userId, text, upi);
-      return;
-    }
+  // UPI / bank-payment receipt fast path — regex parse, skip LLM. The parser
+  // is conservative (requires a payment signal AND a currency-marked amount),
+  // so casual chat mentioning ₹ doesn't auto-log. Works for both forwarded
+  // notifications AND pasted SMS bodies.
+  const upi = tryParseUpi(text);
+  if (upi) {
+    await processUpiPayment(ctx, userId, text, upi, { source: "telegram" });
+    return;
   }
 
   const chatId = ctx.chat?.id;
@@ -947,7 +954,23 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
-  // Parse extracted text using the same NL layer as text expenses
+  // UPI / bank-payment receipt fast path — if the OCR'd text matches a
+  // payment-confirmation pattern (Rs amount + UPI/app/debit keyword), use
+  // the regex parse and skip the LLM. Bill-payment confirmations (AmEx,
+  // credit-card statements) often confuse parseExpense, but the regex
+  // catches them reliably.
+  const upi = tryParseUpi(ocrText);
+  if (upi) {
+    await processUpiPayment(ctx, userId, ocrText, upi, {
+      source: "receipt",
+      imageKey: s3Key,
+      contentHash: contentHash,
+    });
+    return;
+  }
+
+  // Otherwise: traditional retail receipts go through the LLM (better at
+  // category inference and free-form merchant strings).
   await seedDefaultCategories(userId).catch(console.error);
   const [cats, overrides] = await Promise.all([getUserCategories(userId), getOverrides(userId)]);
 
