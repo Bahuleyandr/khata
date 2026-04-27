@@ -6,6 +6,7 @@ import {
   upsertDigestState,
   getDistinctUsersWithBudgets,
 } from "../db/budgets.js";
+import { sql } from "../db/index.js";
 
 function currentYearMonth(): string {
   return new Date().toISOString().slice(0, 7);
@@ -28,6 +29,10 @@ function fmt(cents: number): string {
 }
 
 const THRESHOLDS = [50, 75, 100] as const;
+
+export async function expireOldBotSessions(): Promise<void> {
+  await sql`DELETE FROM bot_sessions WHERE expires_at < NOW()`;
+}
 
 export async function runDailyBudgetNudge(botApi: Api): Promise<void> {
   const yearMonth = currentYearMonth();
@@ -88,10 +93,13 @@ export async function runMonthlyDigest(botApi: Api): Promise<void> {
 }
 
 export function startBudgetCrons(botApi: Api): void {
-  // Daily nudge at 09:00 UTC
+  // Daily nudge + session expiry at 09:00 UTC
   schedule("0 9 * * *", () => {
     runDailyBudgetNudge(botApi).catch((err) =>
       console.error("Daily budget nudge error:", err),
+    );
+    expireOldBotSessions().catch((err) =>
+      console.error("Bot session expiry error:", err),
     );
   });
 
@@ -102,5 +110,5 @@ export function startBudgetCrons(botApi: Api): void {
     );
   });
 
-  console.log("Budget crons registered: daily nudge @09:00 UTC, monthly digest @08:00 UTC on 1st.");
+  console.log("Budget crons registered: daily nudge + session expiry @09:00 UTC, monthly digest @08:00 UTC on 1st.");
 }
