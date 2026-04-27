@@ -1,6 +1,11 @@
 # raareerum
 
-Engineering scaffold for RaaReeRum Enterprises — a Next.js 15 + TypeScript monorepo.
+Engineering monorepo for RaaReeRum Enterprises.
+
+| Service | Description |
+|---|---|
+| `/` (root) | Next.js 15 frontend — marketing / dashboard UI |
+| `backend/` | Fastify API + Telegram bot — expense tracker ingress |
 
 ## Quick start
 
@@ -47,41 +52,105 @@ Business logic lives in `lib/` — framework-agnostic, easy to unit test. Pages 
 
 **Single monorepo** — keeps operational overhead minimal at this stage. Polyrepo can be introduced if domain isolation warrants it later.
 
+## Backend — expense tracker API + Telegram bot
+
+### Prerequisites
+
+- Node 22, npm
+- Docker (for local Postgres) — or a running Postgres instance
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
+- An S3-compatible bucket (Cloudflare R2, MinIO, AWS S3)
+
+### Local dev setup
+
+```bash
+cd backend
+cp .env.example .env
+# Fill in values in .env
+
+# Start Postgres locally (Docker)
+docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:16-alpine
+
+# Install deps
+npm install
+
+# Run migrations
+npm run migrate
+
+# Start dev server (hot-reload)
+npm run dev
+# Server listens on http://localhost:3001
+# Health check: curl http://localhost:3001/health
+```
+
+### Register the Telegram webhook
+
+After deploying, run once to point Telegram at your server:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://your-backend-host.fly.dev/telegram/webhook",
+    "secret_token": "<YOUR_TELEGRAM_WEBHOOK_SECRET>"
+  }'
+```
+
+Then send `/start` to your bot — it should reply with a hello message.
+
+### Backend scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start dev server with hot-reload (tsx watch) |
+| `npm run build` | Compile TypeScript → `dist/` |
+| `npm start` | Run compiled production build |
+| `npm run migrate` | Apply pending SQL migrations |
+| `npm run lint` | ESLint check |
+| `npm test` | Vitest unit tests |
+
+### Deploy to Fly.io
+
+```bash
+cd backend
+fly launch --no-deploy       # first time only — creates app
+fly secrets set TELEGRAM_BOT_TOKEN=... TELEGRAM_WEBHOOK_SECRET=... \
+  ALLOWED_TELEGRAM_USER_IDS=... DATABASE_URL=... \
+  S3_ENDPOINT=... S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=...
+fly deploy
+```
+
+### Environment variables
+
+See `backend/.env.example` for the full list. Never commit a `.env` file — it is gitignored.
+
 ## CI
 
-GitHub Actions runs lint + tests on every pull request and push to `main`. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) once the workflow file is pushed (requires a GitHub token with `workflow` scope — see Runbook below).
+GitHub Actions runs lint + tests on every push that touches `backend/`. See [`.github/workflows/backend-ci.yml`](.github/workflows/backend-ci.yml).
 
-## Deploy
-
-This project is configured for [Vercel](https://vercel.com). To connect:
-
-1. Go to [vercel.com/new](https://vercel.com/new)
-2. Import the `Bahuleyandr/raareerum` repository
-3. Vercel auto-detects Next.js — click **Deploy**
-4. Every push to `main` will trigger a production deploy automatically
-
-The `vercel.json` in the root declares the framework and sets the Node version.
-
-## Runbook
-
-### Unblock GitHub Actions workflow push
-
-The GitHub OAuth token used by the CLI must have `workflow` scope to push files under `.github/workflows/`. Run:
+Pushing CI workflow files requires a token with `workflow` scope:
 
 ```bash
 gh auth refresh -s workflow
-cd /tmp/raareerum
 git push origin main
 ```
 
-This will open a browser for scope approval. After approval the CI workflow will land on `main` and run automatically.
+## Frontend deploy
 
-### Local test run
+The frontend is configured for [Vercel](https://vercel.com) — import the repo and it auto-deploys on every push to `main`.
+
+## Runbook
+
+### Local test run (frontend)
 
 ```bash
-npm test
-# runs: vitest run
-# exits 0 if all tests pass
+npm test   # runs vitest in repo root
+```
+
+### Local test run (backend)
+
+```bash
+cd backend && npm test
 ```
 
 ### Vercel environment variables
