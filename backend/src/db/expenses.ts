@@ -13,6 +13,7 @@ export interface InsertExpenseData {
   raw_text: string | null;
   image_key?: string | null;
   content_hash?: string | null;
+  upi_reference_id?: string | null;
 }
 
 export async function insertExpense(data: InsertExpenseData): Promise<string> {
@@ -24,12 +25,14 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO expenses
       (user_id, amount_cents, currency, description, merchant, merchant_canonical_id,
-       category_id, occurred_at, source, raw_text, image_key, content_hash)
+       category_id, occurred_at, source, raw_text, image_key, content_hash,
+       upi_reference_id)
     VALUES
       (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
        ${data.merchant}, ${merchantCanonicalId},
        ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text},
-       ${data.image_key ?? null}, ${data.content_hash ?? null})
+       ${data.image_key ?? null}, ${data.content_hash ?? null},
+       ${data.upi_reference_id ?? null})
     RETURNING id
   `;
   return row.id;
@@ -61,6 +64,48 @@ export async function findExpenseByContentHash(
     LIMIT 1
   `;
   return result[0]?.id ?? null;
+}
+
+export interface ExpenseDedupRow {
+  id: string;
+  image_key: string | null;
+  content_hash: string | null;
+}
+
+export async function findExpenseByUpiRef(
+  userId: number,
+  upiReferenceId: string,
+): Promise<ExpenseDedupRow | null> {
+  const result = await sql<Array<ExpenseDedupRow>>`
+    SELECT id, image_key, content_hash FROM expenses
+    WHERE user_id = ${userId} AND upi_reference_id = ${upiReferenceId}
+    LIMIT 1
+  `;
+  return result[0] ?? null;
+}
+
+/**
+ * Attach a receipt image to an existing expense row that doesn't yet have one.
+ * Used when a UPI SMS was logged first (no image) and then the user photographs
+ * the same receipt (matched by upi_reference_id). Best-effort: if the
+ * `expenses_user_content_hash_unique` index rejects the attach (the same image
+ * was already attached to a different row somehow), the caller can fall back
+ * to a plain dedup acknowledgement.
+ */
+export async function attachReceiptToExpense(
+  id: string,
+  userId: number,
+  imageKey: string,
+  contentHash: string,
+): Promise<boolean> {
+  const result = await sql`
+    UPDATE expenses
+    SET image_key = ${imageKey}, content_hash = ${contentHash}
+    WHERE id = ${id} AND user_id = ${userId}
+      AND image_key IS NULL
+    RETURNING id
+  `;
+  return result.length > 0;
 }
 
 export async function updateExpenseAmount(

@@ -8,6 +8,7 @@ describe("tryParseUpi", () => {
     expect(r!.amountRupees).toBe(500);
     expect(r!.merchant).toBe("John Doe");
     expect(r!.app).toBe("gpay");
+    expect(r!.reference).toBeNull();
   });
 
   it("parses a Rs.-prefixed amount with comma separator", () => {
@@ -86,6 +87,7 @@ describe("tryParseUpi", () => {
     expect(r!.amountRupees).toBe(11942.89);
     expect(r!.merchant).toBe("AMERICAN EXPRESS CREDIT"); // double-space collapsed
     expect(r!.app).toBe("upi");
+    expect(r!.reference).toBe("112749168520");
   });
 
   it("parses an AmEx bill-payment confirmation OCR (INR): amount pattern", () => {
@@ -104,5 +106,44 @@ describe("tryParseUpi", () => {
     expect(r!.amountRupees).toBe(11942.89);
     // No "to <merchant>" pattern in this OCR — merchant null is acceptable
     expect(r!.app).toBe("upi");
+    expect(r!.reference).toBe("CHD53OR1IHJ2Z1");
+  });
+
+  describe("UPI reference / UTR extraction", () => {
+    it("captures a UTR with bank prefix", () => {
+      const r = tryParseUpi("Rs.500 debited via UPI to Foo. UTR: HDFC0000123456");
+      expect(r?.reference).toBe("HDFC0000123456");
+    });
+
+    it("captures an RRN field", () => {
+      const r = tryParseUpi("Sent Rs 250 via UPI to Bar. RRN 123456789012");
+      expect(r?.reference).toBe("123456789012");
+    });
+
+    it("captures Txn ID with explicit qualifier", () => {
+      const r = tryParseUpi("UPI debit Rs 100 to Baz. Txn ID: ABCD1234");
+      expect(r?.reference).toBe("ABCD1234");
+    });
+
+    it("captures Reference No. with period and qualifier", () => {
+      const r = tryParseUpi("Paid ₹50 to Quux via UPI. Reference No. XYZ987654");
+      expect(r?.reference).toBe("XYZ987654");
+    });
+
+    it("uppercases lowercase ref tokens (OCR may emit lowercase)", () => {
+      const r = tryParseUpi("Paid ₹50 via UPI to Foo. ref: abc123def");
+      expect(r?.reference).toBe("ABC123DEF");
+    });
+
+    it("ignores noisy short tokens after a non-ref word", () => {
+      // "tracking 12345" is short (5 chars) AND not preceded by a ref label
+      const r = tryParseUpi("Paid ₹50 via UPI to Foo. tracking 12345");
+      expect(r?.reference).toBeNull();
+    });
+
+    it("returns null reference when no ref label present", () => {
+      const r = tryParseUpi("Sent ₹500 to John via Google Pay");
+      expect(r?.reference).toBeNull();
+    });
   });
 });
