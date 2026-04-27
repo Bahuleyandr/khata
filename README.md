@@ -137,7 +137,10 @@ git push origin main
 
 ## Frontend deploy
 
-The frontend is configured for [Vercel](https://vercel.com) — import the repo and it auto-deploys on every push to `main`.
+**Deploy target: GitHub Pages** (`bahuleyan.com/raareerum/`).
+Build: `npm run build` → Next.js static export → `out/` directory.
+The `.github/workflows/deploy.yml` pushes `out/` to the `gh-pages` branch on every push to `main`.
+`next.config.ts` is locked to `output: 'export'` — do not change this to server mode.
 
 ## Runbook
 
@@ -153,6 +156,6 @@ npm test   # runs vitest in repo root
 cd backend && npm test
 ```
 
-### Vercel environment variables
+### Environment variables
 
-Add secrets in the Vercel dashboard under **Project → Settings → Environment Variables**. Do not commit `.env.local` — it is gitignored.
+Do not commit `.env.local` — it is gitignored. The static export (`output: 'export'`) has no server runtime, so secrets are not needed for the deployed site.
