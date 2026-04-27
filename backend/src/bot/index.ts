@@ -1,4 +1,4 @@
-import { Bot, webhookCallback } from "grammy";
+import { Bot } from "grammy";
 import { config } from "../config.js";
 import { isAllowedUser } from "../middleware/auth.js";
 import {
@@ -40,7 +40,3 @@ bot.on("callback_query:data", handleCallbackQuery);
 bot.on("message:text", handleTextMessage);
 bot.on("message:document", handleDocument);
 bot.on("message:photo", handlePhoto);
-
-export function buildWebhookHandler(secretToken: string) {
-  return webhookCallback(bot, "fastify", { secretToken });
-}

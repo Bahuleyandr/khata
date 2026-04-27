@@ -1,7 +1,11 @@
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PDFParse } from "pdf-parse";
 import { config } from "../config.js";
 import { llm } from "../ai/client.js";
-import { logUsage, logUsageError } from "../ai/usage.js";
+import { understandImage } from "../ai/mcp.js";
+import { withHttpUsage, withMcpUsage } from "../ai/usage.js";
 import type { ParsedTransaction } from "./types.js";
 
 const NORMALIZATION_SYSTEM = `You are a financial data extractor. Extract all debit/credit transactions from bank or credit card statement text.
@@ -20,6 +24,9 @@ Rules:
 
 Return ONLY valid JSON array. No markdown, no explanation.`;
 
+const STATEMENT_VISION_PROMPT =
+  "Extract all text from this bank/credit card statement image. Preserve table structure using spaces and newlines.";
+
 export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
   const result = await parser.getText();
@@ -31,58 +38,37 @@ export async function extractTextFromImage(
   imageBuffer: Buffer,
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
 ): Promise<string> {
-  const dataUrl = `data:${mediaType};base64,${imageBuffer.toString("base64")}`;
-  const model = config.models.extractTextFromImage;
-  const start = Date.now();
-  let response;
-  try {
-    response = await llm.chat.completions.create({
-      model,
-      max_tokens: 4096,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: dataUrl } },
-            {
-              type: "text",
-              text: "Extract all text from this bank/credit card statement image. Preserve table structure using spaces and newlines.",
-            },
-          ],
-        },
-      ],
-    });
-  } catch (err) {
-    logUsageError("extractTextFromImage", model, err, Date.now() - start);
-    throw err;
-  }
-  logUsage("extractTextFromImage", model, response, Date.now() - start);
+  // MCP `understand_image` reads a file path; write the buffer to a temp file
+  // for the duration of the call. Same Pod = same filesystem, so the Python
+  // MCP subprocess can read what we wrote here.
+  const ext = mediaType.split("/")[1];
+  const dir = await mkdtemp(join(tmpdir(), "khata-img-"));
+  const filePath = join(dir, `statement.${ext}`);
+  await writeFile(filePath, imageBuffer);
 
-  const content = response.choices[0]?.message?.content;
-  if (typeof content !== "string") {
-    throw new Error("Unexpected response type from vision call");
+  try {
+    return await withMcpUsage(
+      "extractTextFromImage",
+      config.models.extractTextFromImage,
+      () => understandImage({ imagePath: filePath, prompt: STATEMENT_VISION_PROMPT }),
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
-  return content;
 }
 
 export async function normalizeTransactions(rawText: string): Promise<ParsedTransaction[]> {
   const model = config.models.normalizeTransactions;
-  const start = Date.now();
-  let response;
-  try {
-    response = await llm.chat.completions.create({
+  const response = await withHttpUsage("normalizeTransactions", model, () =>
+    llm.chat.completions.create({
       model,
       max_tokens: 4096,
       messages: [
         { role: "system", content: NORMALIZATION_SYSTEM },
         { role: "user", content: rawText },
       ],
-    });
-  } catch (err) {
-    logUsageError("normalizeTransactions", model, err, Date.now() - start);
-    throw err;
-  }
-  logUsage("normalizeTransactions", model, response, Date.now() - start);
+    }),
+  );
 
   const text = response.choices[0]?.message?.content;
   if (typeof text !== "string") {

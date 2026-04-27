@@ -1,21 +1,17 @@
 import OpenAI from "openai";
 import { config } from "../config.js";
 
-// Single OpenRouter-backed client for every LLM call. OpenRouter exposes
-// Claude, MiniMax, GPT, Gemini, DeepSeek, Llama, etc. through the OpenAI
-// chat-completions wire format. Per-intent model is selected via
-// `config.models.<intent>` and overridable through env vars.
+// MiniMax direct over their OpenAI-compatible chat completions endpoint at
+// api.minimax.io. Used for every text intent (parseExpense, classifyMessage,
+// normalizeTransactions). Vision intents go through ai/mcp.ts since MiniMax's
+// chat endpoint is text-only.
 //
-// HTTP-Referer + X-Title are OpenRouter conventions for attribution
-// (visible in the OpenRouter dashboard's per-app usage breakdown).
+// `maxRetries: 5` covers transient 429/5xx with exponential backoff (default
+// is 2, which we found insufficient under burst).
 export const llm = new OpenAI({
-  apiKey: config.openrouterApiKey,
-  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: config.minimaxApiKey,
+  baseURL: "https://api.minimax.io/v1",
   maxRetries: 5,
-  defaultHeaders: {
-    "HTTP-Referer": "https://khata.bahulyean.com",
-    "X-Title": "Khata",
-  },
 });
 
 export const models = config.models;
