@@ -59,7 +59,7 @@ minio-bucket:
 		"mc alias set local http://localhost:9000 '$$AK' '$$SK' >/dev/null && mc mb -p local/$$BK"
 
 migrate:
-	kubectl exec -n $(NS) deploy/khata-backend -- npm run migrate
+	kubectl exec -n $(NS) deploy/khata-backend -- node dist/db/migrate.js
 
 logs:
 	kubectl logs -n $(NS) -l app=khata-backend -f --tail=100
