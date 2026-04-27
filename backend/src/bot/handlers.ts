@@ -38,6 +38,8 @@ import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { pendingEdits } from "./session.js";
 
+const MAX_RECEIPT_BYTES = 5 * 1024 * 1024; // 5 MB — guard before base64 encoding for Claude vision
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function todayString(): string {
@@ -585,6 +587,14 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
+  // Reject images over 5 MB before base64-encoding for Claude vision
+  if (buffer.length > MAX_RECEIPT_BYTES) {
+    await ctx.reply(
+      "⚠️ This image is too large to process (max 5 MB). Please send a smaller or more compressed photo.",
+    );
+    return;
+  }
+
   // Idempotency: skip if the exact same image was already logged
   const contentHash = createHash("sha256").update(buffer).digest("hex");
   const existing = await findExpenseByContentHash(userId, contentHash);
@@ -603,7 +613,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
-  // OCR via Claude vision with a receipt-specific prompt
+  // OCR via Claude vision
   let ocrText: string;
   try {
     const imageMime = (["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mimeType)

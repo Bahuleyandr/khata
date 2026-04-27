@@ -2,8 +2,13 @@ import Anthropic from "@anthropic-ai/sdk";
 import { PDFParse } from "pdf-parse";
 import { config } from "../config.js";
 import type { ParsedTransaction } from "./types.js";
+import { withRetry } from "../ai/retry.js";
+import { insertClaudeUsage } from "../db/usage.js";
+import { recordClaudeSuccess } from "../ai/health.js";
 
 const client = new Anthropic({ apiKey: config.anthropicApiKey });
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const NORMALIZATION_SYSTEM = `You are a financial data extractor. Extract all debit/credit transactions from bank or credit card statement text.
 
@@ -21,6 +26,13 @@ Rules:
 
 Return ONLY valid JSON array. No markdown, no explanation.`;
 
+interface ExtendedUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
 export async function extractTextFromPdf(buffer: Buffer): Promise<string> {
   const parser = new PDFParse({ data: new Uint8Array(buffer) });
   const result = await parser.getText();
@@ -32,38 +44,82 @@ export async function extractTextFromImage(
   imageBuffer: Buffer,
   mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp",
 ): Promise<string> {
+  if (imageBuffer.length > MAX_IMAGE_BYTES) {
+    throw new Error(
+      `Statement image too large (${(imageBuffer.length / 1024 / 1024).toFixed(1)} MB). Maximum allowed is 5 MB.`,
+    );
+  }
+
   const base64 = imageBuffer.toString("base64");
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    messages: [
-      {
-        role: "user",
-        content: [
+  const response = await withRetry(
+    () =>
+      client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        messages: [
           {
-            type: "image",
-            source: { type: "base64", media_type: mediaType, data: base64 },
-          },
-          {
-            type: "text",
-            text: "Extract all text from this bank/credit card statement image. Preserve table structure using spaces and newlines.",
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: mediaType, data: base64 },
+              },
+              {
+                type: "text",
+                text: "Extract all text from this bank/credit card statement image. Preserve table structure using spaces and newlines.",
+              },
+            ],
           },
         ],
-      },
-    ],
-  });
+      }),
+    "normalizeTransactions",
+  );
+
+  recordClaudeSuccess();
+  const usage = response.usage as ExtendedUsage;
+  void insertClaudeUsage({
+    intent: "normalizeTransactions",
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+    cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
+    model: response.model,
+  }).catch((err) => console.error("[usage] Failed to log normalizeTransactions (image):", err));
+
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Unexpected Claude response type");
   return block.text;
 }
 
 export async function normalizeTransactions(rawText: string): Promise<ParsedTransaction[]> {
-  const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    system: NORMALIZATION_SYSTEM,
-    messages: [{ role: "user", content: rawText }],
-  });
+  const response = await withRetry(
+    () =>
+      client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 4096,
+        system: [
+          {
+            type: "text",
+            text: NORMALIZATION_SYSTEM,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: rawText }],
+      }),
+    "normalizeTransactions",
+  );
+
+  recordClaudeSuccess();
+  const usage = response.usage as ExtendedUsage;
+  void insertClaudeUsage({
+    intent: "normalizeTransactions",
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+    cache_creation_tokens: usage.cache_creation_input_tokens ?? 0,
+    model: response.model,
+  }).catch((err) => console.error("[usage] Failed to log normalizeTransactions:", err));
+
   const block = response.content[0];
   if (block.type !== "text") throw new Error("Unexpected Claude response type");
 

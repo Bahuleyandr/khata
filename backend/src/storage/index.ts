@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadBucketCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config.js";
@@ -42,4 +43,8 @@ export async function getStatementDownloadUrl(key: string, expiresIn = 3600): Pr
 
 export async function deleteStatement(key: string): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: config.s3.bucket, Key: key }));
+}
+
+export async function checkBucketHealth(): Promise<void> {
+  await s3.send(new HeadBucketCommand({ Bucket: config.s3.bucket }));
 }
