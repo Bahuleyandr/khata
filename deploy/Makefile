@@ -19,6 +19,12 @@ NS             := khata
 DEPLOY_DIR     := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 ROOT           := $(realpath $(DEPLOY_DIR)/..)
 
+# Telegram bot @username for the Login Widget (baked into the Next.js
+# static export at build time — Next.js can't read env vars at runtime
+# from a static build). Override via env if you change bots:
+#   BOT_USERNAME=other_bot make build-frontend
+BOT_USERNAME ?= Apoorva_Expense_Tracker_bot
+
 .PHONY: build build-backend build-frontend import import-backend import-frontend \
         deploy migrate logs status secrets restart undeploy tailscale-serve tailscale-status
 
@@ -28,7 +34,9 @@ build-backend:
 	docker build -t $(BACKEND_IMAGE) $(ROOT)/backend
 
 build-frontend:
-	docker build -t $(FRONTEND_IMAGE) -f $(DEPLOY_DIR)/Dockerfile.frontend $(ROOT)
+	docker build -t $(FRONTEND_IMAGE) -f $(DEPLOY_DIR)/Dockerfile.frontend \
+		--build-arg NEXT_PUBLIC_BOT_USERNAME=$(BOT_USERNAME) \
+		$(ROOT)
 
 import: import-backend import-frontend
 
