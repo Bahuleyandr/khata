@@ -44,6 +44,24 @@ export async function deleteStatement(key: string): Promise<void> {
   await s3.send(new DeleteObjectCommand({ Bucket: config.s3.bucket, Key: key }));
 }
 
+/**
+ * Fetch an object from S3/MinIO and return its body stream + content-type.
+ * Used by the dashboard receipts proxy route to stream images through the
+ * backend (the in-cluster MinIO isn't reachable from the browser directly).
+ */
+export async function getObjectStream(
+  key: string,
+): Promise<{ body: NodeJS.ReadableStream; contentType: string | undefined }> {
+  const resp = await s3.send(
+    new GetObjectCommand({ Bucket: config.s3.bucket, Key: key }),
+  );
+  if (!resp.Body) throw new Error(`S3 object ${key} has no body`);
+  return {
+    body: resp.Body as NodeJS.ReadableStream,
+    contentType: resp.ContentType,
+  };
+}
+
 export async function uploadExport(key: string, body: string): Promise<void> {
   await s3.send(
     new PutObjectCommand({
