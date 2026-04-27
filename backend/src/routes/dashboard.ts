@@ -97,10 +97,11 @@ export async function dashboardRoutes(app: FastifyInstance) {
 
     const firstName = data["first_name"] ?? "";
     const iat = Math.floor(Date.now() / 1000);
+    const isProd = process.env.NODE_ENV === "production";
     reply.setCookie("session", signSession(userId, firstName, iat), {
       httpOnly: true,
-      sameSite: "none",
-      secure: true,
+      sameSite: isProd ? "none" : "lax",
+      secure: isProd,
       maxAge: 604800,
       path: "/",
     });
