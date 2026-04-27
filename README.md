@@ -126,6 +126,34 @@ git push origin main
 
 **Deployed in-cluster** alongside the backend on Dalekdefender — built into a Docker image (multi-stage: Next.js static export → nginx). Path routing happens **inside the frontend Pod's nginx**: it serves the static export at `/` and reverse-proxies `/api/*` + `/health` to the `khata-backend` Service. Tailscale Serve binds the Pod's port 80 to the VIP service `khata.hippocampus-monitor.ts.net`, which is distinct from the box's apex tailnet hostname (so it doesn't collide with other workloads on Dalekdefender). See [deploy/Dockerfile.frontend](deploy/Dockerfile.frontend) and [deploy/k8s/40-frontend.yaml](deploy/k8s/40-frontend.yaml). `next.config.ts` stays locked to `output: 'export'`.
 
+## PWA / installable app
+
+The dashboard ships as a Progressive Web App. `app/manifest.ts` emits `/manifest.webmanifest`, `public/sw.js` is a network-first service worker (API requests pass through untouched — never serve stale expense data), and `public/icons/icon.svg` is the dark-background ₹ tile that Android crops into a circle and iOS into a squircle.
+
+**Install on a phone:**
+- iOS Safari: tap the Share sheet → *Add to Home Screen*
+- Android Chrome: three-dot menu → *Install app*
+
+The installed app launches in standalone mode (no browser chrome) and opens at `/` (which routes to `/login` or `/dashboard` based on session).
+
+### Optional: public access via Tailscale Funnel
+
+The default deploy is Tailnet-only — fine when every viewer has Tailscale. To make the dashboard reachable from devices that *don't* have Tailscale (e.g., a partner's phone where you don't want to install Tailscale), enable **Tailscale Funnel** on Dalekdefender:
+
+```bash
+# On Dalekdefender — exposes the existing Tailscale-Serve config to the public internet.
+# Same hostname (khata.hippocampus-monitor.ts.net), now publicly resolvable + TLS-terminated by Tailscale.
+sudo tailscale funnel --bg 443 on
+```
+
+After that, the URL works from any device with no Tailscale needed. Auth still gates entry — Telegram-Login + the `ALLOWED_TELEGRAM_USER_IDS` allowlist + the existing session cookie. The bot token signature in the Telegram-Login flow makes brute-forcing infeasible; the allowlist ensures only specifically-permitted Telegram IDs ever get a session.
+
+To turn Funnel back off:
+
+```bash
+sudo tailscale funnel --bg 443 off
+```
+
 ## Runbook
 
 ### Local test run (frontend)
