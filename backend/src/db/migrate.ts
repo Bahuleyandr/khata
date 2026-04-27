@@ -26,6 +26,7 @@ async function migrate() {
     ['002_statement_status.sql', '003_statement_status.sql'],
     ['003_receipt_ocr.sql', '005_receipt_ocr.sql'],
     ['004_receipt_ocr.sql', '005_receipt_ocr.sql'],
+    ['006_bot_sessions.sql', '005_bot_sessions.sql'],
   ];
   for (const [oldName, newName] of renames) {
     await sql`
