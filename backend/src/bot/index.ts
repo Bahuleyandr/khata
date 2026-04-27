@@ -16,6 +16,7 @@ import {
   handleCallbackQuery,
   handleDocument,
   handlePhoto,
+  handleVoice,
   handleExport,
 } from "./handlers.js";
 
@@ -46,3 +47,4 @@ bot.on("callback_query:data", handleCallbackQuery);
 bot.on("message:text", handleTextMessage);
 bot.on("message:document", handleDocument);
 bot.on("message:photo", handlePhoto);
+bot.on("message:voice", handleVoice);
