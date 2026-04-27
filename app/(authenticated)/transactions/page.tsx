@@ -84,7 +84,28 @@ export default function TransactionsPage() {
 
   return (
     <div className="page">
-      <h2 style={{ marginBottom: '1.25rem', fontSize: '1.3rem' }}>Transactions</h2>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '1.25rem' }}>
+        <h2 style={{ fontSize: '1.3rem', margin: 0 }}>Transactions</h2>
+        <a
+          href={(() => {
+            const now = new Date()
+            return `/api/export/xlsx?year=${now.getFullYear()}&month=${now.getMonth() + 1}`
+          })()}
+          download
+          style={{
+            fontSize: '0.85rem',
+            padding: '0.4rem 0.9rem',
+            background: '#7c3aed',
+            color: 'white',
+            borderRadius: 6,
+            textDecoration: 'none',
+            fontWeight: 500,
+          }}
+          title="Download this month as .xlsx"
+        >
+          📥 Download Excel
+        </a>
+      </div>
 
       <div className="card">
         <div className="filter-bar">

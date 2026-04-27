@@ -1,8 +1,9 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { InlineKeyboard } from "grammy";
+import { InlineKeyboard, InputFile } from "grammy";
 import type { Context } from "grammy";
-import { uploadStatement, uploadExport, getStatementDownloadUrl } from "../storage/index.js";
+import { uploadStatement } from "../storage/index.js";
+import { buildMonthlyXlsx, currentMonthBounds } from "../export/xlsx.js";
 import { sql } from "../db/index.js";
 import { parseStatementBuffer } from "../statement/parser.js";
 import { dedupeTransactions } from "../statement/dedup.js";
@@ -44,7 +45,7 @@ import {
   listTagsWithCounts,
 } from "../db/tags.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
-import { totalSpendInCategory, topExpenses, spendByCategory, getExpensesForExport } from "../db/query.js";
+import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { getPendingEdit, setPendingEdit } from "./session.js";
 
@@ -1003,59 +1004,60 @@ export async function handleBudget(ctx: Context): Promise<void> {
   );
 }
 
+/**
+ * /export — sends a multi-sheet xlsx as a Telegram document attachment.
+ *
+ * Args (all optional, default = current month):
+ *   /export                    → current month
+ *   /export 2026-04            → that calendar month
+ *   /export 2026-04-01 2026-04-30 → arbitrary date range
+ */
 export async function handleExport(ctx: Context): Promise<void> {
   const userId = ctx.from!.id;
   const args = (ctx.match?.toString() ?? "").trim();
 
   let start: string;
   let end: string;
+  let rangeKey: string;
   const rangeMatch = args.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})$/);
   const monthMatch = args.match(/^(\d{4}-\d{2})$/);
 
   if (rangeMatch) {
     start = rangeMatch[1]!;
     end = rangeMatch[2]!;
+    rangeKey = `${start}_${end}`;
   } else if (monthMatch) {
     const [y, m] = monthMatch[1]!.split("-").map(Number) as [number, number];
-    start = `${y}-${String(m).padStart(2, "0")}-01`;
-    end = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
+    const b = currentMonthBounds(y, m);
+    start = b.start;
+    end = b.end;
+    rangeKey = b.rangeKey;
   } else {
     const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth() + 1;
-    start = `${y}-${String(m).padStart(2, "0")}-01`;
-    end = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
+    const b = currentMonthBounds(now.getFullYear(), now.getMonth() + 1);
+    start = b.start;
+    end = b.end;
+    rangeKey = b.rangeKey;
   }
 
-  await ctx.reply("Generating export…");
+  await ctx.reply("📊 Generating export…");
 
-  const rows = await getExpensesForExport(userId, start, end);
-  if (rows.length === 0) {
-    await ctx.reply(`No expenses found for ${start} – ${end}.`);
+  const { buffer, filename, rowCount, totalCents, currency } = await buildMonthlyXlsx(
+    userId,
+    start,
+    end,
+    rangeKey,
+  );
+
+  if (rowCount === 0) {
+    await ctx.reply(`No expenses found for ${start} → ${end}.`);
     return;
   }
 
-  const header = "date,amount_cents,currency,category,description,source";
-  const body = rows
-    .map((r) =>
-      [
-        r.date,
-        r.amount_cents,
-        r.currency,
-        `"${r.category}"`,
-        `"${r.description.replace(/"/g, '""')}"`,
-        r.source,
-      ].join(","),
-    )
-    .join("\n");
-  const csv = `${header}\n${body}`;
-
-  const key = `exports/${userId}/${Date.now()}.csv`;
-  await uploadExport(key, csv);
-  const url = await getStatementDownloadUrl(key, 3600);
-
-  await ctx.reply(
-    `Export ready: ${rows.length} row(s), ${start} → ${end}.\n[Download CSV](${url})\n\n_Link valid 1 h. File auto-expires from storage in 24 h._`,
-    { parse_mode: "Markdown" },
-  );
+  await ctx.replyWithDocument(new InputFile(buffer, filename), {
+    caption:
+      `📊 ${start} → ${end}\n` +
+      `${rowCount} expense${rowCount !== 1 ? "s" : ""}, ` +
+      `${formatAmount(totalCents, currency)}`,
+  });
 }

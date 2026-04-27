@@ -1,11 +1,13 @@
 import { schedule } from "node-cron";
-import type { Api } from "grammy";
+import { Api, InputFile } from "grammy";
 import {
   getBudgetsWithMtd,
   getDigestState,
   upsertDigestState,
   getDistinctUsersWithBudgets,
 } from "../db/budgets.js";
+import { getDistinctUsersWithExpensesIn } from "../db/query.js";
+import { buildMonthlyXlsx, previousMonthBounds } from "../export/xlsx.js";
 import { sql } from "../db/index.js";
 
 function currentYearMonth(): string {
@@ -92,6 +94,33 @@ export async function runMonthlyDigest(botApi: Api): Promise<void> {
   }
 }
 
+/**
+ * Send the previous month's full xlsx export to every user that had at least
+ * one expense in that range. DM only — no group chats. Runs on the 1st.
+ */
+export async function runMonthlyExport(botApi: Api): Promise<void> {
+  const { start, end, label, rangeKey } = previousMonthBounds();
+  const users = await getDistinctUsersWithExpensesIn(start, end);
+
+  for (const userId of users) {
+    try {
+      const { buffer, filename, rowCount, totalCents, currency } = await buildMonthlyXlsx(
+        userId,
+        start,
+        end,
+        rangeKey,
+      );
+      if (rowCount === 0) continue;
+      const totalDisplay = `${currency === "INR" ? "₹" : currency + " "}${(totalCents / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+      await botApi.sendDocument(userId, new InputFile(buffer, filename), {
+        caption: `📊 ${label} — ${rowCount} expense${rowCount !== 1 ? "s" : ""}, ${totalDisplay}`,
+      });
+    } catch (err) {
+      console.error(`Monthly export for user ${userId}:`, err);
+    }
+  }
+}
+
 export function startBudgetCrons(botApi: Api): void {
   // Daily nudge + session expiry at 09:00 UTC
   schedule("0 9 * * *", () => {
@@ -103,12 +132,17 @@ export function startBudgetCrons(botApi: Api): void {
     );
   });
 
-  // Monthly digest on 1st at 08:00 UTC
+  // 1st of the month at 08:00 UTC: budget digest, then monthly xlsx export.
   schedule("0 8 1 * *", () => {
     runMonthlyDigest(botApi).catch((err) =>
       console.error("Monthly digest cron error:", err),
     );
+    runMonthlyExport(botApi).catch((err) =>
+      console.error("Monthly export cron error:", err),
+    );
   });
 
-  console.log("Budget crons registered: daily nudge + session expiry @09:00 UTC, monthly digest @08:00 UTC on 1st.");
+  console.log(
+    "Crons registered: daily nudge + session expiry @09:00 UTC, monthly digest + xlsx export @08:00 UTC on 1st.",
+  );
 }
