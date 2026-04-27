@@ -45,6 +45,7 @@ import {
   listTagsWithCounts,
 } from "../db/tags.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
+import { chatWithData } from "../ai/chat.js";
 import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { getPendingEdit, setPendingEdit } from "./session.js";
@@ -197,7 +198,9 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "*Tag an expense:* After logging, reply `tag: <name>` (or comma-separated: `tag: work, lunch`).\n" +
       "Untag with `untag: <name>`.\n\n" +
       "*Commands:*\n" +
+      "/ask <question> — ask anything about your spending\n" +
       "/expenses — list expenses from the 1st of the month till today\n" +
+      "/export — download this month as Excel (or `/export YYYY-MM`)\n" +
       "/tags — list your tags with counts\n" +
       "/categories — list your categories\n" +
       "/add <name> — add a category\n" +
@@ -262,6 +265,44 @@ export async function handleDeleteCategory(ctx: Context): Promise<void> {
       ? `✅ Deleted category "${name}"`
       : `⚠️ "${name}" not found or is a built-in category (cannot delete defaults)`,
   );
+}
+
+// ── Ask (chat with your data) ────────────────────────────────────────────────
+
+/**
+ * /ask <question>
+ *
+ * Free-form natural-language question about the user's expenses. Routes to
+ * a multi-turn LLM agent that can call typed query tools (totals, top-N,
+ * recurring detection, merchant search, etc.). Returns the model's text
+ * answer.
+ */
+export async function handleAsk(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const question = (ctx.match?.toString() ?? "").trim();
+  if (!question) {
+    await ctx.reply(
+      "Usage: `/ask <question>`\n\n" +
+        "Examples:\n" +
+        "• /ask how much did I spend on food this month?\n" +
+        "• /ask top 5 expenses last week\n" +
+        "• /ask what subscriptions am I paying for\n" +
+        "• /ask compare food spend this month vs last month",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+
+  await ctx.reply("🤔 Thinking…");
+
+  try {
+    const result = await chatWithData(question, userId, todayString());
+    await ctx.reply(result.text, { parse_mode: "Markdown" });
+  } catch (err) {
+    console.error("Ask error:", err);
+    await ctx.reply(`⚠️ Couldn't answer that: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 // ── Tag commands ──────────────────────────────────────────────────────────────

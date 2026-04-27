@@ -146,3 +146,85 @@ export async function getDistinctUsersWithExpensesIn(
   `;
   return rows.map((r) => r.user_id);
 }
+
+// ── Helpers used by the chat-with-data agent ────────────────────────────────
+
+export interface MerchantSpend {
+  merchant: string;
+  total_cents: string;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+/**
+ * Find recurring expenses — merchants charged at least N times in the last
+ * `lookback_months` months, ordered by occurrence count desc. Useful for
+ * subscription detection.
+ */
+export async function findRecurring(
+  userId: number,
+  lookbackMonths: number,
+  minOccurrences: number,
+): Promise<MerchantSpend[]> {
+  return sql<MerchantSpend[]>`
+    SELECT
+      COALESCE(mc.name, e.merchant, '(unknown)') AS merchant,
+      SUM(e.amount_cents)::text                  AS total_cents,
+      COUNT(*)::int                              AS count,
+      MIN(e.occurred_at)::date::text             AS first_seen,
+      MAX(e.occurred_at)::date::text             AS last_seen
+    FROM expenses e
+    LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+    WHERE e.user_id = ${userId}
+      AND e.occurred_at >= NOW() - (${lookbackMonths} || ' months')::interval
+      AND COALESCE(mc.name, e.merchant) IS NOT NULL
+    GROUP BY merchant
+    HAVING COUNT(*) >= ${minOccurrences}
+    ORDER BY count DESC, total_cents DESC
+    LIMIT 50
+  `;
+}
+
+export interface ExpenseAtMerchant {
+  id: string;
+  occurred_at: string;
+  amount_cents: string;
+  currency: string;
+  description: string | null;
+  merchant: string | null;
+  category: string;
+}
+
+/**
+ * Find expenses where the raw or canonical merchant matches the given
+ * substring (case-insensitive ILIKE). Newest first.
+ */
+export async function findExpensesAtMerchant(
+  userId: number,
+  merchantSubstring: string,
+  start: string,
+  end: string,
+  limit: number = 50,
+): Promise<ExpenseAtMerchant[]> {
+  const pattern = `%${merchantSubstring}%`;
+  return sql<ExpenseAtMerchant[]>`
+    SELECT
+      e.id,
+      e.occurred_at::date::text         AS occurred_at,
+      e.amount_cents::text              AS amount_cents,
+      e.currency,
+      e.description,
+      e.merchant,
+      COALESCE(c.name, 'Uncategorized') AS category
+    FROM expenses e
+    LEFT JOIN categories c           ON c.id  = e.category_id
+    LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+    WHERE e.user_id = ${userId}
+      AND e.occurred_at >= ${start}::date
+      AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+      AND (e.merchant ILIKE ${pattern} OR mc.name ILIKE ${pattern})
+    ORDER BY e.occurred_at DESC
+    LIMIT ${limit}
+  `;
+}
