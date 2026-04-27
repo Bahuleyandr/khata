@@ -46,6 +46,7 @@ import {
 } from "../db/tags.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { chatWithData } from "../ai/chat.js";
+import { transcribeVoice } from "../voice/transcribe.js";
 import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { getPendingEdit, setPendingEdit } from "./session.js";
@@ -195,6 +196,7 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "• `paid 1200 inr for uber yesterday`\n\n" +
       "*After logging:* Tap the edit buttons or type `edit` to change details.\n\n" +
       "*Statement import:* Upload a PDF or image — I'll extract and dedupe transactions.\n\n" +
+      "*Voice note:* Send a voice message — I'll transcribe locally and log it.\n\n" +
       "*Tag an expense:* After logging, reply `tag: <name>` (or comma-separated: `tag: work, lunch`).\n" +
       "Untag with `untag: <name>`.\n\n" +
       "*Commands:*\n" +
@@ -964,6 +966,117 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 
   const photo = photos[photos.length - 1]!;
   await runReceiptPipeline(ctx, photo.file_id, "image/jpeg");
+}
+
+/**
+ * Voice note → local Whisper (whisper.cpp + ggml-tiny) → existing parse
+ * pipeline. Stays entirely on Dalekdefender — no audio leaves the box.
+ */
+export async function handleVoice(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  const voice = ctx.message?.voice;
+  if (!userId || !voice) return;
+
+  await ctx.reply("🎙️ Transcribing…");
+
+  let buffer: Buffer;
+  try {
+    ({ buffer } = await downloadTelegramFile(voice.file_id));
+  } catch (err) {
+    await ctx.reply(`❌ Could not download voice note: ${redactError(err)}`);
+    return;
+  }
+  if (await rejectIfOversize(ctx, buffer)) return;
+
+  let text: string;
+  try {
+    text = await transcribeVoice(buffer);
+  } catch (err) {
+    await ctx.reply(`⚠️ Transcription failed: ${redactError(err)}`);
+    return;
+  }
+  text = text.trim();
+
+  if (text.length < 3) {
+    await ctx.reply("⚠️ Couldn't make out any speech. Try again — speak clearly?");
+    return;
+  }
+
+  await ctx.reply(`🎙️ _"${text}"_`, { parse_mode: "Markdown" });
+
+  // Feed the transcription through the same classify-and-route flow as text.
+  await seedDefaultCategories(userId).catch(console.error);
+  const [cats, overrides] = await Promise.all([
+    getUserCategories(userId),
+    getOverrides(userId),
+  ]);
+
+  let classification;
+  try {
+    classification = await classifyMessage(
+      text,
+      cats.map((c) => c.name),
+      overrides,
+      todayString(),
+    );
+  } catch (err) {
+    console.error("Voice classify error:", err);
+    await ctx.reply("⚠️ I had trouble parsing that voice note. Try a text message instead?");
+    return;
+  }
+
+  if (classification.type === "query") {
+    await handleQueryIntent(ctx, userId, classification.intent);
+    return;
+  }
+
+  if (classification.type === "clarify") {
+    await ctx.reply(classification.question);
+    return;
+  }
+
+  if (classification.type !== "expense") {
+    await ctx.reply(
+      "🤔 That doesn't sound like an expense. Try `\"spent 500 at zomato\"` or `\"paid 1200 for uber yesterday\"`.",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+
+  const parsed = classification.data;
+  const cat =
+    cats.find((c) => c.name.toLowerCase() === parsed.category.toLowerCase()) ??
+    cats.find((c) => c.name === "Other") ??
+    null;
+
+  const amount_cents = Math.round(parsed.amount * 100);
+  const occurred_at = new Date(parsed.occurred_at + "T12:00:00Z");
+
+  const expenseId = await insertExpense({
+    userId,
+    amount_cents,
+    currency: parsed.currency,
+    description: parsed.description,
+    merchant: parsed.merchant,
+    category_id: cat?.id ?? null,
+    occurred_at,
+    source: "telegram",
+    raw_text: text,
+  });
+
+  await setPendingEdit(userId, {
+    expenseId,
+    amount_cents,
+    currency: parsed.currency,
+    category: cat?.name ?? "Other",
+    description: parsed.description,
+    occurred_at,
+  });
+
+  await ctx.reply(
+    `✅ Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${cat?.name ?? "Other"}. Reply \`edit\` to change.`,
+    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
+  );
 }
 
 // ── Budget commands ───────────────────────────────────────────────────────────
