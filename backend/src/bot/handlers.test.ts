@@ -30,10 +30,10 @@ describe("handleTextMessage", () => {
     expect(text).toContain("Coffee 150");
   });
 
-  it("handles missing text gracefully", async () => {
+  it("does nothing when text is missing", async () => {
     const ctx = makeCtx({ message: {} as Context["message"] });
     await handleTextMessage(ctx);
-    expect(ctx.reply).toHaveBeenCalledOnce();
+    expect(ctx.reply).not.toHaveBeenCalled();
   });
 });
 
@@ -50,10 +50,12 @@ describe("handleDocument", () => {
     expect(text).toContain("statement.pdf");
   });
 
-  it("does nothing when document is absent", async () => {
+  it("replies with a fallback when document is absent", async () => {
     const ctx = makeCtx({ message: {} as Context["message"] });
     await handleDocument(ctx);
-    expect(ctx.reply).not.toHaveBeenCalled();
+    expect(ctx.reply).toHaveBeenCalledOnce();
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("coming soon");
   });
 });
 
