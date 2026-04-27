@@ -39,6 +39,11 @@ import {
 } from "../db/expenses.js";
 import { getOverrides, upsertOverride } from "../db/overrides.js";
 import {
+  getLearnedCategoryForMerchant,
+  getMerchantCanonicalIdForExpense,
+  setMerchantCategory,
+} from "../db/merchants.js";
+import {
   attachTagToExpense,
   detachTagFromExpense,
   findTagByName,
@@ -58,6 +63,23 @@ import { getPendingEdit, setPendingEdit } from "./session.js";
 
 function todayString(): string {
   return new Date().toISOString().split("T")[0]!;
+}
+
+/**
+ * After an explicit category correction (reply "category: X" or inline
+ * keyboard pick), persist the user's choice on the canonical merchant so that
+ * future expenses at the same merchant skip the LLM and use this category.
+ * Best-effort — failures don't block the correction itself.
+ */
+async function rememberMerchantCategory(
+  userId: number,
+  expenseId: string,
+  categoryId: string,
+): Promise<void> {
+  const merchantCanonicalId = await getMerchantCanonicalIdForExpense(userId, expenseId);
+  if (merchantCanonicalId) {
+    await setMerchantCategory(userId, merchantCanonicalId, categoryId).catch(console.error);
+  }
 }
 
 function formatAmount(amount_cents: number, currency: string): string {
@@ -312,26 +334,34 @@ async function processUpiPayment(
   }
 
   await seedDefaultCategories(userId).catch(console.error);
-  const [cats, overrides] = await Promise.all([
+  const [cats, overrides, learnedCategoryId] = await Promise.all([
     getUserCategories(userId),
     getOverrides(userId),
+    getLearnedCategoryForMerchant(userId, upi.merchant),
   ]);
 
-  // Prefer override-hinted category for the merchant; fall back to "Other".
-  let categoryName = "Other";
-  if (upi.merchant) {
-    const merchLower = upi.merchant.toLowerCase();
-    const override = overrides.find(
-      (o) =>
-        merchLower.includes(o.hint_text.toLowerCase()) ||
-        o.hint_text.toLowerCase().includes(merchLower),
-    );
-    if (override) categoryName = override.category_name;
+  // Category precedence: per-merchant memory (explicit prior correction) >
+  // description-keyed override hint > "Other" fallback.
+  let cat: { id: string; name: string } | null = null;
+  if (learnedCategoryId) {
+    cat = cats.find((c) => c.id === learnedCategoryId) ?? null;
   }
-  const cat =
-    cats.find((c) => c.name === categoryName) ??
-    cats.find((c) => c.name === "Other") ??
-    null;
+  if (!cat) {
+    let categoryName = "Other";
+    if (upi.merchant) {
+      const merchLower = upi.merchant.toLowerCase();
+      const override = overrides.find(
+        (o) =>
+          merchLower.includes(o.hint_text.toLowerCase()) ||
+          o.hint_text.toLowerCase().includes(merchLower),
+      );
+      if (override) categoryName = override.category_name;
+    }
+    cat =
+      cats.find((c) => c.name === categoryName) ??
+      cats.find((c) => c.name === "Other") ??
+      null;
+  }
 
   const amount_cents = Math.round(upi.amountRupees * 100);
   const occurred_at = new Date(); // same-day; user can edit
@@ -781,6 +811,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       await upsertOverride(userId, pendingEdit.description.toLowerCase(), cat.name).catch(
         console.error,
       );
+      await rememberMerchantCategory(userId, pendingEdit.expenseId, cat.id);
       await setPendingEdit(userId, { ...pendingEdit, category: cat.name });
     }
     await ctx.reply(ok ? `✅ Category updated to "${cat.name}"` : "⚠️ Failed to update category");
@@ -824,9 +855,12 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   const parsed = classification.data;
 
-  const cat =
-    cats.find((c) => c.name.toLowerCase() === parsed.category.toLowerCase()) ??
-    cats.find((c) => c.name === "Other") ??
+  // Per-merchant memory wins over the LLM's category guess when present.
+  const learnedCategoryId = await getLearnedCategoryForMerchant(userId, parsed.merchant);
+  const cat: { id: string; name: string } | null =
+    (learnedCategoryId && cats.find((c) => c.id === learnedCategoryId)) ||
+    cats.find((c) => c.name.toLowerCase() === parsed.category.toLowerCase()) ||
+    cats.find((c) => c.name === "Other") ||
     null;
 
   const amount_cents = Math.round(parsed.amount * 100);
@@ -903,6 +937,7 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
           console.error,
         );
       }
+      await rememberMerchantCategory(userId, pending.expenseId, cat.id);
       await setPendingEdit(userId, { ...pending, category: cat.name });
     }
     await ctx.answerCallbackQuery();
@@ -1019,9 +1054,12 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
-  const cat =
-    cats.find((c) => c.name.toLowerCase() === parsed!.category.toLowerCase()) ??
-    cats.find((c) => c.name === "Other") ??
+  // Per-merchant memory wins over the LLM's category guess when present.
+  const learnedCategoryId = await getLearnedCategoryForMerchant(userId, parsed.merchant);
+  const cat: { id: string; name: string } | null =
+    (learnedCategoryId && cats.find((c) => c.id === learnedCategoryId)) ||
+    cats.find((c) => c.name.toLowerCase() === parsed!.category.toLowerCase()) ||
+    cats.find((c) => c.name === "Other") ||
     null;
   const amount_cents = Math.round(parsed.amount * 100);
   const occurred_at = new Date(parsed.occurred_at + "T12:00:00Z");
