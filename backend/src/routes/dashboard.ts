@@ -6,13 +6,15 @@ import { getStatementDownloadUrl } from "../storage/index.js";
 
 // ─── Session helpers ─────────────────────────────────────────────────────────
 
-function signSession(userId: number, firstName: string, iat: number): string {
+export function signSession(userId: number, firstName: string, iat: number): string {
   const payload = `${userId}:${Buffer.from(firstName).toString("base64url")}:${iat}`;
   const hmac = crypto.createHmac("sha256", config.sessionSecret).update(payload).digest("hex");
   return `${payload}.${hmac}`;
 }
 
-function verifySession(token: string): { userId: number; firstName: string } | null {
+const SESSION_MAX_AGE_S = 604800;
+
+export function verifySession(token: string): { userId: number; firstName: string } | null {
   const dot = token.lastIndexOf(".");
   if (dot === -1) return null;
   const payload = token.substring(0, dot);
@@ -33,6 +35,8 @@ function verifySession(token: string): { userId: number; firstName: string } | n
   const userId = parseInt(parts[0]!, 10);
   const firstName = Buffer.from(parts[1]!, "base64url").toString("utf8");
   if (isNaN(userId)) return null;
+  const iat = parseInt(parts[2]!, 10);
+  if (isNaN(iat) || Math.floor(Date.now() / 1000) - iat > SESSION_MAX_AGE_S) return null;
   return { userId, firstName };
 }
 
