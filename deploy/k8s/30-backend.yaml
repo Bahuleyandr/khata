@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: khata-backend
+  namespace: khata
+spec:
+  replicas: 1
+  strategy:
+    # Telegram only allows one long-poll client per bot at a time. A rolling
+    # update starts the new pod before killing the old one, which races on
+    # `getUpdates` and 409s the new pod (it crashes once, then recovers when
+    # the old pod is gone). Recreate kills the old pod first — no overlap.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: khata-backend
+  template:
+    metadata:
+      labels:
+        app: khata-backend
+    spec:
+      containers:
+        - name: backend
+          image: khata-backend:latest
+          imagePullPolicy: Never # built locally + loaded via `k3s ctr images import`
+          ports:
+            - containerPort: 3001
+          envFrom:
+            - secretRef:
+                name: khata-secrets
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "3001"
+            # POSTGRES_PASSWORD is also pulled from envFrom; redeclared so
+            # kubelet expands it inside DATABASE_URL below.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: khata-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgres://khata:$(POSTGRES_PASSWORD)@khata-postgres.khata.svc.cluster.local:5432/khata
+            # Same-origin in production (frontend + backend on one Tailscale
+            # hostname via Traefik path routing). Localhost stays in the list
+            # so port-forward dev still works.
+            - name: ALLOWED_ORIGINS
+              value: http://localhost:3000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi # Node + Python MCP subprocess share this Pod
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: khata-backend
+  namespace: khata
+spec:
+  selector:
+    app: khata-backend
+  ports:
+    - port: 3001
+      targetPort: 3001
+      name: http

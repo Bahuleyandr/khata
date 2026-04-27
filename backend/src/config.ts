@@ -13,29 +13,30 @@ function requireEnvMinLen(key: string, minLen: number): string {
 export const config = {
   port: parseInt(process.env["PORT"] ?? "3001", 10),
   telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
-  telegramWebhookSecret: requireEnv("TELEGRAM_WEBHOOK_SECRET"),
   // Comma-separated list of allowed Telegram user IDs (numeric)
   allowedTelegramUserIds: requireEnv("ALLOWED_TELEGRAM_USER_IDS")
     .split(",")
     .map((id) => parseInt(id.trim(), 10)),
   databaseUrl: requireEnv("DATABASE_URL"),
-  openrouterApiKey: requireEnv("OPENROUTER_API_KEY"),
-  // Per-intent model selection (OpenRouter model IDs). Defaults: Haiku 4.5
-  // for the hot text path, Sonnet 4.6 for vision and statement normalization.
-  // Override any of these per-deployment to swap providers (e.g. minimax/m1,
-  // openai/gpt-4o-mini) without code changes.
+  // MiniMax direct (api.minimax.io). One key for both the OpenAI-compat chat
+  // endpoint (text intents) and the MCP server `minimax-coding-plan-mcp`
+  // (vision intent via `understand_image`).
+  minimaxApiKey: requireEnv("MINIMAX_API_KEY"),
   models: {
-    parseExpense: process.env["MODEL_PARSE_EXPENSE"] ?? "anthropic/claude-haiku-4-5",
-    classifyMessage: process.env["MODEL_CLASSIFY_MESSAGE"] ?? "anthropic/claude-haiku-4-5",
+    parseExpense: process.env["MODEL_PARSE_EXPENSE"] ?? "MiniMax-M2.7-highspeed",
+    classifyMessage: process.env["MODEL_CLASSIFY_MESSAGE"] ?? "MiniMax-M2.7-highspeed",
     normalizeTransactions:
-      process.env["MODEL_NORMALIZE_TRANSACTIONS"] ?? "anthropic/claude-sonnet-4-6",
-    extractTextFromImage:
-      process.env["MODEL_EXTRACT_TEXT_FROM_IMAGE"] ?? "anthropic/claude-sonnet-4-6",
-    ocrReceiptImage:
-      process.env["MODEL_OCR_RECEIPT_IMAGE"] ?? "anthropic/claude-sonnet-4-6",
+      process.env["MODEL_NORMALIZE_TRANSACTIONS"] ?? "MiniMax-M2.7-highspeed",
+    // Vision intents go through the MCP `understand_image` tool — MiniMax
+    // picks the underlying vision model. These labels exist for usage logs.
+    extractTextFromImage: "minimax-mcp:understand_image",
+    ocrReceiptImage: "minimax-mcp:understand_image",
   },
   sessionSecret: requireEnvMinLen("SESSION_SECRET", 32),
-  allowedOrigins: (process.env["ALLOWED_ORIGINS"] ?? "https://bahuleyan.com,http://localhost:3000")
+  // Same-origin in production (frontend + backend served behind one Tailscale
+  // hostname via Traefik path routing). Local dev needs http://localhost:3000
+  // for the Next.js dev server.
+  allowedOrigins: (process.env["ALLOWED_ORIGINS"] ?? "http://localhost:3000")
     .split(",")
     .map((o) => o.trim()),
   s3: {

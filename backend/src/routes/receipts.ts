@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { sql } from "../db/index.js";
-import { getStatementDownloadUrl } from "../storage/index.js";
+import { getObjectStream } from "../storage/index.js";
 import { getSession } from "./auth.js";
 
 export async function receiptsRoutes(app: FastifyInstance) {
-  // GET /api/receipts — expenses with image_key, enriched with presigned URLs
+  // GET /api/receipts — list of receipt expenses with proxy URLs
   app.get("/api/receipts", async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
@@ -48,13 +48,12 @@ export async function receiptsRoutes(app: FastifyInstance) {
       WHERE user_id = ${session.userId} AND image_key IS NOT NULL
     `;
 
-    // Enrich with presigned URLs (60-min TTL)
-    const data = await Promise.all(
-      rows.map(async (row) => ({
-        ...row,
-        receipt_url: await getStatementDownloadUrl(row.image_key, 3600),
-      })),
-    );
+    // receipt_url is a same-origin proxy path the browser hits with its
+    // session cookie. Backend streams the bytes from in-cluster MinIO.
+    const data = rows.map((row) => ({
+      ...row,
+      receipt_url: `/api/receipts/${row.id}/image`,
+    }));
 
     const total = parseInt(count, 10);
     return {
@@ -64,4 +63,31 @@ export async function receiptsRoutes(app: FastifyInstance) {
       totalPages: Math.ceil(total / limit),
     };
   });
+
+  // GET /api/receipts/:id/image — stream a receipt image from MinIO,
+  // gated by session ownership of the expense row.
+  app.get<{ Params: { id: string } }>(
+    "/api/receipts/:id/image",
+    async (request, reply) => {
+      const session = await getSession(request, reply);
+      if (!session) return;
+
+      const [row] = await sql<[{ image_key: string | null }] | []>`
+        SELECT image_key FROM expenses
+        WHERE id = ${request.params.id}
+          AND user_id = ${session.userId}
+          AND image_key IS NOT NULL
+        LIMIT 1
+      `;
+      if (!row?.image_key) {
+        reply.status(404);
+        return { error: "Not found" };
+      }
+
+      const { body, contentType } = await getObjectStream(row.image_key);
+      reply.header("Content-Type", contentType ?? "application/octet-stream");
+      reply.header("Cache-Control", "private, max-age=300");
+      return reply.send(body);
+    },
+  );
 }

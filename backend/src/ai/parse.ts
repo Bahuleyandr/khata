@@ -1,6 +1,6 @@
 import { config } from "../config.js";
 import { llm } from "./client.js";
-import { logUsage, logUsageError } from "./usage.js";
+import { withHttpUsage } from "./usage.js";
 import type { CategoryOverride } from "../db/overrides.js";
 
 export interface ParsedExpense {
@@ -144,10 +144,8 @@ export async function parseExpense(
     buildOverrideContext(overrides);
 
   const model = config.models.parseExpense;
-  const start = Date.now();
-  let response;
-  try {
-    response = await llm.chat.completions.create({
+  const response = await withHttpUsage("parseExpense", model, () =>
+    llm.chat.completions.create({
       model,
       max_tokens: 256,
       messages: [
@@ -156,12 +154,8 @@ export async function parseExpense(
       ],
       tools: [LOG_EXPENSE_TOOL],
       tool_choice: "auto",
-    });
-  } catch (err) {
-    logUsageError("parseExpense", model, err, Date.now() - start);
-    throw err;
-  }
-  logUsage("parseExpense", model, response, Date.now() - start);
+    }),
+  );
 
   const toolCall = response.choices[0]?.message?.tool_calls?.[0];
   if (!toolCall || toolCall.type !== "function") return null;
@@ -194,10 +188,8 @@ export async function classifyMessage(
     buildOverrideContext(overrides);
 
   const model = config.models.classifyMessage;
-  const start = Date.now();
-  let response;
-  try {
-    response = await llm.chat.completions.create({
+  const response = await withHttpUsage("classifyMessage", model, () =>
+    llm.chat.completions.create({
       model,
       max_tokens: 512,
       messages: [
@@ -206,12 +198,8 @@ export async function classifyMessage(
       ],
       tools: [LOG_EXPENSE_TOOL, QUERY_SPEND_TOOL, REQUEST_CLARIFICATION_TOOL],
       tool_choice: "auto",
-    });
-  } catch (err) {
-    logUsageError("classifyMessage", model, err, Date.now() - start);
-    throw err;
-  }
-  logUsage("classifyMessage", model, response, Date.now() - start);
+    }),
+  );
 
   const toolCall = response.choices[0]?.message?.tool_calls?.[0];
   if (!toolCall || toolCall.type !== "function") return { type: "unknown" };

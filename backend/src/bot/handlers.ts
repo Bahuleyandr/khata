@@ -186,6 +186,7 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "*After logging:* Tap the edit buttons or type `edit` to change details.\n\n" +
       "*Statement import:* Upload a PDF or image — I'll extract and dedupe transactions.\n\n" +
       "*Commands:*\n" +
+      "/expenses — list expenses from the 1st of the month till today\n" +
       "/categories — list your categories\n" +
       "/add <name> — add a category\n" +
       "/rename <old> <new> — rename a category\n" +
@@ -249,6 +250,109 @@ export async function handleDeleteCategory(ctx: Context): Promise<void> {
       ? `✅ Deleted category "${name}"`
       : `⚠️ "${name}" not found or is a built-in category (cannot delete defaults)`,
   );
+}
+
+// ── List expenses (month-to-date) ─────────────────────────────────────────────
+
+interface ExpenseListRow {
+  occurred_at: Date;
+  amount_cents: string;
+  currency: string;
+  description: string | null;
+  merchant: string | null;
+  category: string;
+}
+
+export async function handleListExpenses(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const now = new Date();
+  const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const endStr = tomorrow.toISOString().substring(0, 10);
+  const monthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+
+  const rows = await sql<ExpenseListRow[]>`
+    SELECT e.occurred_at,
+           e.amount_cents::text AS amount_cents,
+           e.currency,
+           e.description,
+           e.merchant,
+           COALESCE(c.name, 'Uncategorized') AS category
+    FROM expenses e
+    LEFT JOIN categories c ON e.category_id = c.id
+    WHERE e.user_id = ${userId}
+      AND e.occurred_at >= ${monthStartStr}::date
+      AND e.occurred_at < ${endStr}::date
+    ORDER BY e.occurred_at DESC, e.created_at DESC
+  `;
+
+  if (rows.length === 0) {
+    await ctx.reply(`No expenses logged in ${monthLabel} yet.`);
+    return;
+  }
+
+  const currency = rows[0]!.currency;
+  const total = rows.reduce((s, r) => s + Number(r.amount_cents), 0);
+  const totalStr = formatAmount(total, currency);
+
+  // Per-category aggregate, sorted highest spend first.
+  const byCategory = new Map<string, { totalCents: number; count: number }>();
+  for (const r of rows) {
+    const cur = byCategory.get(r.category) ?? { totalCents: 0, count: 0 };
+    cur.totalCents += Number(r.amount_cents);
+    cur.count += 1;
+    byCategory.set(r.category, cur);
+  }
+  const categoryLines = [...byCategory.entries()]
+    .sort((a, b) => b[1].totalCents - a[1].totalCents)
+    .map(
+      ([name, agg]) =>
+        `• ${name} — ${formatAmount(agg.totalCents, currency)} (${agg.count})`,
+    )
+    .join("\n");
+
+  // Per-expense lines, newest first.
+  const lines = rows.map((r) => {
+    const d = new Date(r.occurred_at);
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const monAbbr = d.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+    const name = r.merchant ?? r.description ?? "—";
+    const trimmed = name.length > 40 ? name.slice(0, 38) + "…" : name;
+    const amt = formatAmount(Number(r.amount_cents), r.currency);
+    return `\`${day} ${monAbbr}\` ${amt} — ${trimmed} _(${r.category})_`;
+  });
+
+  const noun = rows.length === 1 ? "expense" : "expenses";
+  const header = `📊 *${monthLabel} — ${rows.length} ${noun}, ${totalStr}*\n\n`;
+  const categorySection = `*By category:*\n${categoryLines}\n\n`;
+
+  // Telegram caps a single message at 4096 chars; leave a safety margin.
+  const MAX_TOTAL = 3950;
+  const baseLength = header.length + categorySection.length;
+  const MAX_INDIVIDUAL = MAX_TOTAL - baseLength;
+
+  const fullIndividual = lines.join("\n");
+  let individualBody: string;
+  if (fullIndividual.length <= MAX_INDIVIDUAL) {
+    individualBody = fullIndividual;
+  } else {
+    let acc = "";
+    let kept = 0;
+    const FOOTER_RESERVE = 80;
+    for (const line of lines) {
+      if (acc.length + line.length + 1 > MAX_INDIVIDUAL - FOOTER_RESERVE) break;
+      acc += line + "\n";
+      kept++;
+    }
+    individualBody =
+      acc.trimEnd() +
+      `\n\n_…showing ${kept} of ${rows.length} entries. Use /export for full CSV._`;
+  }
+
+  await ctx.reply(header + categorySection + individualBody, { parse_mode: "Markdown" });
 }
 
 // ── Query handler ─────────────────────────────────────────────────────────────

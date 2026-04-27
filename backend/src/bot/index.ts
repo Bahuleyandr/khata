@@ -1,4 +1,4 @@
-import { Bot, webhookCallback } from "grammy";
+import { Bot } from "grammy";
 import { config } from "../config.js";
 import { isAllowedUser } from "../middleware/auth.js";
 import {
@@ -8,6 +8,7 @@ import {
   handleAddCategory,
   handleRenameCategory,
   handleDeleteCategory,
+  handleListExpenses,
   handleBudget,
   handleTextMessage,
   handleCallbackQuery,
@@ -33,6 +34,7 @@ bot.command("categories", handleCategories);
 bot.command("add", handleAddCategory);
 bot.command("rename", handleRenameCategory);
 bot.command("delete", handleDeleteCategory);
+bot.command("expenses", handleListExpenses);
 bot.command("budget", handleBudget);
 bot.command("export", handleExport);
 
@@ -40,7 +42,3 @@ bot.on("callback_query:data", handleCallbackQuery);
 bot.on("message:text", handleTextMessage);
 bot.on("message:document", handleDocument);
 bot.on("message:photo", handlePhoto);
-
-export function buildWebhookHandler(secretToken: string) {
-  return webhookCallback(bot, "fastify", { secretToken });
-}

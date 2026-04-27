@@ -1,4 +1,6 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001'
+// Empty = same-origin (production: nginx proxies /api/* to the backend).
+// For local dev, set NEXT_PUBLIC_API_URL=http://localhost:3001 in .env.local.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
