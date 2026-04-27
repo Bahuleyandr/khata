@@ -154,6 +154,24 @@ To turn Funnel back off:
 sudo tailscale funnel --bg 443 off
 ```
 
+## Telegram Mini App
+
+The dashboard also runs as a **Telegram Mini App** — a webview embedded directly in Telegram, with auto-auth via the WebApp `initData` query-string. No separate login screen, no Tailscale on the user's phone. The capture surface (the bot) and the review surface (the dashboard) live in one place.
+
+**Setup (one-time, on the backend):**
+1. Make sure the dashboard URL is **publicly reachable** — see the Tailscale Funnel step above. Telegram's webview loads the URL on the user's device, so a Tailnet-only URL won't work for users outside the tailnet.
+2. Set `MINI_APP_URL` in `khata-secrets`:
+   ```bash
+   kubectl edit secret khata-secrets -n khata
+   # add: MINI_APP_URL=https://khata.hippocampus-monitor.ts.net
+   kubectl rollout restart deployment/khata-backend -n khata
+   ```
+3. The bot will register a global chat menu button on startup. Users see a "Dashboard" button next to the message input in the bot's chat.
+
+**Open the Mini App:** tap the menu button next to the bot's chat input, or send `/dashboard` and tap the inline "Open Dashboard" button. The dashboard opens inside Telegram, auto-authenticated as the Telegram user — same allowlist, same session cookie as the OAuth path.
+
+**Auth model:** the WebApp `initData` is HMAC-signed by Telegram with the bot token. `verifyWebAppInitData` ([backend/src/auth/telegram-webapp.ts](backend/src/auth/telegram-webapp.ts)) validates the signature server-side, then enforces the `ALLOWED_TELEGRAM_USER_IDS` allowlist before issuing a session cookie. Only initData younger than 24h is accepted.
+
 ## Runbook
 
 ### Local test run (frontend)

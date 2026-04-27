@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { postTelegramAuth } from '../../lib/api'
+import { MiniAppAutoAuth } from './MiniAppAutoAuth'
 
 declare global {
   interface Window {
@@ -49,6 +50,7 @@ export default function LoginPage() {
       <div className="login-card">
         <h1>Khata</h1>
         <p>Sign in with your Telegram account to view your expenses.</p>
+        <MiniAppAutoAuth />
         <div ref={widgetRef} />
       </div>
     </div>

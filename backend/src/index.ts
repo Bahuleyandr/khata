@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import { config } from "./config.js";
 import { sql } from "./db/index.js";
-import { bot } from "./bot/index.js";
+import { bot, installMiniAppMenuButton } from "./bot/index.js";
 import { startBudgetCrons } from "./cron/budgets.js";
 import { startInsightsCron } from "./cron/insights.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
@@ -44,6 +44,11 @@ async function startBotPolling(): Promise<void> {
   } catch (err) {
     app.log.warn({ err }, "deleteWebhook failed (ignoring)");
   }
+  // Best-effort — registers the Mini App chat menu button if MINI_APP_URL is
+  // configured; logs and continues otherwise.
+  await installMiniAppMenuButton().catch((err) =>
+    app.log.warn({ err }, "Mini App menu install failed"),
+  );
   void bot
     .start({
       onStart: () => app.log.info("Telegram bot polling started"),

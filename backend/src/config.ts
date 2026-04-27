@@ -47,4 +47,10 @@ export const config = {
     accessKeyId: requireEnv("S3_ACCESS_KEY_ID"),
     secretAccessKey: requireEnv("S3_SECRET_ACCESS_KEY"),
   },
+  // Optional: public HTTPS URL of the dashboard. Required to enable the
+  // Telegram Mini App (chat menu button + /dashboard reply button).
+  // Telegram's webview opens this URL on the user's device, so it must be
+  // publicly reachable (Tailscale Funnel, Cloudflare Tunnel, etc.) — a
+  // Tailnet-only URL won't load on a phone outside the tailnet.
+  miniAppUrl: process.env["MINI_APP_URL"] ?? null,
 };
