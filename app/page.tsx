@@ -1,8 +1,15 @@
-export default function Home() {
-  return (
-    <main>
-      <h1>RaaReeRum</h1>
-      <p>Hello, world.</p>
-    </main>
-  )
+'use client'
+
+import { useEffect } from 'react'
+import { useRouter } from 'next/navigation'
+import { getMe } from '../lib/api'
+
+export default function RootPage() {
+  const router = useRouter()
+  useEffect(() => {
+    getMe()
+      .then(() => router.replace('/dashboard'))
+      .catch(() => router.replace('/login'))
+  }, [router])
+  return null
 }
