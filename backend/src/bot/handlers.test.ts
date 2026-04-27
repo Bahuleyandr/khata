@@ -88,6 +88,13 @@ vi.mock("../db/expenses.js", () => ({
   updateExpenseAmount: vi.fn().mockResolvedValue(true),
   updateExpenseCategory: vi.fn().mockResolvedValue(true),
   updateExpenseDate: vi.fn().mockResolvedValue(true),
+  findExpenseByContentHash: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../receipt/ocr.js", () => ({
+  ocrReceiptImage: vi
+    .fn()
+    .mockResolvedValue("STARBUCKS\nDate: 27 Apr 2026\nCaffe Latte ₹250\nTotal: ₹250"),
 }));
 
 vi.mock("../db/overrides.js", () => ({
@@ -96,6 +103,14 @@ vi.mock("../db/overrides.js", () => ({
 }));
 
 vi.mock("../ai/parse.js", () => ({
+  parseExpense: vi.fn().mockResolvedValue({
+    amount: 250,
+    currency: "INR",
+    description: "Caffe Latte",
+    merchant: "Starbucks",
+    occurred_at: "2026-04-27",
+    category: "Food",
+  }),
   classifyMessage: vi.fn().mockResolvedValue({
     type: "expense",
     data: {
@@ -155,6 +170,8 @@ import { pendingEdits } from "./session.js";
 import { clearPendingImport } from "../statement/session.js";
 import * as mockAI from "../ai/parse.js";
 import * as mockQuery from "../db/query.js";
+import * as mockExpenses from "../db/expenses.js";
+import * as mockOcr from "../receipt/ocr.js";
 
 function makeCtx(overrides: Partial<Context> = {}): Context {
   return {
@@ -172,7 +189,20 @@ beforeEach(() => {
   pendingEdits.clear();
   importStore.clear();
   vi.clearAllMocks();
-  // Restore default classification mock (clearAllMocks wipes mockReturnValueOnce queues only)
+  vi.unstubAllGlobals();
+  // Restore default mocks after clearAllMocks wipes mockReturnValueOnce queues
+  vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValue(null);
+  vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValue(
+    "STARBUCKS\nDate: 27 Apr 2026\nCaffe Latte ₹250\nTotal: ₹250",
+  );
+  vi.mocked(mockAI.parseExpense).mockResolvedValue({
+    amount: 250,
+    currency: "INR",
+    description: "Caffe Latte",
+    merchant: "Starbucks",
+    occurred_at: "2026-04-27",
+    category: "Food",
+  });
   vi.mocked(mockAI.classifyMessage).mockResolvedValue({
     type: "expense",
     data: {
@@ -590,5 +620,116 @@ describe("handlePhoto", () => {
     expect(ctx.reply).toHaveBeenCalledOnce();
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toBeTruthy();
+  });
+});
+
+// ── Receipt OCR pipeline ──────────────────────────────────────────────────────
+
+function stubFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ result: { file_path: "photos/file.jpg" } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(100)),
+        headers: { get: () => "image/jpeg" },
+      }),
+  );
+}
+
+describe("handlePhoto — receipt pipeline", () => {
+  it("logs a receipt expense and replies with a summary containing the amount and category", async () => {
+    stubFetch();
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "photo-id-1", width: 1280, height: 960, file_size: 98304 }],
+      } as Context["message"],
+    });
+    await handlePhoto(ctx);
+    expect(vi.mocked(mockExpenses.insertExpense)).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "receipt", content_hash: expect.any(String) }),
+    );
+    const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
+    expect(lastReply).toContain("Receipt logged");
+    expect(lastReply).toContain("Food");
+    expect(pendingEdits.has(111111)).toBe(true);
+  });
+
+  it("skips duplicate image and does not insert an expense", async () => {
+    vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValueOnce("existing-expense-id");
+    stubFetch();
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "photo-id-1", width: 1280, height: 960 }],
+      } as Context["message"],
+    });
+    await handlePhoto(ctx);
+    const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
+    expect(lastReply).toContain("already logged");
+    expect(vi.mocked(mockExpenses.insertExpense)).not.toHaveBeenCalled();
+  });
+
+  it("replies gracefully when OCR fails", async () => {
+    stubFetch();
+    vi.mocked(mockOcr.ocrReceiptImage).mockRejectedValueOnce(new Error("Claude API timeout"));
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "photo-id-1", width: 1280, height: 960 }],
+      } as Context["message"],
+    });
+    await handlePhoto(ctx);
+    const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
+    expect(lastReply).toContain("OCR failed");
+    expect(vi.mocked(mockExpenses.insertExpense)).not.toHaveBeenCalled();
+  });
+
+  it("replies gracefully when image is not a receipt", async () => {
+    stubFetch();
+    vi.mocked(mockAI.parseExpense).mockResolvedValueOnce(null);
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "photo-id-1", width: 1280, height: 960 }],
+      } as Context["message"],
+    });
+    await handlePhoto(ctx);
+    const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
+    expect(lastReply).toContain("doesn't look like a receipt");
+    expect(vi.mocked(mockExpenses.insertExpense)).not.toHaveBeenCalled();
+  });
+});
+
+// ── "category: X" quick correction ───────────────────────────────────────────
+
+describe("handleTextMessage — category: shortcut", () => {
+  it("updates category when a pending expense exists", async () => {
+    pendingEdits.set(111111, {
+      expenseId: "exp-receipt-1",
+      amount_cents: 25000,
+      currency: "INR",
+      category: "Food",
+      description: "caffe latte",
+      occurred_at: new Date(),
+    });
+    const ctx = makeCtx({ message: { text: "category: Transport" } as Context["message"] });
+    await handleTextMessage(ctx);
+    expect(vi.mocked(mockExpenses.updateExpenseCategory)).toHaveBeenCalledWith(
+      "exp-receipt-1",
+      111111,
+      "cat-food",
+    );
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text.toLowerCase()).toContain("updated");
+  });
+
+  it("replies with 'no recent expense' when no pending edit exists", async () => {
+    const ctx = makeCtx({ message: { text: "category: Groceries" } as Context["message"] });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text.toLowerCase()).toContain("no recent expense");
   });
 });

@@ -10,18 +10,33 @@ export interface InsertExpenseData {
   occurred_at: Date;
   source: string;
   raw_text: string | null;
+  image_key?: string | null;
+  content_hash?: string | null;
 }
 
 export async function insertExpense(data: InsertExpenseData): Promise<string> {
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO expenses
-      (user_id, amount_cents, currency, description, merchant, category_id, occurred_at, source, raw_text)
+      (user_id, amount_cents, currency, description, merchant, category_id, occurred_at, source, raw_text, image_key, content_hash)
     VALUES
       (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
-       ${data.merchant}, ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text})
+       ${data.merchant}, ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text},
+       ${data.image_key ?? null}, ${data.content_hash ?? null})
     RETURNING id
   `;
   return row.id;
+}
+
+export async function findExpenseByContentHash(
+  userId: number,
+  contentHash: string,
+): Promise<string | null> {
+  const result = await sql<Array<{ id: string }>>`
+    SELECT id FROM expenses
+    WHERE user_id = ${userId} AND content_hash = ${contentHash}
+    LIMIT 1
+  `;
+  return result[0]?.id ?? null;
 }
 
 export async function updateExpenseAmount(
