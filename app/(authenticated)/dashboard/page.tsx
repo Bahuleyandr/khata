@@ -4,11 +4,14 @@ import { useEffect, useState } from 'react'
 import dynamic from 'next/dynamic'
 import {
   getExpenseSummary,
+  getInsights,
   formatCents,
   formatDate,
   type ExpenseSummary,
   type CategoryTotal,
+  type Insight,
 } from '../../../lib/api'
+import { InsightCards } from './InsightCards'
 
 const SpendingChart = dynamic(() => import('./SpendingChart'), { ssr: false })
 
@@ -24,12 +27,18 @@ function top5(categories: CategoryTotal[]) {
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<ExpenseSummary | null>(null)
+  const [insights, setInsights] = useState<Insight[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     getExpenseSummary()
       .then(setSummary)
       .catch((e: Error) => setError(e.message))
+    // Insights are best-effort: a 4xx/5xx here shouldn't take down the rest
+    // of the dashboard. Render with `insights = []` if the call fails.
+    getInsights()
+      .then((r) => setInsights(r.insights))
+      .catch(() => setInsights([]))
   }, [])
 
   if (error) return <div className="page"><div className="error-msg">{error}</div></div>
@@ -48,6 +57,8 @@ export default function DashboardPage() {
               <span className="value">{formatCents(mtdTotal(summary.mtd))}</span>
             </div>
           </div>
+
+          {insights !== null && <InsightCards insights={insights} />}
 
           <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
             <div className="card">
