@@ -9,16 +9,42 @@ Personal expense tracker. Capture spending via Telegram (text, voice notes, phot
 
 ## Quick start
 
-You need **Node 20** and **npm** installed.
+You need **Node 22**, **npm**, and Docker or WSL Docker for the local Postgres/migration smoke path.
 
 ```bash
 git clone https://github.com/Bahuleyandr/khata.git
 cd khata
 npm install
+npm --prefix backend install
+```
+
+Backend setup:
+
+```bash
+cd backend
+cp .env.example .env
+# Fill TELEGRAM_BOT_TOKEN, ALLOWED_TELEGRAM_USER_IDS, SESSION_SECRET, DATABASE_URL,
+# MiniMax, and S3/MinIO values in .env.
+
+docker run -d --name khata-pg \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_DB=khata \
+  -p 5432:5432 \
+  postgres:16-alpine
+
+npm run migrate:dev
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) — you should see a hello-world page.
+Frontend setup in another terminal:
+
+```bash
+cd khata
+echo NEXT_PUBLIC_API_URL=http://localhost:3001 > .env.local
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). The current app should show the Telegram login shell, then the dashboard, transactions, receipts, and manage workspace after auth.
 
 ## Scripts
 
@@ -30,17 +56,21 @@ Open [http://localhost:3000](http://localhost:3000) — you should see a hello-w
 | `npm run lint` | ESLint check (Next.js core-web-vitals rules) |
 | `npm test` | Run Vitest test suite once |
 | `npm run test:watch` | Run Vitest in watch mode |
+| `npm run migration:smoke` | Apply all SQL migrations to a disposable Postgres container |
+| `npm run e2e` | Run Playwright smoke coverage for desktop and mobile dashboard flows |
+| `npm run premerge` | Run root verify, backend verify, migration smoke, and Playwright smoke |
 
 ## Project structure
 
 ```
-app/          Next.js App Router pages and layouts
-lib/          Pure utility modules (testable without framework)
-  greeting.ts        Example: a pure greeting function
-  greeting.test.ts   Vitest test for the greeting function
+app/          Next.js App Router dashboard, transactions, receipts, and manage pages
+lib/          Shared frontend API client, formatting, auth, and utility modules
+backend/      Fastify API, Telegram bot handlers, migrations, parsing, and cron jobs
+deploy/       k3s manifests, Dockerfiles, backups, and Dalekdefender make targets
+tests/e2e/    Playwright smoke tests with mocked dashboard APIs
 ```
 
-Business logic lives in `lib/` — framework-agnostic, easy to unit test. Pages in `app/` compose from `lib/`.
+Frontend business logic lives in `lib/` where possible. Backend money/data logic lives under `backend/src/` and is covered by Vitest plus the migration smoke test.
 
 ## Stack rationale
 
@@ -91,6 +121,7 @@ npm run dev
 | `npm run build` | Compile TypeScript → `dist/` |
 | `npm start` | Run compiled production build |
 | `npm run migrate` | Apply pending SQL migrations |
+| `npm run migrate:dev` | Apply pending SQL migrations from TypeScript during local dev |
 | `npm run lint` | ESLint check |
 | `npm test` | Vitest unit tests |
 
@@ -111,8 +142,10 @@ GitHub Actions defines frontend CI, backend CI, and a standalone tracked-file se
 > **Note (2026-04):** GHA on this account is currently billing-blocked, so every workflow run fails before it starts. **Red checks are not a code signal** — verification is local:
 >
 > ```bash
-> npm ci && npm run hooks:install && npm run verify
-> cd backend && npm ci && npm run verify
+> npm ci
+> npm --prefix backend ci
+> npm run hooks:install
+> npm run premerge
 > ```
 
 The tracked pre-push hook blocks accidental direct pushes to `main` and runs the secret scanner before pushes. GitHub branch protection is still recommended when available for the repository plan.

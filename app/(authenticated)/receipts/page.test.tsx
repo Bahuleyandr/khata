@@ -32,6 +32,8 @@ const receipt: Receipt = {
   occurred_at: '2026-04-18T09:30:00.000Z',
   image_key: 'receipts/corner-store.jpg',
   receipt_url: '/api/receipts/receipt-1/image',
+  raw_text: 'Corner Store OCR total 1200',
+  review_status: 'needs_review',
 }
 
 const secondReceipt: Receipt = {
@@ -51,13 +53,15 @@ const updatedExpense: Expense = {
   category_id: 'cat-groceries',
   category: 'Groceries',
   source: 'receipt',
+  review_status: 'reviewed',
+  tags: [],
 }
 
 describe('ReceiptsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     Object.defineProperty(window, 'scrollTo', { value: vi.fn(), writable: true })
-    vi.mocked(getCategories).mockResolvedValue([{ id: 'cat-groceries', name: 'Groceries' }])
+    vi.mocked(getCategories).mockResolvedValue([{ id: 'cat-groceries', name: 'Groceries', is_default: true }])
     vi.mocked(getReceipts).mockResolvedValue({
       data: [receipt, secondReceipt],
       total: 2,
@@ -89,6 +93,7 @@ describe('ReceiptsPage', () => {
           amount_cents: 15500,
           merchant: 'Corner Store Fixed',
           category_id: 'cat-groceries',
+          review_status: 'reviewed',
         }),
       ),
     )

@@ -13,7 +13,10 @@
     "hooks:install": "git config core.hooksPath .githooks",
     "test": "vitest run",
     "test:watch": "vitest",
-    "audit:all": "npm audit --audit-level=moderate"
+    "audit:all": "npm audit --audit-level=moderate",
+    "migration:smoke": "node scripts/migration-smoke.mjs",
+    "e2e": "playwright test",
+    "premerge": "node scripts/premerge.mjs"
   },
   "dependencies": {
     "next": "^15.0.0",
@@ -23,6 +26,7 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
+    "@playwright/test": "^1.59.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20",

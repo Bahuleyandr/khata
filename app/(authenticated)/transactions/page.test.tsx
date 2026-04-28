@@ -7,18 +7,29 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TransactionsPage from './page'
 import {
   deleteExpense,
+  addExpenseTag,
+  bulkUpdateExpenses,
   getCategories,
+  getDuplicateCandidates,
   getExpenses,
+  getTags,
   mergeExpense,
+  removeExpenseTag,
   updateExpense,
   type Expense,
 } from '../../../lib/api'
 
 vi.mock('../../../lib/api', () => ({
   deleteExpense: vi.fn(),
+  addExpenseTag: vi.fn(),
+  attachReceipt: vi.fn(),
+  bulkUpdateExpenses: vi.fn(),
   getCategories: vi.fn(),
+  getDuplicateCandidates: vi.fn(),
   getExpenses: vi.fn(),
+  getTags: vi.fn(),
   mergeExpense: vi.fn(),
+  removeExpenseTag: vi.fn(),
   updateExpense: vi.fn(),
   formatCents: (cents: string | number, currency = 'INR') => `${currency} ${(Number(cents) / 100).toFixed(2)}`,
   formatDate: (iso: string) => iso.slice(0, 10),
@@ -35,6 +46,8 @@ const baseExpense: Expense = {
   source: 'receipt',
   occurred_at: '2026-04-20T10:00:00.000Z',
   image_key: 'receipt.jpg',
+  review_status: 'needs_review',
+  tags: ['team'],
 }
 
 const duplicateExpense: Expense = {
@@ -51,7 +64,9 @@ describe('TransactionsPage', () => {
     vi.clearAllMocks()
     Object.defineProperty(window, 'scrollTo', { value: vi.fn(), writable: true })
     Object.defineProperty(window, 'confirm', { value: vi.fn(() => true), writable: true })
-    vi.mocked(getCategories).mockResolvedValue([{ id: 'cat-food', name: 'Food' }])
+    vi.mocked(getCategories).mockResolvedValue([{ id: 'cat-food', name: 'Food', is_default: true }])
+    vi.mocked(getTags).mockResolvedValue({ tags: [{ id: 'tag-team', name: 'team', count: 1 }] })
+    vi.mocked(getDuplicateCandidates).mockResolvedValue({ candidates: [duplicateExpense] })
     vi.mocked(getExpenses).mockResolvedValue({
       data: [baseExpense, duplicateExpense],
       total: 2,
@@ -61,6 +76,9 @@ describe('TransactionsPage', () => {
     vi.mocked(updateExpense).mockResolvedValue({ ...baseExpense, amount_cents: '19900', merchant: 'OpenAI' })
     vi.mocked(deleteExpense).mockResolvedValue()
     vi.mocked(mergeExpense).mockResolvedValue(baseExpense)
+    vi.mocked(addExpenseTag).mockResolvedValue()
+    vi.mocked(removeExpenseTag).mockResolvedValue()
+    vi.mocked(bulkUpdateExpenses).mockResolvedValue({ ok: true, updated: 1 })
   })
 
   it('loads, filters, edits, merges, and deletes transactions', async () => {

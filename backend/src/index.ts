@@ -8,14 +8,11 @@ import { startBudgetCrons } from "./cron/budgets.js";
 import { startInsightsCron } from "./cron/insights.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { shutdownMcp } from "./ai/mcp.js";
+import { dashboardCorsOptions } from "./http/cors.js";
 
 const app = Fastify({ logger: true });
 
-await app.register(cors, {
-  origin: config.allowedOrigins,
-  credentials: true,
-  methods: ["GET", "POST", "OPTIONS"],
-});
+await app.register(cors, dashboardCorsOptions());
 
 await app.register(cookie);
 

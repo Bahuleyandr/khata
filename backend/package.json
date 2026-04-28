@@ -22,6 +22,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1038.0",
     "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.2.0",
+    "@fastify/multipart": "^10.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/pdf-parse": "^1.1.5",
     "exceljs": "^4.4.0",

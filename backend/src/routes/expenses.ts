@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import { createHash, randomUUID } from "node:crypto";
 import { sql } from "../db/index.js";
+import { getBudgetsWithMtd } from "../db/budgets.js";
 import { getOrCreateMerchantCanonical, setMerchantCategory } from "../db/merchants.js";
+import { attachTagToExpense, getOrCreateTag, getTagsForExpenses } from "../db/tags.js";
+import { currentMonthBounds } from "../export/xlsx.js";
+import { uploadStatement } from "../storage/index.js";
 import { getSession } from "./auth.js";
 
 type ExpensesQuery = {
@@ -10,6 +15,19 @@ type ExpensesQuery = {
   end?: string;
   category?: string;
   source?: "bot" | "telegram" | "statement" | "receipt" | "manual";
+  merchant?: string;
+  min_amount_cents?: number;
+  max_amount_cents?: number;
+  tag?: string;
+  uncategorized?: boolean;
+  has_receipt?: boolean;
+  review_status?: "needs_review" | "reviewed" | "ignored";
+  duplicates?: boolean;
+};
+
+type SummaryQuery = {
+  year?: number;
+  month?: number;
 };
 
 type ExpenseParams = {
@@ -23,10 +41,18 @@ type ExpenseUpdateBody = {
   merchant?: string | null;
   category_id?: string | null;
   occurred_at?: string;
+  review_status?: "needs_review" | "reviewed" | "ignored";
 };
 
 type ExpenseMergeBody = {
   duplicateId: string;
+};
+
+type ExpenseBulkBody = {
+  ids: string[];
+  category_id?: string | null;
+  tag_names?: string[];
+  review_status?: "needs_review" | "reviewed" | "ignored";
 };
 
 type ExpenseRow = {
@@ -41,6 +67,7 @@ type ExpenseRow = {
   source: string;
   occurred_at: Date;
   image_key: string | null;
+  review_status: string;
 };
 
 type ExpenseInternalRow = {
@@ -70,6 +97,23 @@ const expensesQuerySchema = {
     end: { type: "string", pattern: datePattern },
     category: { type: "string", minLength: 1, maxLength: 100 },
     source: { type: "string", enum: ["bot", "telegram", "statement", "receipt", "manual"] },
+    merchant: { type: "string", minLength: 1, maxLength: 160 },
+    min_amount_cents: { type: "integer", minimum: 0 },
+    max_amount_cents: { type: "integer", minimum: 0 },
+    tag: { type: "string", minLength: 1, maxLength: 80 },
+    uncategorized: { type: "boolean" },
+    has_receipt: { type: "boolean" },
+    review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+    duplicates: { type: "boolean" },
+  },
+} as const;
+
+const summaryQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    year: { type: "integer", minimum: 2000, maximum: 2100 },
+    month: { type: "integer", minimum: 1, maximum: 12 },
   },
 } as const;
 
@@ -93,6 +137,7 @@ const expenseUpdateSchema = {
     merchant: { anyOf: [{ type: "string", maxLength: 160 }, { type: "null" }] },
     category_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
     occurred_at: { type: "string", pattern: datePattern },
+    review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
   },
 } as const;
 
@@ -104,6 +149,30 @@ const expenseMergeSchema = {
     duplicateId: { type: "string", pattern: uuidPattern },
   },
 } as const;
+
+const expenseBulkSchema = {
+  type: "object",
+  required: ["ids"],
+  additionalProperties: false,
+  properties: {
+    ids: {
+      type: "array",
+      minItems: 1,
+      maxItems: 100,
+      uniqueItems: true,
+      items: { type: "string", pattern: uuidPattern },
+    },
+    category_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
+    tag_names: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string", minLength: 1, maxLength: 80 },
+    },
+    review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+  },
+} as const;
+
+const MAX_RECEIPT_UPLOAD_BYTES = 5 * 1024 * 1024;
 
 function normalizeNullableText(value: string | null | undefined): string | null | undefined {
   if (value === undefined) return undefined;
@@ -138,6 +207,64 @@ async function categoryBelongsToUser(userId: number, categoryId: string): Promis
   return !!row;
 }
 
+async function addTagsToExpenses(userId: number, expenseIds: string[], tagNames: string[] = []) {
+  const names = tagNames.map((name) => name.trim()).filter(Boolean);
+  for (const name of names) {
+    const tagId = await getOrCreateTag(userId, name);
+    if (!tagId) continue;
+    for (const expenseId of expenseIds) {
+      await attachTagToExpense(expenseId, tagId);
+    }
+  }
+}
+
+function selectedMonth(query: SummaryQuery): { year: number; month: number } {
+  const now = new Date();
+  return {
+    year: query.year ?? now.getFullYear(),
+    month: query.month ?? now.getMonth() + 1,
+  };
+}
+
+function monthProgress(year: number, month: number): { elapsedDays: number; daysInMonth: number } {
+  const now = new Date();
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
+  return {
+    elapsedDays: isCurrentMonth ? Math.max(1, Math.min(now.getDate(), daysInMonth)) : daysInMonth,
+    daysInMonth,
+  };
+}
+
+function monthlyNarrative(input: {
+  label: string;
+  totalCents: number;
+  transactionCount: number;
+  topCategory: string | null;
+  topMerchant: string | null;
+  overBudgetCount: number;
+  uncategorizedCount: number;
+}): string {
+  const rupees = Math.round(input.totalCents / 100).toLocaleString("en-IN");
+  const parts = [
+    `${input.label}: ₹${rupees} across ${input.transactionCount} transaction${input.transactionCount === 1 ? "" : "s"}.`,
+  ];
+  if (input.topCategory) parts.push(`Top category is ${input.topCategory}.`);
+  if (input.topMerchant) parts.push(`Top merchant is ${input.topMerchant}.`);
+  if (input.overBudgetCount > 0) {
+    parts.push(`${input.overBudgetCount} budget${input.overBudgetCount === 1 ? "" : "s"} projected over target.`);
+  }
+  if (input.uncategorizedCount > 0) {
+    parts.push(`${input.uncategorizedCount} item${input.uncategorizedCount === 1 ? "" : "s"} need categorizing.`);
+  }
+  return parts.join(" ");
+}
+
+async function withTags<T extends { id: string }>(rows: T[]): Promise<Array<T & { tags: string[] }>> {
+  const tagsByExpense = await getTagsForExpenses(rows.map((row) => row.id));
+  return rows.map((row) => ({ ...row, tags: tagsByExpense.get(row.id) ?? [] }));
+}
+
 export async function expensesRoutes(app: FastifyInstance) {
   // GET /api/expenses
   app.get<{ Querystring: ExpensesQuery }>(
@@ -158,6 +285,20 @@ export async function expensesRoutes(app: FastifyInstance) {
       const sourcePrm = q["source"];
       // map 'bot' query value to 'telegram' DB value
       const source = sourcePrm === "bot" ? "telegram" : sourcePrm;
+      const merchantSearch = q["merchant"] ? `%${q["merchant"].trim()}%` : null;
+      const tag = q["tag"];
+      const duplicatePredicate = sql`
+        EXISTS (
+          SELECT 1
+          FROM expenses d
+          WHERE d.user_id = e.user_id
+            AND d.id <> e.id
+            AND d.amount_cents = e.amount_cents
+            AND ABS(EXTRACT(EPOCH FROM (d.occurred_at - e.occurred_at))) <= 172800
+            AND lower(COALESCE(d.merchant, d.description, '')) =
+                lower(COALESCE(e.merchant, e.description, ''))
+        )
+      `;
 
       const rows = await sql<ExpenseRow[]>`
         SELECT e.id,
@@ -170,7 +311,8 @@ export async function expensesRoutes(app: FastifyInstance) {
                COALESCE(c.name, 'Uncategorized') AS category,
                e.source,
                e.occurred_at,
-               e.image_key
+               e.image_key,
+               e.review_status
         FROM expenses e
         LEFT JOIN categories c ON e.category_id = c.id
         WHERE e.user_id = ${session.userId}
@@ -178,6 +320,21 @@ export async function expensesRoutes(app: FastifyInstance) {
           ${end ? sql`AND e.occurred_at < (${end}::date + INTERVAL '1 day')` : sql``}
           ${category ? sql`AND c.name ILIKE ${category}` : sql``}
           ${source ? sql`AND e.source = ${source}` : sql``}
+          ${merchantSearch ? sql`AND (e.merchant ILIKE ${merchantSearch} OR e.description ILIKE ${merchantSearch})` : sql``}
+          ${q.min_amount_cents !== undefined ? sql`AND e.amount_cents >= ${q.min_amount_cents}` : sql``}
+          ${q.max_amount_cents !== undefined ? sql`AND e.amount_cents <= ${q.max_amount_cents}` : sql``}
+          ${tag ? sql`AND EXISTS (
+            SELECT 1 FROM expense_tags et
+            JOIN tags t ON t.id = et.tag_id
+            WHERE et.expense_id = e.id
+              AND t.user_id = ${session.userId}
+              AND lower(t.name) = lower(${tag})
+          )` : sql``}
+          ${q.uncategorized === true ? sql`AND e.category_id IS NULL` : sql``}
+          ${q.has_receipt === true ? sql`AND e.image_key IS NOT NULL` : sql``}
+          ${q.has_receipt === false ? sql`AND e.image_key IS NULL` : sql``}
+          ${q.review_status ? sql`AND e.review_status = ${q.review_status}` : sql``}
+          ${q.duplicates === true ? sql`AND ${duplicatePredicate}` : sql``}
         ORDER BY e.occurred_at DESC
         LIMIT ${limit} OFFSET ${offset}
       `;
@@ -191,15 +348,119 @@ export async function expensesRoutes(app: FastifyInstance) {
           ${end ? sql`AND e.occurred_at < (${end}::date + INTERVAL '1 day')` : sql``}
           ${category ? sql`AND c.name ILIKE ${category}` : sql``}
           ${source ? sql`AND e.source = ${source}` : sql``}
+          ${merchantSearch ? sql`AND (e.merchant ILIKE ${merchantSearch} OR e.description ILIKE ${merchantSearch})` : sql``}
+          ${q.min_amount_cents !== undefined ? sql`AND e.amount_cents >= ${q.min_amount_cents}` : sql``}
+          ${q.max_amount_cents !== undefined ? sql`AND e.amount_cents <= ${q.max_amount_cents}` : sql``}
+          ${tag ? sql`AND EXISTS (
+            SELECT 1 FROM expense_tags et
+            JOIN tags t ON t.id = et.tag_id
+            WHERE et.expense_id = e.id
+              AND t.user_id = ${session.userId}
+              AND lower(t.name) = lower(${tag})
+          )` : sql``}
+          ${q.uncategorized === true ? sql`AND e.category_id IS NULL` : sql``}
+          ${q.has_receipt === true ? sql`AND e.image_key IS NOT NULL` : sql``}
+          ${q.has_receipt === false ? sql`AND e.image_key IS NULL` : sql``}
+          ${q.review_status ? sql`AND e.review_status = ${q.review_status}` : sql``}
+          ${q.duplicates === true ? sql`AND ${duplicatePredicate}` : sql``}
       `;
 
       const total = parseInt(count, 10);
       return {
-        data: rows,
+        data: await withTags(rows),
         total,
         page,
         totalPages: Math.max(1, Math.ceil(total / limit)),
       };
+    },
+  );
+
+  // POST /api/expenses/bulk — bulk dashboard correction.
+  app.post<{ Body: ExpenseBulkBody }>(
+    "/api/expenses/bulk",
+    { schema: { body: expenseBulkSchema } },
+    async (request, reply) => {
+      const session = await getSession(request, reply);
+      if (!session) return;
+
+      const body = request.body;
+      if (body.category_id && !(await categoryBelongsToUser(session.userId, body.category_id))) {
+        return reply.status(400).send({ error: "Category not found" });
+      }
+
+      const updated = await sql<Array<{ id: string }>>`
+        UPDATE expenses
+        SET category_id = CASE
+              WHEN ${body.category_id !== undefined} THEN ${body.category_id ?? null}
+              ELSE category_id
+            END,
+            review_status = CASE
+              WHEN ${body.review_status !== undefined} THEN ${body.review_status ?? "reviewed"}
+              ELSE review_status
+            END,
+            reviewed_at = CASE
+              WHEN ${body.review_status === "reviewed"} THEN NOW()
+              WHEN ${body.review_status !== undefined} THEN NULL
+              ELSE reviewed_at
+            END
+        WHERE user_id = ${session.userId}
+          AND id = ANY(${body.ids}::uuid[])
+        RETURNING id
+      `;
+      await addTagsToExpenses(session.userId, updated.map((row) => row.id), body.tag_names);
+      return { ok: true, updated: updated.length };
+    },
+  );
+
+  // GET /api/expenses/:id/duplicates — likely duplicate candidates for merge UX.
+  app.get<{ Params: ExpenseParams }>(
+    "/api/expenses/:id/duplicates",
+    { schema: { params: expenseParamsSchema } },
+    async (request, reply) => {
+      const session = await getSession(request, reply);
+      if (!session) return;
+
+      const [target] = await sql<Array<{
+        id: string;
+        amount_cents: string;
+        merchant: string | null;
+        description: string | null;
+        occurred_at: Date;
+      }>>`
+        SELECT id, amount_cents::text, merchant, description, occurred_at
+        FROM expenses
+        WHERE id = ${request.params.id}
+          AND user_id = ${session.userId}
+        LIMIT 1
+      `;
+      if (!target) return reply.status(404).send({ error: "Transaction not found" });
+
+      const rows = await sql<ExpenseRow[]>`
+        SELECT e.id,
+               e.amount_cents::text,
+               e.currency,
+               e.description,
+               e.merchant,
+               e.merchant_canonical_id,
+               e.category_id,
+               COALESCE(c.name, 'Uncategorized') AS category,
+               e.source,
+               e.occurred_at,
+               e.image_key,
+               e.review_status
+        FROM expenses e
+        LEFT JOIN categories c ON e.category_id = c.id
+        WHERE e.user_id = ${session.userId}
+          AND e.id <> ${target.id}
+          AND e.amount_cents = ${target.amount_cents}
+          AND ABS(EXTRACT(EPOCH FROM (e.occurred_at - ${target.occurred_at}))) <= 172800
+          AND lower(COALESCE(e.merchant, e.description, '')) =
+              lower(COALESCE(${target.merchant}, ${target.description}, ''))
+        ORDER BY ABS(EXTRACT(EPOCH FROM (e.occurred_at - ${target.occurred_at}))) ASC,
+                 e.created_at DESC
+        LIMIT 10
+      `;
+      return { candidates: await withTags(rows) };
     },
   );
 
@@ -231,6 +492,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       const merchantParam = merchant ?? null;
       const categoryIdParam = body.category_id ?? null;
       const occurredAtParam = occurredAt ?? new Date(0);
+      const reviewStatusParam = body.review_status ?? "reviewed";
 
       const rows = await sql<ExpenseRow[]>`
         WITH updated AS (
@@ -262,11 +524,21 @@ export async function expensesRoutes(app: FastifyInstance) {
               occurred_at = CASE
                 WHEN ${occurredAt !== undefined} THEN ${occurredAtParam}
                 ELSE occurred_at
+              END,
+              review_status = CASE
+                WHEN ${body.review_status !== undefined} THEN ${reviewStatusParam}
+                ELSE review_status
+              END,
+              reviewed_at = CASE
+                WHEN ${body.review_status === "reviewed"} THEN NOW()
+                WHEN ${body.review_status !== undefined} THEN NULL
+                ELSE reviewed_at
               END
           WHERE id = ${request.params.id}
             AND user_id = ${session.userId}
           RETURNING id, amount_cents::text, currency, description, merchant,
-                    merchant_canonical_id, category_id, source, occurred_at, image_key
+                    merchant_canonical_id, category_id, source, occurred_at, image_key,
+                    review_status
         )
         SELECT updated.*,
                COALESCE(c.name, 'Uncategorized') AS category
@@ -282,6 +554,48 @@ export async function expensesRoutes(app: FastifyInstance) {
       }
 
       return updated;
+    },
+  );
+
+  // POST /api/expenses/:id/receipt — attach or replace a receipt image manually.
+  app.post<{ Params: ExpenseParams }>(
+    "/api/expenses/:id/receipt",
+    { schema: { params: expenseParamsSchema } },
+    async (request, reply) => {
+      const session = await getSession(request, reply);
+      if (!session) return;
+
+      const file = await request.file({ limits: { fileSize: MAX_RECEIPT_UPLOAD_BYTES } });
+      if (!file) return reply.status(400).send({ error: "Receipt file is required" });
+      const supported = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+      const mimeType = supported.includes(file.mimetype) ? file.mimetype : "image/jpeg";
+      const buffer = await file.toBuffer();
+      const contentHash = createHash("sha256").update(buffer).digest("hex");
+      const imageKey = `receipts/${session.userId}/${randomUUID()}`;
+      await uploadStatement(imageKey, buffer, mimeType);
+
+      const rows = await sql<ExpenseRow[]>`
+        WITH updated AS (
+          UPDATE expenses
+          SET image_key = ${imageKey},
+              content_hash = ${contentHash},
+              review_status = 'needs_review',
+              reviewed_at = NULL
+          WHERE id = ${request.params.id}
+            AND user_id = ${session.userId}
+          RETURNING id, amount_cents::text, currency, description, merchant,
+                    merchant_canonical_id, category_id, source, occurred_at, image_key,
+                    review_status
+        )
+        SELECT updated.*,
+               COALESCE(c.name, 'Uncategorized') AS category
+        FROM updated
+        LEFT JOIN categories c ON c.id = updated.category_id
+      `;
+
+      const updated = rows[0];
+      if (!updated) return reply.status(404).send({ error: "Transaction not found" });
+      return (await withTags([updated]))[0];
     },
   );
 
@@ -383,16 +697,17 @@ export async function expensesRoutes(app: FastifyInstance) {
     },
   );
 
-  // GET /api/expenses/summary — MTD category totals + last 10 expenses
-  app.get("/api/expenses/summary", async (request, reply) => {
+  // GET /api/expenses/summary — selected-month category totals, recent rows, budgets, trends.
+  app.get<{ Querystring: SummaryQuery }>(
+    "/api/expenses/summary",
+    { schema: { querystring: summaryQuerySchema } },
+    async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
 
-    const now = new Date();
-    const mtdStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const mtdEnd = tomorrow.toISOString().substring(0, 10);
+    const { year, month } = selectedMonth(request.query);
+    const bounds = currentMonthBounds(year, month);
+    const { elapsedDays, daysInMonth } = monthProgress(year, month);
 
     type CategoryTotal = {
       category: string;
@@ -409,8 +724,16 @@ export async function expensesRoutes(app: FastifyInstance) {
       category: string | null;
       occurred_at: Date;
     };
+    type MerchantTrend = {
+      name: string;
+      total_cents: string;
+      count: number;
+    };
+    type SpikeRow = MerchantTrend & {
+      previous_avg_cents: string;
+    };
 
-    const [categoryTotals, recentExpenses] = await Promise.all([
+    const [categoryTotals, recentExpenses, topMerchants, newMerchants, spikes, budgets] = await Promise.all([
       sql<CategoryTotal[]>`
         SELECT COALESCE(c.name, 'Uncategorized') AS category,
                SUM(e.amount_cents)::text AS total_cents,
@@ -419,8 +742,8 @@ export async function expensesRoutes(app: FastifyInstance) {
         FROM expenses e
         LEFT JOIN categories c ON e.category_id = c.id
         WHERE e.user_id = ${session.userId}
-          AND e.occurred_at >= ${mtdStart}::date
-          AND e.occurred_at < ${mtdEnd}::date
+          AND e.occurred_at >= ${bounds.start}::date
+          AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
         GROUP BY c.name, e.currency
         ORDER BY SUM(e.amount_cents) DESC
       `,
@@ -435,13 +758,128 @@ export async function expensesRoutes(app: FastifyInstance) {
         FROM expenses e
         LEFT JOIN categories c ON e.category_id = c.id
         WHERE e.user_id = ${session.userId}
+          AND e.occurred_at >= ${bounds.start}::date
+          AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
         ORDER BY e.occurred_at DESC
         LIMIT 10
       `,
+      sql<MerchantTrend[]>`
+        SELECT COALESCE(mc.name, e.merchant, e.description, 'Unknown') AS name,
+               SUM(e.amount_cents)::text AS total_cents,
+               COUNT(*)::int AS count
+        FROM expenses e
+        LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+        WHERE e.user_id = ${session.userId}
+          AND e.occurred_at >= ${bounds.start}::date
+          AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+        GROUP BY name
+        ORDER BY SUM(e.amount_cents) DESC
+        LIMIT 5
+      `,
+      sql<MerchantTrend[]>`
+        SELECT COALESCE(mc.name, e.merchant, e.description, 'Unknown') AS name,
+               SUM(e.amount_cents)::text AS total_cents,
+               COUNT(*)::int AS count
+        FROM expenses e
+        LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+        WHERE e.user_id = ${session.userId}
+          AND e.occurred_at >= ${bounds.start}::date
+          AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+          AND NOT EXISTS (
+            SELECT 1 FROM expenses older
+            LEFT JOIN merchants_canonical older_mc ON older_mc.id = older.merchant_canonical_id
+            WHERE older.user_id = e.user_id
+              AND older.occurred_at < ${bounds.start}::date
+              AND lower(COALESCE(older_mc.name, older.merchant, older.description, '')) =
+                  lower(COALESCE(mc.name, e.merchant, e.description, ''))
+          )
+        GROUP BY name
+        ORDER BY SUM(e.amount_cents) DESC
+        LIMIT 5
+      `,
+      sql<SpikeRow[]>`
+        WITH current_month AS (
+          SELECT lower(COALESCE(mc.name, e.merchant, e.description, 'Unknown')) AS key,
+                 COALESCE(mc.name, e.merchant, e.description, 'Unknown') AS name,
+                 SUM(e.amount_cents) AS total_cents,
+                 COUNT(*)::int AS count
+          FROM expenses e
+          LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+          WHERE e.user_id = ${session.userId}
+            AND e.occurred_at >= ${bounds.start}::date
+            AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+          GROUP BY key, name
+        ),
+        previous_three AS (
+          SELECT lower(COALESCE(mc.name, e.merchant, e.description, 'Unknown')) AS key,
+                 SUM(e.amount_cents) / 3.0 AS avg_cents
+          FROM expenses e
+          LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+          WHERE e.user_id = ${session.userId}
+            AND e.occurred_at >= (${bounds.start}::date - INTERVAL '3 months')
+            AND e.occurred_at < ${bounds.start}::date
+          GROUP BY key
+        )
+        SELECT c.name,
+               c.total_cents::text,
+               c.count,
+               COALESCE(p.avg_cents, 0)::bigint::text AS previous_avg_cents
+        FROM current_month c
+        LEFT JOIN previous_three p ON p.key = c.key
+        WHERE c.total_cents > 0
+          AND (p.avg_cents IS NULL OR c.total_cents >= p.avg_cents * 2)
+        ORDER BY c.total_cents DESC
+        LIMIT 5
+      `,
+      getBudgetsWithMtd(session.userId, bounds.rangeKey),
     ]);
 
-    return { mtd: categoryTotals, recent: recentExpenses };
-  });
+    const totalCents = categoryTotals.reduce((sum, row) => sum + Number(row.total_cents), 0);
+    const transactionCount = categoryTotals.reduce((sum, row) => sum + Number(row.count), 0);
+    const budget_variance = budgets.map((budget) => {
+      const daily = elapsedDays > 0 ? budget.spent_cents / elapsedDays : 0;
+      const projected_cents = Math.round(daily * daysInMonth);
+      return {
+        ...budget,
+        projected_cents,
+        variance_cents: budget.spent_cents - budget.target_cents,
+        projected_variance_cents: projected_cents - budget.target_cents,
+      };
+    });
+    const uncategorized = categoryTotals.find((row) => row.category === "Uncategorized");
+    const narrative = monthlyNarrative({
+      label: bounds.label,
+      totalCents,
+      transactionCount,
+      topCategory: categoryTotals[0]?.category ?? null,
+      topMerchant: topMerchants[0]?.name ?? null,
+      overBudgetCount: budget_variance.filter((budget) => budget.projected_variance_cents > 0).length,
+      uncategorizedCount: uncategorized ? Number(uncategorized.count) : 0,
+    });
+
+    return {
+      period: {
+        year,
+        month,
+        label: bounds.label,
+        start: bounds.start,
+        end: bounds.end,
+        rangeKey: bounds.rangeKey,
+        elapsedDays,
+        daysInMonth,
+      },
+      mtd: categoryTotals,
+      recent: recentExpenses,
+      budgets: budget_variance,
+      merchants: {
+        top: topMerchants,
+        new: newMerchants,
+        spikes,
+      },
+      narrative,
+    };
+    },
+  );
 
   // GET /api/categories
   app.get("/api/categories", async (request, reply) => {

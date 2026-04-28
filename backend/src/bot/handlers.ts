@@ -169,11 +169,11 @@ async function runStatementPipeline(
 
   if (await rejectIfOversize(ctx, buffer)) return;
 
-  const statementId = await createStatementRecord(userId, "");
+  const statementId = await createStatementRecord(userId, "", mimeType);
   const s3Key = `statements/${userId}/${statementId}`;
   try {
     await uploadStatement(s3Key, buffer, mimeType);
-    await sql`UPDATE statements SET file_key = ${s3Key} WHERE id = ${statementId}`;
+    await sql`UPDATE statements SET file_key = ${s3Key}, mime_type = ${mimeType}, updated_at = NOW() WHERE id = ${statementId}`;
   } catch (err) {
     await updateStatementStatus(statementId, "failed", undefined, redactError(err));
     await ctx.reply(`❌ Upload failed: ${String(err)}`);
@@ -197,11 +197,17 @@ async function runStatementPipeline(
     return;
   }
 
-  await updateStatementStatus(statementId, "parsed", transactions.length);
-
   const results = await dedupeTransactions(userId, transactions);
   const alreadyLoggedCount = results.filter((r) => r.alreadyLogged).length;
   const newCount = results.length - alreadyLoggedCount;
+  await updateStatementStatus(
+    statementId,
+    "parsed",
+    results.length,
+    undefined,
+    undefined,
+    alreadyLoggedCount,
+  );
 
   await setPendingImport(chatId, {
     statementId,
@@ -404,6 +410,7 @@ async function processUpiPayment(
     image_key: opts.imageKey ?? null,
     content_hash: opts.contentHash ?? null,
     upi_reference_id: upi.reference,
+    review_status: opts.source === "receipt" ? "needs_review" : "reviewed",
   });
 
   await setPendingEdit(userId, {
@@ -742,6 +749,9 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
             pendingImport.statementId,
             "imported",
             pendingImport.totalCount,
+            undefined,
+            inserted,
+            pendingImport.alreadyLoggedCount,
           );
           await clearPendingImport(chatId);
           await ctx.reply(
@@ -1107,6 +1117,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
       raw_text: ocrText,
       image_key: s3Key,
       content_hash: contentHash,
+      review_status: "needs_review",
     });
   } catch (err) {
     await ctx.reply(`❌ Failed to save expense: ${String(err)}`);

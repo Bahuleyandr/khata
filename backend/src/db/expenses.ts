@@ -14,6 +14,7 @@ export interface InsertExpenseData {
   image_key?: string | null;
   content_hash?: string | null;
   upi_reference_id?: string | null;
+  review_status?: "needs_review" | "reviewed" | "ignored";
 }
 
 export async function insertExpense(data: InsertExpenseData): Promise<string> {
@@ -26,13 +27,14 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
     INSERT INTO expenses
       (user_id, amount_cents, currency, description, merchant, merchant_canonical_id,
        category_id, occurred_at, source, raw_text, image_key, content_hash,
-       upi_reference_id)
+       upi_reference_id, review_status, reviewed_at)
     VALUES
       (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
        ${data.merchant}, ${merchantCanonicalId},
        ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text},
        ${data.image_key ?? null}, ${data.content_hash ?? null},
-       ${data.upi_reference_id ?? null})
+       ${data.upi_reference_id ?? null}, ${data.review_status ?? "reviewed"},
+       ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null})
     RETURNING id
   `;
   return row.id;
@@ -100,7 +102,10 @@ export async function attachReceiptToExpense(
 ): Promise<boolean> {
   const result = await sql`
     UPDATE expenses
-    SET image_key = ${imageKey}, content_hash = ${contentHash}
+    SET image_key = ${imageKey},
+        content_hash = ${contentHash},
+        review_status = 'needs_review',
+        reviewed_at = NULL
     WHERE id = ${id} AND user_id = ${userId}
       AND image_key IS NULL
     RETURNING id

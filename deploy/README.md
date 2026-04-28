@@ -110,6 +110,7 @@ Both images get rebuilt and re-imported; the deployments roll restart automatica
 | `make backup` | Write a timestamped local Postgres dump + MinIO data tarball under `backups/` |
 | `make restore-dry-run BACKUP_FILE=... MINIO_BACKUP_FILE=...` | Verify a Postgres custom-format dump and MinIO tarball are readable |
 | `make restore-dry-run BACKUP_FILE=... MINIO_BACKUP_DIR=...` | Verify a Postgres dump and nightly MinIO mirror directory are readable |
+| `make restore-to-temp-db BACKUP_FILE=...` | Restore a Postgres dump into a temporary in-cluster DB, query it, then drop it |
 | `make smoke` | Wait for rollouts, verify both backup CronJobs exist, and hit backend `/health` from inside the cluster |
 | `make logs` | Tail backend logs (look for `LLM ` lines for per-call usage) |
 | `make status` | `kubectl get all -n khata` + ingress + tailscale serve status |
@@ -163,6 +164,15 @@ make restore-dry-run \
   BACKUP_FILE=/path/to/khata-postgres-<timestamp>.dump \
   MINIO_BACKUP_DIR=/path/to/khata-minio-<timestamp>/<bucket-name>
 ```
+
+Run a real Postgres restore drill against a temporary in-cluster database before major schema work and after changing backup code:
+
+```bash
+make restore-to-temp-db \
+  BACKUP_FILE=~/khata/backups/<timestamp>/khata-postgres.dump
+```
+
+The target creates `khata_restore_check`, restores the custom-format dump, runs a small query, then drops the temporary database. It does not touch the live `khata` database.
 
 For real resilience, sync `backups/` off the box after creation (R2, another NAS, or encrypted cloud storage). Keep at least one restore-tested copy away from Dalekdefender.
 

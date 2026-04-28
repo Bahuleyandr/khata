@@ -45,6 +45,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <Link href="/dashboard" className={pathname === '/dashboard' ? 'active' : ''}>Dashboard</Link>
         <Link href="/transactions" className={pathname === '/transactions' ? 'active' : ''}>Transactions</Link>
         <Link href="/receipts" className={pathname === '/receipts' ? 'active' : ''}>Receipts</Link>
+        <Link href="/manage" className={pathname === '/manage' ? 'active' : ''}>Manage</Link>
         <span style={{ fontSize: '0.85rem', color: '#9ca3af' }}>Hi, {me?.first_name}</span>
         <button
           type="button"

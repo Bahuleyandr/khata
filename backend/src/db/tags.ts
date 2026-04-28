@@ -62,6 +62,24 @@ export async function attachTagToExpense(expenseId: string, tagId: string): Prom
   `;
 }
 
+export async function expenseBelongsToUser(expenseId: string, userId: number): Promise<boolean> {
+  const [row] = await sql<Array<{ id: string }>>`
+    SELECT id FROM expenses
+    WHERE id = ${expenseId} AND user_id = ${userId}
+    LIMIT 1
+  `;
+  return !!row;
+}
+
+export async function tagBelongsToUser(tagId: string, userId: number): Promise<boolean> {
+  const [row] = await sql<Array<{ id: string }>>`
+    SELECT id FROM tags
+    WHERE id = ${tagId} AND user_id = ${userId}
+    LIMIT 1
+  `;
+  return !!row;
+}
+
 /** Returns true if a row was deleted. */
 export async function detachTagFromExpense(expenseId: string, tagId: string): Promise<boolean> {
   const rows = await sql`

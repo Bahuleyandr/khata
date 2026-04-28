@@ -18,18 +18,18 @@ function normalizeCategoryName(name: string): string {
 export async function seedDefaultCategories(userId: number): Promise<void> {
   for (const name of DEFAULT_CATEGORIES) {
     await sql`
-      INSERT INTO categories (user_id, name, is_default)
-      VALUES (${userId}, ${name}, true)
-      ON CONFLICT (user_id, name) DO NOTHING
-    `;
+    INSERT INTO categories (user_id, name, is_default)
+    VALUES (${userId}, ${name}, true)
+    ON CONFLICT DO NOTHING
+  `;
   }
 }
 
 export async function getUserCategories(
   userId: number,
-): Promise<Array<{ id: string; name: string }>> {
-  return sql<Array<{ id: string; name: string }>>`
-    SELECT id, name FROM categories
+): Promise<Array<{ id: string; name: string; is_default: boolean }>> {
+  return sql<Array<{ id: string; name: string; is_default: boolean }>>`
+    SELECT id, name, is_default FROM categories
     WHERE user_id = ${userId}
     ORDER BY is_default DESC, name ASC
   `;
@@ -79,6 +79,47 @@ export async function addCategory(userId: number, name: string): Promise<boolean
     INSERT INTO categories (user_id, name, is_default)
     VALUES (${userId}, ${display}, false)
     ON CONFLICT DO NOTHING
+    RETURNING id
+  `;
+  return result.length > 0;
+}
+
+export async function addCategoryRow(
+  userId: number,
+  name: string,
+): Promise<{ id: string; name: string; is_default: boolean } | null> {
+  const display = normalizeCategoryName(name);
+  if (!display) return null;
+  const [row] = await sql<Array<{ id: string; name: string; is_default: boolean }>>`
+    INSERT INTO categories (user_id, name, is_default)
+    VALUES (${userId}, ${display}, false)
+    ON CONFLICT DO NOTHING
+    RETURNING id, name, is_default
+  `;
+  return row ?? null;
+}
+
+export async function renameCategoryById(
+  userId: number,
+  id: string,
+  newName: string,
+): Promise<{ id: string; name: string; is_default: boolean } | null> {
+  const newDisplay = normalizeCategoryName(newName);
+  if (!newDisplay) return null;
+  const [row] = await sql<Array<{ id: string; name: string; is_default: boolean }>>`
+    UPDATE categories
+    SET name = ${newDisplay}
+    WHERE id = ${id}
+      AND user_id = ${userId}
+    RETURNING id, name, is_default
+  `;
+  return row ?? null;
+}
+
+export async function deleteCategoryById(userId: number, id: string): Promise<boolean> {
+  const result = await sql`
+    DELETE FROM categories
+    WHERE id = ${id} AND user_id = ${userId} AND is_default = false
     RETURNING id
   `;
   return result.length > 0;

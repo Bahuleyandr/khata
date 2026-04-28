@@ -117,6 +117,7 @@ function ReceiptModal({
             <div className="receipt-summary">
               <strong>{receiptTitle(receipt)}</strong>
               <span>{formatCents(receipt.amount_cents, receipt.currency)} on {formatDate(receipt.occurred_at)}</span>
+              {receipt.review_status === 'needs_review' ? <span className="badge badge-review">Needs review</span> : null}
             </div>
             <div className="form-grid">
               <label>
@@ -163,6 +164,10 @@ function ReceiptModal({
                 />
               </label>
             </div>
+            <details className="raw-text-panel">
+              <summary>OCR text</summary>
+              <pre>{receipt.raw_text?.trim() || 'No OCR text stored for this receipt.'}</pre>
+            </details>
             <div className="modal-actions">
               <button type="button" onClick={onClose}>Done</button>
               {hasNext ? (
@@ -272,6 +277,7 @@ export default function ReceiptsPage() {
         merchant: draft.merchant.trim() || null,
         category_id: draft.categoryId || null,
         occurred_at: draft.date,
+        review_status: 'reviewed',
       })
       const nextReceipt: Receipt = {
         ...selected,
@@ -343,6 +349,7 @@ export default function ReceiptsPage() {
                     <span className="merchant">{receiptTitle(receipt)}</span>
                     <span className="amount">{formatCents(receipt.amount_cents, receipt.currency)}</span>
                     <span className="date">{formatDate(receipt.occurred_at)} - {receipt.category ?? 'Uncategorized'}</span>
+                    {receipt.review_status === 'needs_review' ? <span className="date">Needs review</span> : null}
                   </span>
                 </button>
               ))}

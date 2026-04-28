@@ -35,13 +35,18 @@ vi.mock("../db/merchants.js", () => merchantMocks);
 vi.mock("../storage/index.js", () => storageMocks);
 
 import { authRoutes, signSession } from "./auth.js";
+import { DASHBOARD_CORS_METHODS, dashboardCorsOptions } from "../http/cors.js";
+import { budgetsRoutes } from "./budgets.js";
+import { categoriesRoutes } from "./categories.js";
 import { installCsrfOriginGuard } from "./csrf.js";
 import { expensesRoutes } from "./expenses.js";
 import { receiptsRoutes } from "./receipts.js";
+import { tagsRoutes } from "./tags.js";
 
 const EXPENSE_ID = "11111111-1111-4111-8111-111111111111";
 const DUPLICATE_ID = "22222222-2222-4222-8222-222222222222";
 const CATEGORY_ID = "33333333-3333-4333-8333-333333333333";
+const TAG_ID = "44444444-4444-4444-8444-444444444444";
 
 function authCookie(): string {
   return `session=${signSession(12345, "Subash", Math.floor(Date.now() / 1000))}`;
@@ -63,6 +68,9 @@ async function buildApp() {
   await app.register(authRoutes);
   await app.register(expensesRoutes);
   await app.register(receiptsRoutes);
+  await app.register(categoriesRoutes);
+  await app.register(budgetsRoutes);
+  await app.register(tagsRoutes);
   await app.ready();
   return app;
 }
@@ -120,6 +128,126 @@ describe("route hardening", () => {
         url: "/api/expenses?source=spreadsheet",
       });
       expect(badSource.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("advertises dashboard CORS methods needed by local editing flows", () => {
+    expect(DASHBOARD_CORS_METHODS).toEqual([
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
+    ]);
+    expect(dashboardCorsOptions().methods).toContain("PATCH");
+    expect(dashboardCorsOptions().methods).toContain("DELETE");
+  });
+
+  it("creates categories through the authenticated dashboard API", async () => {
+    sqlMock.mockResolvedValueOnce([
+      { id: CATEGORY_ID, name: "Travel", is_default: false },
+    ]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/categories",
+        headers: { cookie: authCookie() },
+        payload: { name: "  Travel  " },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toEqual({
+        id: CATEGORY_ID,
+        name: "Travel",
+        is_default: false,
+      });
+      expect(sqlMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("sets and clears an owned category budget", async () => {
+    sqlMock
+      .mockResolvedValueOnce([{ id: CATEGORY_ID }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: "budget-1" }]);
+
+    const app = await buildApp();
+    try {
+      const setRes = await app.inject({
+        method: "POST",
+        url: "/api/budgets",
+        headers: { cookie: authCookie() },
+        payload: { category_id: CATEGORY_ID, target_cents: 250000 },
+      });
+      expect(setRes.statusCode).toBe(200);
+      expect(setRes.json()).toEqual({ ok: true });
+
+      const clearRes = await app.inject({
+        method: "DELETE",
+        url: `/api/budgets/${CATEGORY_ID}`,
+        headers: { cookie: authCookie() },
+      });
+      expect(clearRes.statusCode).toBe(200);
+      expect(clearRes.json()).toEqual({ ok: true });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("adds a tag only after the expense ownership check passes", async () => {
+    sqlMock
+      .mockResolvedValueOnce([{ id: EXPENSE_ID }])
+      .mockResolvedValueOnce([{ id: TAG_ID }])
+      .mockResolvedValueOnce([]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/expenses/${EXPENSE_ID}/tags`,
+        headers: { cookie: authCookie() },
+        payload: { name: " Team " },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, tag_id: TAG_ID });
+      expect(sqlMock).toHaveBeenCalledTimes(3);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("bulk-corrects review status, category, and tags for owned expenses", async () => {
+    sqlMock
+      .mockResolvedValueOnce([{ id: CATEGORY_ID }])
+      .mockResolvedValueOnce([{ id: EXPENSE_ID }])
+      .mockResolvedValueOnce([{ id: TAG_ID }])
+      .mockResolvedValueOnce([]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/expenses/bulk",
+        headers: { cookie: authCookie() },
+        payload: {
+          ids: [EXPENSE_ID],
+          category_id: CATEGORY_ID,
+          tag_names: ["team"],
+          review_status: "reviewed",
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true, updated: 1 });
+      expect(sqlMock).toHaveBeenCalledTimes(4);
     } finally {
       await app.close();
     }

@@ -53,6 +53,8 @@ export async function receiptsRoutes(app: FastifyInstance) {
       category: string | null;
       occurred_at: Date;
       image_key: string;
+      raw_text: string | null;
+      review_status: string;
     };
 
     const rows = await sql<ReceiptRow[]>`
@@ -64,7 +66,9 @@ export async function receiptsRoutes(app: FastifyInstance) {
              e.category_id,
              COALESCE(c.name, 'Uncategorized') AS category,
              e.occurred_at,
-             e.image_key
+             e.image_key,
+             e.raw_text,
+             e.review_status
       FROM expenses e
       LEFT JOIN categories c ON e.category_id = c.id
       WHERE e.user_id = ${session.userId}

@@ -32,11 +32,13 @@ BACKUP_DIR ?= $(ROOT)/backups/$$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP_FILE ?=
 MINIO_BACKUP_FILE ?=
 MINIO_BACKUP_DIR ?=
+TEMP_RESTORE_DB ?= khata_restore_check
 
 .PHONY: build build-backend build-frontend import import-backend import-frontend \
         deploy namespace migrate logs status secrets restart undeploy tailscale-serve \
         tailscale-status minio-bucket backup backup-postgres backup-minio \
-        restore-dry-run restore-postgres-dry-run restore-minio-dry-run smoke
+        restore-dry-run restore-postgres-dry-run restore-minio-dry-run \
+        restore-to-temp-db smoke
 
 build: build-backend build-frontend
 
@@ -112,6 +114,15 @@ restore-minio-dry-run:
 		echo "Set MINIO_BACKUP_FILE=/path/to/khata-minio-data.tgz or MINIO_BACKUP_DIR=/path/to/khata-minio-..."; \
 		exit 1; \
 	fi
+
+restore-to-temp-db:
+	@test -n "$(BACKUP_FILE)" || (echo "Set BACKUP_FILE=/path/to/khata-postgres.dump"; exit 1)
+	kubectl exec -n $(NS) deploy/khata-postgres -- psql -U khata -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $(TEMP_RESTORE_DB) WITH (FORCE);"
+	kubectl exec -n $(NS) deploy/khata-postgres -- psql -U khata -d postgres -v ON_ERROR_STOP=1 -c "CREATE DATABASE $(TEMP_RESTORE_DB);"
+	cat "$(BACKUP_FILE)" | kubectl exec -i -n $(NS) deploy/khata-postgres -- pg_restore -U khata -d $(TEMP_RESTORE_DB) --clean --if-exists --no-owner --no-acl --exit-on-error
+	kubectl exec -n $(NS) deploy/khata-postgres -- psql -U khata -d $(TEMP_RESTORE_DB) -v ON_ERROR_STOP=1 -c "SELECT COUNT(*) AS expenses FROM expenses;"
+	kubectl exec -n $(NS) deploy/khata-postgres -- psql -U khata -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $(TEMP_RESTORE_DB) WITH (FORCE);"
+	@echo "Postgres restore validated in temp database: $(TEMP_RESTORE_DB)"
 
 smoke:
 	kubectl rollout status deployment/khata-postgres -n $(NS) --timeout=120s
