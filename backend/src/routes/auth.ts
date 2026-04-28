@@ -12,6 +12,38 @@ export function signSession(userId: number, firstName: string, iat: number): str
 }
 
 const SESSION_MAX_AGE_S = 604800;
+const TELEGRAM_LOGIN_MAX_AGE_S = 300;
+const AUTH_FUTURE_SKEW_S = 60;
+
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+function isAllowedUser(userId: number): boolean {
+  return config.allowedTelegramUserIds.includes(userId);
+}
+
+function isProd(): boolean {
+  return process.env.NODE_ENV === "production";
+}
+
+function setSessionCookie(reply: FastifyReply, userId: number, firstName: string): void {
+  reply.setCookie("session", signSession(userId, firstName, nowSeconds()), {
+    httpOnly: true,
+    sameSite: isProd() ? "none" : "lax",
+    secure: isProd(),
+    maxAge: SESSION_MAX_AGE_S,
+    path: "/",
+  });
+}
+
+function clearSessionCookie(reply: FastifyReply): void {
+  reply.clearCookie("session", {
+    sameSite: isProd() ? "none" : "lax",
+    secure: isProd(),
+    path: "/",
+  });
+}
 
 export function verifySession(token: string): { userId: number; firstName: string } | null {
   const dot = token.lastIndexOf(".");
@@ -34,8 +66,12 @@ export function verifySession(token: string): { userId: number; firstName: strin
   const userId = parseInt(parts[0]!, 10);
   const firstName = Buffer.from(parts[1]!, "base64url").toString("utf8");
   if (isNaN(userId)) return null;
+  if (!isAllowedUser(userId)) return null;
   const iat = parseInt(parts[2]!, 10);
-  if (isNaN(iat) || Math.floor(Date.now() / 1000) - iat > SESSION_MAX_AGE_S) return null;
+  const now = nowSeconds();
+  if (isNaN(iat) || iat > now + AUTH_FUTURE_SKEW_S || now - iat > SESSION_MAX_AGE_S) {
+    return null;
+  }
   return { userId, firstName };
 }
 
@@ -79,13 +115,37 @@ export function verifyTelegramHash(data: Record<string, string>, hash: string): 
 
 export async function authRoutes(app: FastifyInstance) {
   // POST /api/auth/telegram
-  app.post("/api/auth/telegram", async (request, reply) => {
+  app.post(
+    "/api/auth/telegram",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["id", "first_name", "auth_date", "hash"],
+          additionalProperties: true,
+          properties: {
+            id: { type: "string", pattern: "^[0-9]+$" },
+            first_name: { type: "string", minLength: 1, maxLength: 128 },
+            auth_date: { type: "string", pattern: "^[0-9]+$" },
+            hash: { type: "string", pattern: "^[A-Fa-f0-9]{64}$" },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
     const body = request.body as Record<string, string>;
     const { hash, ...data } = body;
     if (!hash) return reply.status(400).send({ error: "Missing hash" });
 
     const authDate = parseInt(data["auth_date"] ?? "0", 10);
-    if (Math.floor(Date.now() / 1000) - authDate > 300) {
+    const now = nowSeconds();
+    if (!authDate || Number.isNaN(authDate)) {
+      return reply.status(400).send({ error: "Missing auth_date" });
+    }
+    if (authDate > now + AUTH_FUTURE_SKEW_S) {
+      return reply.status(401).send({ error: "Auth token from the future" });
+    }
+    if (now - authDate > TELEGRAM_LOGIN_MAX_AGE_S) {
       return reply.status(401).send({ error: "Auth token expired" });
     }
 
@@ -94,23 +154,16 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const userId = parseInt(data["id"] ?? "", 10);
-    if (!config.allowedTelegramUserIds.includes(userId)) {
+    if (!isAllowedUser(userId)) {
       return reply.status(403).send({ error: "User not allowed" });
     }
 
     const firstName = data["first_name"] ?? "";
-    const iat = Math.floor(Date.now() / 1000);
-    const isProd = process.env.NODE_ENV === "production";
-    reply.setCookie("session", signSession(userId, firstName, iat), {
-      httpOnly: true,
-      sameSite: isProd ? "none" : "lax",
-      secure: isProd,
-      maxAge: 604800,
-      path: "/",
-    });
+    setSessionCookie(reply, userId, firstName);
 
     return { ok: true };
-  });
+    },
+  );
 
   // GET /api/me
   app.get("/api/me", async (request, reply) => {
@@ -121,11 +174,31 @@ export async function authRoutes(app: FastifyInstance) {
     return { telegram_user_id: session.userId, first_name: session.firstName };
   });
 
+  // POST /api/logout
+  app.post("/api/logout", async (_request, reply) => {
+    clearSessionCookie(reply);
+    return { ok: true };
+  });
+
   // POST /api/auth/telegram-webapp — used by the Telegram Mini App. The
   // browser-side WebApp SDK exposes `Telegram.WebApp.initData` (a signed
   // query-string); we validate it server-side, allowlist-check, and issue
   // the same session cookie the Telegram-Login OAuth flow uses.
-  app.post("/api/auth/telegram-webapp", async (request, reply) => {
+  app.post(
+    "/api/auth/telegram-webapp",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["initData"],
+          additionalProperties: false,
+          properties: {
+            initData: { type: "string", minLength: 1, maxLength: 8192 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
     const body = (request.body ?? {}) as { initData?: string };
     if (!body.initData) {
       return reply.status(400).send({ error: "Missing initData" });
@@ -136,24 +209,13 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(401).send({ error: result.error });
     }
 
-    if (!config.allowedTelegramUserIds.includes(result.user.id)) {
+    if (!isAllowedUser(result.user.id)) {
       return reply.status(403).send({ error: "User not allowed" });
     }
 
-    const iat = Math.floor(Date.now() / 1000);
-    const isProd = process.env.NODE_ENV === "production";
-    reply.setCookie(
-      "session",
-      signSession(result.user.id, result.user.first_name, iat),
-      {
-        httpOnly: true,
-        sameSite: isProd ? "none" : "lax",
-        secure: isProd,
-        maxAge: 604800,
-        path: "/",
-      },
-    );
+    setSessionCookie(reply, result.user.id, result.user.first_name);
 
     return { ok: true };
-  });
+    },
+  );
 }

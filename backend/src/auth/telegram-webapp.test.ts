@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 // hoists them). Use vi.hoisted() so the test bot token is in scope for both
 // the mock and the test bodies below.
 const { TEST_BOT_TOKEN } = vi.hoisted(() => ({
-  TEST_BOT_TOKEN: "1234567890:test-bot-token-for-unit-tests",
+  TEST_BOT_TOKEN: "1234567890:test-bot-token-for-unit-tests", // secret-scan: allow
 }));
 
 vi.mock("../config.js", () => ({
@@ -85,6 +85,17 @@ describe("verifyWebAppInitData", () => {
     const result = verifyWebAppInitData(initData);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe("expired");
+  });
+
+  it("rejects when auth_date is too far in the future", () => {
+    const future = Math.floor(Date.now() / 1000) + 120;
+    const initData = buildInitData(TEST_BOT_TOKEN, {
+      user: { id: 555, first_name: "Subash" },
+      authDate: future,
+    });
+    const result = verifyWebAppInitData(initData);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toBe("future auth_date");
   });
 
   it("rejects when user JSON is missing first_name", () => {

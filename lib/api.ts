@@ -34,6 +34,7 @@ export interface Expense {
   currency: string
   description: string | null
   merchant: string | null
+  category_id: string | null
   category: string | null
   source: string
   occurred_at: string
@@ -90,6 +91,10 @@ export function getMe(): Promise<Me> {
   return apiFetch<Me>('/api/me')
 }
 
+export async function logout(): Promise<void> {
+  await apiFetch<{ ok: boolean }>('/api/logout', { method: 'POST' })
+}
+
 export function getExpenseSummary(): Promise<ExpenseSummary> {
   return apiFetch<ExpenseSummary>('/api/expenses/summary')
 }
@@ -110,6 +115,36 @@ export function getExpenses(params: {
   if (params.category) q.set('category', params.category)
   if (params.source) q.set('source', params.source)
   return apiFetch<ExpensePage>(`/api/expenses?${q}`)
+}
+
+export interface ExpenseUpdateInput {
+  amount_cents?: number
+  currency?: string
+  description?: string | null
+  merchant?: string | null
+  category_id?: string | null
+  occurred_at?: string
+}
+
+export function updateExpense(id: string, data: ExpenseUpdateInput): Promise<Expense> {
+  return apiFetch<Expense>(`/api/expenses/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteExpense(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/expenses/${id}`, { method: 'DELETE' })
+}
+
+export async function mergeExpense(id: string, duplicateId: string): Promise<Expense> {
+  const res = await apiFetch<{ ok: boolean; expense: Expense }>(`/api/expenses/${id}/merge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ duplicateId }),
+  })
+  return res.expense
 }
 
 export function getCategories(): Promise<Category[]> {

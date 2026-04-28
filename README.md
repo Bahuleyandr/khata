@@ -104,16 +104,18 @@ Setup, manifests, and the day-to-day `make deploy` flow live in [deploy/README.m
 
 See `backend/.env.example` for the full list. Never commit a `.env` file — it is gitignored.
 
-## CI
+## CI and local guardrails
 
-GitHub Actions runs lint + tests on every push that touches `backend/`. See [`.github/workflows/backend-ci.yml`](.github/workflows/backend-ci.yml).
+GitHub Actions defines frontend CI, backend CI, and a standalone tracked-file secret scan. Dependabot is configured for root npm, backend npm, Dockerfiles, and GitHub Actions.
 
 > **Note (2026-04):** GHA on this account is currently billing-blocked, so every workflow run fails before it starts. **Red checks are not a code signal** — verification is local:
 >
 > ```bash
-> npm ci && npm run lint && npm test -- --run        # frontend
-> cd backend && npm ci && npm run lint && npm test && npm run build
+> npm ci && npm run hooks:install && npm run verify
+> cd backend && npm ci && npm run verify
 > ```
+
+The tracked pre-push hook blocks accidental direct pushes to `main` and runs the secret scanner before pushes. GitHub branch protection is still recommended when available for the repository plan.
 
 Pushing CI workflow files requires a token with `workflow` scope:
 
@@ -171,6 +173,12 @@ The dashboard also runs as a **Telegram Mini App** — a webview embedded direct
 **Open the Mini App:** tap the menu button next to the bot's chat input, or send `/dashboard` and tap the inline "Open Dashboard" button. The dashboard opens inside Telegram, auto-authenticated as the Telegram user — same allowlist, same session cookie as the OAuth path.
 
 **Auth model:** the WebApp `initData` is HMAC-signed by Telegram with the bot token. `verifyWebAppInitData` ([backend/src/auth/telegram-webapp.ts](backend/src/auth/telegram-webapp.ts)) validates the signature server-side, then enforces the `ALLOWED_TELEGRAM_USER_IDS` allowlist before issuing a session cookie. Only initData younger than 24h is accepted.
+
+## Security notes
+
+Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-checks `ALLOWED_TELEGRAM_USER_IDS`, so removing a Telegram ID invalidates its next request even before the cookie expires. Logout calls `POST /api/logout` and clears the cookie server-side.
+
+The current dashboard API is read-only apart from auth/logout. Before adding mutating dashboard APIs, keep SameSite/CSRF posture explicit: same-origin POSTs should either stay `sameSite: lax` for Tailnet-only browser flows or add a CSRF token if cross-site Mini App cookie behavior requires `sameSite: none`.
 
 ## Runbook
 

@@ -11,6 +11,10 @@ const DEFAULT_CATEGORIES = [
   "Other",
 ];
 
+function normalizeCategoryName(name: string): string {
+  return name.trim().replace(/\s+/g, " ");
+}
+
 export async function seedDefaultCategories(userId: number): Promise<void> {
   for (const name of DEFAULT_CATEGORIES) {
     await sql`
@@ -35,9 +39,11 @@ export async function getCategoryByName(
   userId: number,
   name: string,
 ): Promise<{ id: string; name: string } | null> {
+  const display = normalizeCategoryName(name);
+  if (!display) return null;
   const [row] = await sql<Array<{ id: string; name: string }>>`
     SELECT id, name FROM categories
-    WHERE user_id = ${userId} AND LOWER(name) = LOWER(${name})
+    WHERE user_id = ${userId} AND LOWER(name) = LOWER(${display})
   `;
   return row ?? null;
 }
@@ -47,31 +53,43 @@ export async function renameCategory(
   oldName: string,
   newName: string,
 ): Promise<boolean> {
+  const oldDisplay = normalizeCategoryName(oldName);
+  const newDisplay = normalizeCategoryName(newName);
+  if (!oldDisplay || !newDisplay) return false;
   const result = await sql`
     UPDATE categories
-    SET name = ${newName}
-    WHERE user_id = ${userId} AND LOWER(name) = LOWER(${oldName})
+    SET name = ${newDisplay}
+    WHERE user_id = ${userId}
+      AND LOWER(name) = LOWER(${oldDisplay})
+      AND NOT EXISTS (
+        SELECT 1 FROM categories existing
+        WHERE existing.user_id = ${userId}
+          AND LOWER(existing.name) = LOWER(${newDisplay})
+          AND LOWER(existing.name) <> LOWER(${oldDisplay})
+      )
     RETURNING id
   `;
   return result.length > 0;
 }
 
 export async function addCategory(userId: number, name: string): Promise<boolean> {
-  try {
-    await sql`
-      INSERT INTO categories (user_id, name, is_default)
-      VALUES (${userId}, ${name}, false)
-    `;
-    return true;
-  } catch {
-    return false; // unique constraint violation
-  }
+  const display = normalizeCategoryName(name);
+  if (!display) return false;
+  const result = await sql`
+    INSERT INTO categories (user_id, name, is_default)
+    VALUES (${userId}, ${display}, false)
+    ON CONFLICT DO NOTHING
+    RETURNING id
+  `;
+  return result.length > 0;
 }
 
 export async function deleteCategory(userId: number, name: string): Promise<boolean> {
+  const display = normalizeCategoryName(name);
+  if (!display) return false;
   const result = await sql`
     DELETE FROM categories
-    WHERE user_id = ${userId} AND LOWER(name) = LOWER(${name}) AND is_default = false
+    WHERE user_id = ${userId} AND LOWER(name) = LOWER(${display}) AND is_default = false
     RETURNING id
   `;
   return result.length > 0;

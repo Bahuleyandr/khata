@@ -5,6 +5,15 @@ import { getSession } from "./auth.js";
 const XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+const exportQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    year: { type: "integer", minimum: 2000, maximum: 2100 },
+    month: { type: "integer", minimum: 1, maximum: 12 },
+  },
+} as const;
+
 export async function exportRoutes(app: FastifyInstance) {
   /**
    * GET /api/export/xlsx?year=YYYY&month=MM
@@ -13,15 +22,16 @@ export async function exportRoutes(app: FastifyInstance) {
    * authenticated user. Year/month default to the current month if omitted.
    * Browser sees a download via Content-Disposition.
    */
-  app.get<{ Querystring: { year?: string; month?: string } }>(
+  app.get<{ Querystring: { year?: number; month?: number } }>(
     "/api/export/xlsx",
+    { schema: { querystring: exportQuerySchema } },
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
 
       const now = new Date();
-      const year = parseInt(request.query.year ?? String(now.getFullYear()), 10);
-      const month = parseInt(request.query.month ?? String(now.getMonth() + 1), 10);
+      const year = Number(request.query.year ?? now.getFullYear());
+      const month = Number(request.query.month ?? now.getMonth() + 1);
       if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
         return reply.status(400).send({ error: "Invalid year/month" });
       }

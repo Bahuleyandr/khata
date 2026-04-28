@@ -1,13 +1,17 @@
 # Run on Dalekdefender after `git pull`. Single-node k3s assumed.
 #
 # First-time setup:
-#   make deploy             # build both images, import, apply manifests
+#   make namespace          # create the khata namespace
 #   make secrets            # interactive create of khata-secrets (one-time)
-#   make migrate            # run schema migrations (one-time per fresh DB)
+#   make deploy             # build both images, import, apply manifests
+#   make minio-bucket       # create the receipt/statement bucket
+#   make migrate            # run schema migrations
 #   make tailscale-serve    # bind Tailscale Serve to localhost:80
+#   make smoke              # verify backend/frontend are reachable
 #
 # Day-to-day:
 #   make deploy             # rebuild + reapply after `git pull`
+#   make backup             # local timestamped Postgres + MinIO backup
 #   make logs               # tail backend logs
 #   make status             # see pods/services/ingress
 #
@@ -24,9 +28,12 @@ ROOT           := $(realpath $(DEPLOY_DIR)/..)
 # from a static build). Override via env if you change bots:
 #   BOT_USERNAME=other_bot make build-frontend
 BOT_USERNAME ?= Apoorva_Expense_Tracker_bot
+BACKUP_DIR ?= $(ROOT)/backups/$$(date -u +%Y%m%dT%H%M%SZ)
+BACKUP_FILE ?=
 
 .PHONY: build build-backend build-frontend import import-backend import-frontend \
-        deploy migrate logs status secrets restart undeploy tailscale-serve tailscale-status
+        deploy namespace migrate logs status secrets restart undeploy tailscale-serve \
+        tailscale-status minio-bucket backup backup-postgres backup-minio restore-dry-run smoke
 
 build: build-backend build-frontend
 
@@ -46,13 +53,16 @@ import-backend:
 import-frontend:
 	docker save $(FRONTEND_IMAGE) | sudo k3s ctr images import -
 
-deploy: build import
+namespace:
 	kubectl apply -f $(DEPLOY_DIR)/k8s/00-namespace.yaml
+
+deploy: build import namespace
 	kubectl apply -f $(DEPLOY_DIR)/k8s/15-minio.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/20-postgres.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/30-backend.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/40-frontend.yaml
 	kubectl apply -f $(DEPLOY_DIR)/k8s/50-ingress.yaml
+	kubectl apply -f $(DEPLOY_DIR)/k8s/60-backups.yaml
 	kubectl rollout restart deployment/khata-backend  -n $(NS)
 	kubectl rollout restart deployment/khata-frontend -n $(NS)
 
@@ -68,6 +78,30 @@ minio-bucket:
 
 migrate:
 	kubectl exec -n $(NS) deploy/khata-backend -- node dist/db/migrate.js
+
+backup: backup-postgres backup-minio
+	@echo "Backup complete: $(BACKUP_DIR)"
+
+backup-postgres:
+	@mkdir -p "$(BACKUP_DIR)"
+	kubectl exec -n $(NS) deploy/khata-postgres -- pg_dump -U khata -d khata --format=custom --no-owner --no-acl > "$(BACKUP_DIR)/khata-postgres.dump"
+
+backup-minio:
+	@mkdir -p "$(BACKUP_DIR)"
+	kubectl exec -n $(NS) deploy/khata-minio -- tar -C /data -cz . > "$(BACKUP_DIR)/khata-minio-data.tgz"
+
+restore-dry-run:
+	@test -n "$(BACKUP_FILE)" || (echo "Set BACKUP_FILE=/path/to/khata-postgres.dump"; exit 1)
+	@cat "$(BACKUP_FILE)" | kubectl exec -i -n $(NS) deploy/khata-postgres -- pg_restore --list >/dev/null
+	@echo "Postgres backup is readable: $(BACKUP_FILE)"
+
+smoke:
+	kubectl rollout status deployment/khata-postgres -n $(NS) --timeout=120s
+	kubectl rollout status deployment/khata-minio -n $(NS) --timeout=120s
+	kubectl rollout status deployment/khata-backend -n $(NS) --timeout=120s
+	kubectl rollout status deployment/khata-frontend -n $(NS) --timeout=120s
+	kubectl get cronjob/khata-postgres-backup -n $(NS)
+	kubectl exec -n $(NS) deploy/khata-backend -- node -e "fetch('http://localhost:3001/health').then(r=>{if(!r.ok)process.exit(1);return r.text()}).then(console.log)"
 
 logs:
 	kubectl logs -n $(NS) -l app=khata-backend -f --tail=100

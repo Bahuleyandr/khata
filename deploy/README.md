@@ -28,7 +28,7 @@ Tailnet device  ─►  Tailscale edge  ─►  cloudflared/wireguard  ─►  T
 | Frontend | k3s Deployment `khata-frontend` (nginx + Next.js static export) | Path `/` on the Tailscale hostname |
 | Backend | k3s Deployment `khata-backend` (Fastify + grammy long-polling + MiniMax MCP subprocess) | Paths `/api/*` and `/health` |
 | Postgres | k3s Deployment `khata-postgres` + PVC `khata-postgres-data` (5Gi local-path) | `khata-postgres.khata.svc.cluster.local:5432` |
-| Statement / receipt blobs | Cloudflare R2 | External; presigned URLs from backend |
+| Statement / receipt blobs | k3s Deployment `khata-minio` + PVC `khata-minio-data` (10Gi local-path) | Served through authenticated backend proxy routes |
 | LLM (text) | MiniMax `MiniMax-M2.7-highspeed` via `https://api.minimax.io/v1` | OpenAI-compat chat-completions |
 | LLM (vision) | MiniMax MCP `understand_image` | `uvx minimax-coding-plan-mcp` subprocess inside the backend Pod |
 | Public ingress | Tailscale Serve → host port 80 → Traefik → Service | TLS terminated by Tailscale at the edge |
@@ -61,10 +61,13 @@ This whitelists the Tailscale hostname for the Telegram Login Widget. Without it
 git clone https://github.com/Bahuleyandr/khata.git ~/khata
 cd ~/khata/deploy
 
-make deploy             # builds both images, imports into k3s containerd, applies manifests
+make namespace          # creates the khata namespace
 make secrets            # interactive prompts for each secret (one-time)
-make migrate            # one-time per fresh DB
+make deploy             # builds both images, imports into k3s containerd, applies manifests
+make minio-bucket       # creates the in-cluster object bucket
+make migrate            # applies pending schema migrations
 make tailscale-serve    # binds https://<your-host>.<tailnet>.ts.net to localhost:80
+make smoke              # verifies rollouts + backend health
 make status             # verify everything is Running and Tailscale Serve is bound
 ```
 
@@ -97,11 +100,16 @@ Both images get rebuilt and re-imported; the deployments roll restart automatica
 
 | Command | What it does |
 |---|---|
+| `make namespace` | Create/update the `khata` namespace |
 | `make build` | Build backend and frontend Docker images |
 | `make import` | Load both images into k3s containerd (no external registry needed) |
 | `make deploy` | Build + import + apply manifests + rollout restart |
 | `make secrets` | Interactive create of `khata-secrets` Secret |
+| `make minio-bucket` | Create the MinIO bucket from `khata-secrets` |
 | `make migrate` | Apply pending Postgres schema migrations |
+| `make backup` | Write a timestamped local Postgres dump + MinIO data tarball under `backups/` |
+| `make restore-dry-run BACKUP_FILE=...` | Verify a Postgres custom-format dump is readable |
+| `make smoke` | Wait for rollouts, verify the backup CronJob exists, and hit backend `/health` from inside the cluster |
 | `make logs` | Tail backend logs (look for `LLM ` lines for per-call usage) |
 | `make status` | `kubectl get all -n khata` + ingress + tailscale serve status |
 | `make restart` | Restart both deployments |
@@ -116,11 +124,32 @@ Both images get rebuilt and re-imported; the deployments roll restart automatica
 - **Local-path-provisioner** for the Postgres PVC. Default in k3s.
 - **No public IPv4 needed.** Tailscale Serve only exposes the dashboard to other devices on your tailnet.
 - **No Cloudflare, no public DNS, no Let's Encrypt dance.** Tailscale handles all of it.
+- **Pinned runtime inputs:** backend/frontend Dockerfiles pin Node/nginx tags; k8s pins Postgres and MinIO tags; backend image pins `minimax-coding-plan-mcp` and a `whisper.cpp` commit.
 - **MCP subprocess** lives inside the backend Pod. First call after a fresh Pod start has ~1s extra latency for `uvx` warmup; subsequent calls are fast (cached package).
 
-## Backups (TODO)
+## Backups
 
-Postgres data is on a single PVC on Dalekdefender's NVMe. No automated backups yet. Recommended: nightly `pg_dump` cron shipping to R2 — will add as a follow-up.
+Postgres and MinIO data are both single-node PVCs on Dalekdefender, so a node/disk failure is a real data-loss event. The cluster applies `deploy/k8s/60-backups.yaml`, which runs a nightly Postgres `pg_dump` at 00:00 IST into PVC `khata-backups-data` and prunes dumps older than 14 days.
+
+Run a manual off-node/export backup before migrations and on a schedule:
+
+```bash
+cd ~/khata/deploy
+make backup
+```
+
+That writes:
+
+- `backups/<timestamp>/khata-postgres.dump` — custom-format `pg_dump`
+- `backups/<timestamp>/khata-minio-data.tgz` — tarball of the MinIO `/data` volume
+
+Dry-check a Postgres dump before trusting it:
+
+```bash
+make restore-dry-run BACKUP_FILE=~/khata/backups/<timestamp>/khata-postgres.dump
+```
+
+For real resilience, sync `backups/` off the box after creation (R2, another NAS, or encrypted cloud storage). Keep at least one restore-tested copy away from Dalekdefender.
 
 ## Switching the model on a per-intent basis
 

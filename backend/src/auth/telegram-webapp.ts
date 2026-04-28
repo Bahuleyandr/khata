@@ -12,7 +12,7 @@ import { config } from "../config.js";
  *   3. secret_key = HMAC_SHA256(key="WebAppData", data=bot_token)
  *   4. expected_hash = HMAC_SHA256(key=secret_key, data=check_string)
  *   5. Constant-time compare expected_hash with provided `hash`.
- *   6. Reject if `auth_date` is older than MAX_AGE_S.
+ *   6. Reject if `auth_date` is older than MAX_AGE_S or implausibly future-dated.
  *
  * Reference: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
  */
@@ -32,6 +32,7 @@ export type WebAppValidationResult =
 // 24h — long enough to stay logged in across a session, short enough that a
 // stolen initData can't grant indefinite access.
 const MAX_AGE_S = 24 * 60 * 60;
+const FUTURE_SKEW_S = 60;
 
 export function verifyWebAppInitData(initData: string): WebAppValidationResult {
   if (!initData) return { ok: false, error: "empty initData" };
@@ -75,7 +76,11 @@ export function verifyWebAppInitData(initData: string): WebAppValidationResult {
   if (!authDate || Number.isNaN(authDate)) {
     return { ok: false, error: "missing auth_date" };
   }
-  if (Math.floor(Date.now() / 1000) - authDate > MAX_AGE_S) {
+  const now = Math.floor(Date.now() / 1000);
+  if (authDate > now + FUTURE_SKEW_S) {
+    return { ok: false, error: "future auth_date" };
+  }
+  if (now - authDate > MAX_AGE_S) {
     return { ok: false, error: "expired" };
   }
 

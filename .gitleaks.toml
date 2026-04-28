@@ -1,0 +1,13 @@
+title = "Khata gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented fake secrets used only by route tests."
+paths = [
+  '''(^|/)backend/src/routes/dashboard\.test\.ts$''',
+]
+regexes = [
+  '''test-secret-that-is-at-least-32-chars-long''',
+]

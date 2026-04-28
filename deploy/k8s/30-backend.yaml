@@ -19,10 +19,17 @@ spec:
       labels:
         app: khata-backend
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
           image: khata-backend:latest
           imagePullPolicy: Never # built locally + loaded via `k3s ctr images import`
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 3001
           envFrom:

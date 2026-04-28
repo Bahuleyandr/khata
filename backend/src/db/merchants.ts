@@ -30,11 +30,19 @@ export async function getOrCreateMerchantCanonical(
   if (existing?.id) return existing.id;
 
   const [created] = await sql<Array<{ id: string }>>`
-    INSERT INTO merchants_canonical (user_id, name) VALUES (${userId}, ${display})
-    ON CONFLICT (user_id, name) DO UPDATE SET name = EXCLUDED.name
+    INSERT INTO merchants_canonical (user_id, name)
+    VALUES (${userId}, ${display})
+    ON CONFLICT DO NOTHING
     RETURNING id
   `;
-  return created?.id ?? null;
+  if (created?.id) return created.id;
+
+  const [raced] = await sql<Array<{ id: string }>>`
+    SELECT id FROM merchants_canonical
+    WHERE user_id = ${userId} AND lower(name) = ${lookup}
+    LIMIT 1
+  `;
+  return raced?.id ?? null;
 }
 
 /**
