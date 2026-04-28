@@ -157,6 +157,7 @@ function DashboardActionCards({ summary }: { summary: ExpenseSummary }) {
     .filter((budget) => budget.projected_variance_cents > 0)
     .sort((a, b) => b.projected_variance_cents - a.projected_variance_cents)
   const topMerchant = summary.merchants.top[0]
+  const topSubscription = summary.subscriptions[0]
 
   return (
     <div className="grid-3 action-grid">
@@ -179,6 +180,20 @@ function DashboardActionCards({ summary }: { summary: ExpenseSummary }) {
         <span className="eyebrow">Merchant trend</span>
         <h3>{topMerchant?.name ?? 'No merchant data'}</h3>
         <p>{topMerchant ? `${formatCents(topMerchant.total_cents)} across ${topMerchant.count}` : 'Log expenses to see trends.'}</p>
+      </div>
+      <div className="card compact-card">
+        <span className="eyebrow">Subscriptions</span>
+        <h3>{topSubscription?.name ?? 'No strong signals'}</h3>
+        <p>
+          {topSubscription
+            ? `${topSubscription.cadence} · ${formatCents(topSubscription.monthly_estimate_cents)} / mo · ${topSubscription.confidence}%`
+            : 'Recurring charges need stable cadence and amount.'}
+        </p>
+        {topSubscription ? (
+          <Link href={`/transactions?merchant=${encodeURIComponent(topSubscription.name)}`} className="text-link">
+            Review charges
+          </Link>
+        ) : null}
       </div>
 
       {summary.budgets.length > 0 ? (
@@ -218,6 +233,34 @@ function DashboardActionCards({ summary }: { summary: ExpenseSummary }) {
               <span key={`new-${merchant.name}`}>New: {merchant.name} at {formatCents(merchant.total_cents)}</span>
             ))}
           </div>
+        </div>
+      ) : null}
+
+      {summary.subscriptions.length > 0 ? (
+        <div className="card compact-card wide-card">
+          <h3>Subscription Watch</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Merchant</th>
+                <th>Cadence</th>
+                <th style={{ textAlign: 'right' }}>Monthly</th>
+                <th style={{ textAlign: 'right' }}>Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.subscriptions.slice(0, 6).map((subscription) => (
+                <tr key={subscription.name}>
+                  <td>{subscription.name}</td>
+                  <td>{subscription.cadence}</td>
+                  <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                    {formatCents(subscription.monthly_estimate_cents)}
+                  </td>
+                  <td style={{ textAlign: 'right' }}>{subscription.confidence}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       ) : null}
     </div>

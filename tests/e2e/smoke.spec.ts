@@ -96,6 +96,20 @@ async function mockApi(page: Page) {
       new: [{ name: 'OpenAI Cafe', total_cents: '125000', count: 1 }],
       spikes: [],
     },
+    subscriptions: [{
+      name: 'MiniMax',
+      count: 3,
+      total_cents: '149700',
+      first_seen: '2026-02-01',
+      last_seen: '2026-04-01',
+      cadence: 'monthly',
+      confidence: 100,
+      avg_amount_cents: '49900',
+      monthly_estimate_cents: '49900',
+      avg_interval_days: 30,
+      interval_jitter_days: 1.5,
+      amount_variance_pct: 0,
+    }],
     narrative: 'April 2026: ₹1,250 across 1 transaction. Top category is Food.',
   }
   await page.route('**/api/review/monthly**', (route) =>
@@ -195,6 +209,7 @@ test('login and dashboard shell render', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   await expect(page.getByText(/Top category is Food/)).toBeVisible()
   await expect(page.getByText('Budget Pace')).toBeVisible()
+  await expect(page.getByText('Subscription Watch')).toBeVisible()
 })
 
 test('monthly review checklist renders action links', async ({ page }) => {
@@ -225,5 +240,6 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByText('Categories')).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()
   await expect(page.getByText('#team')).toBeVisible()
+  await expect(page.getByLabel('Statement file')).toBeVisible()
   await expect(page.getByText('expense update')).toBeVisible()
 })

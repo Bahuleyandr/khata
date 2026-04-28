@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { sql } from "../db/index.js";
 import { recordAuditEvent } from "../db/audit.js";
 import { getBudgetsWithMtd } from "../db/budgets.js";
+import { findSubscriptionCandidates } from "../db/query.js";
 import { getOrCreateMerchantCanonical, setMerchantCategory } from "../db/merchants.js";
 import { attachTagToExpense, getOrCreateTag, getTagsForExpenses } from "../db/tags.js";
 import { currentMonthBounds } from "../export/xlsx.js";
@@ -939,7 +940,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       previous_avg_cents: string;
     };
 
-    const [categoryTotals, recentExpenses, topMerchants, newMerchants, spikes, budgets] = await Promise.all([
+    const [categoryTotals, recentExpenses, topMerchants, newMerchants, spikes, budgets, subscriptions] = await Promise.all([
       sql<CategoryTotal[]>`
         SELECT COALESCE(c.name, 'Uncategorized') AS category,
                SUM(e.amount_cents)::text AS total_cents,
@@ -1038,6 +1039,7 @@ export async function expensesRoutes(app: FastifyInstance) {
         LIMIT 5
       `,
       getBudgetsWithMtd(session.userId, bounds.rangeKey),
+      findSubscriptionCandidates(session.userId, 6, 2),
     ]);
 
     const totalCents = categoryTotals.reduce((sum, row) => sum + Number(row.total_cents), 0);
@@ -1082,6 +1084,20 @@ export async function expensesRoutes(app: FastifyInstance) {
         new: newMerchants,
         spikes,
       },
+      subscriptions: subscriptions.map((subscription) => ({
+        name: subscription.merchant,
+        count: subscription.count,
+        total_cents: subscription.total_cents,
+        first_seen: subscription.first_seen,
+        last_seen: subscription.last_seen,
+        cadence: subscription.cadence,
+        confidence: subscription.confidence,
+        avg_amount_cents: subscription.avg_amount_cents,
+        monthly_estimate_cents: subscription.monthly_estimate_cents,
+        avg_interval_days: subscription.avg_interval_days,
+        interval_jitter_days: subscription.interval_jitter_days,
+        amount_variance_pct: subscription.amount_variance_pct,
+      })),
       narrative,
     };
     },

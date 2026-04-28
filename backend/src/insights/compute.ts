@@ -1,5 +1,5 @@
 import { sql } from "../db/index.js";
-import { findRecurring } from "../db/query.js";
+import { findSubscriptionCandidates } from "../db/query.js";
 
 // Each insight kind has its own payload shape. The dashboard switches on the
 // row's `kind` column to know which type the payload is.
@@ -31,6 +31,13 @@ export interface RecurringPayload {
     total_cents: number;
     first_seen: string;
     last_seen: string;
+    cadence: string;
+    confidence: number;
+    avg_amount_cents: number;
+    monthly_estimate_cents: number;
+    avg_interval_days: number | null;
+    interval_jitter_days: number | null;
+    amount_variance_pct: number;
   }>;
 }
 
@@ -157,10 +164,10 @@ async function computeTopMerchantsMtd(userId: number): Promise<TopMerchantsMtdPa
 }
 
 async function computeRecurring(userId: number): Promise<RecurringPayload> {
-  // Reuse the chat-agent helper: merchants charged ≥3 times in the last 3
-  // months. Tighter than /ask's defaults — the dashboard wants only the
-  // strongest subscription signals.
-  const rows = await findRecurring(userId, 3, 3);
+  // Dashboard recurring detection weights regular cadence and amount stability,
+  // not just occurrence count. That keeps one-off frequent merchants out of the
+  // subscription list.
+  const rows = await findSubscriptionCandidates(userId, 6, 2);
   return {
     merchants: rows.slice(0, 8).map((r) => ({
       name: r.merchant,
@@ -168,6 +175,13 @@ async function computeRecurring(userId: number): Promise<RecurringPayload> {
       total_cents: parseInt(r.total_cents, 10),
       first_seen: r.first_seen,
       last_seen: r.last_seen,
+      cadence: r.cadence,
+      confidence: r.confidence,
+      avg_amount_cents: parseInt(r.avg_amount_cents, 10),
+      monthly_estimate_cents: parseInt(r.monthly_estimate_cents, 10),
+      avg_interval_days: r.avg_interval_days,
+      interval_jitter_days: r.interval_jitter_days,
+      amount_variance_pct: r.amount_variance_pct,
     })),
   };
 }

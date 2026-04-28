@@ -198,6 +198,8 @@ export default function TransactionsPage() {
     if (params.get('duplicates') === 'true') setDuplicates(true)
     const qsTag = params.get('tag')
     if (qsTag) setTag(qsTag)
+    const qsMerchant = params.get('merchant')
+    if (qsMerchant) setMerchant(qsMerchant)
   }, [])
 
   useEffect(() => {

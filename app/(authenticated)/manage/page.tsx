@@ -14,6 +14,7 @@ import {
   renameCategory,
   retryStatement,
   setBudget,
+  uploadStatement,
   type AuditEvent,
   type BudgetVariance,
   type Category,
@@ -59,6 +60,9 @@ export default function ManagePage() {
   const [newCategory, setNewCategory] = useState('')
   const [budgetCategory, setBudgetCategory] = useState('')
   const [budgetAmount, setBudgetAmount] = useState('')
+  const [statementFile, setStatementFile] = useState<File | null>(null)
+  const [statementInputKey, setStatementInputKey] = useState(0)
+  const [statementUploadResult, setStatementUploadResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -111,6 +115,19 @@ export default function ManagePage() {
     }
     await setBudget(budgetCategory, cents)
     setBudgetAmount('')
+  }
+
+  async function uploadSelectedStatement() {
+    if (!statementFile) {
+      setError('Choose a PDF or statement image first.')
+      return
+    }
+    const result = await uploadStatement(statementFile)
+    setStatementUploadResult(
+      `${result.parsed_count} parsed · ${result.imported_count} imported · ${result.duplicate_count} duplicates`,
+    )
+    setStatementFile(null)
+    setStatementInputKey((key) => key + 1)
   }
 
   return (
@@ -197,6 +214,27 @@ export default function ManagePage() {
 
         <section className="card workspace-card">
           <h3>Statement Imports</h3>
+          <div className="statement-upload-panel">
+            <input
+              key={statementInputKey}
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,image/webp,image/gif"
+              onChange={(e) => {
+                setStatementFile(e.target.files?.[0] ?? null)
+                setStatementUploadResult(null)
+              }}
+              aria-label="Statement file"
+            />
+            <button
+              type="button"
+              className="button-primary"
+              onClick={() => void run(uploadSelectedStatement)}
+              disabled={busy || !statementFile}
+            >
+              Upload
+            </button>
+            {statementUploadResult ? <span>{statementUploadResult}</span> : null}
+          </div>
           <div className="statement-list">
             {statements.length === 0 ? <p>No statement imports yet.</p> : statements.map((statement) => (
               <div key={statement.id} className="statement-row">

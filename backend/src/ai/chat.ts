@@ -3,7 +3,7 @@ import { llm } from "./client.js";
 import { withHttpUsage } from "./usage.js";
 import {
   findExpensesAtMerchant,
-  findRecurring,
+  findSubscriptionCandidates,
   spendByCategory,
   topExpenses,
   totalSpendInCategory,
@@ -78,7 +78,7 @@ const TOOLS = [
     function: {
       name: "find_recurring",
       description:
-        "Detect recurring expenses (merchants charged >= min_occurrences times in the last N months). Use to find subscriptions.",
+        "Detect likely subscriptions using recurring charge cadence, amount stability, and confidence scoring.",
       parameters: {
         type: "object",
         properties: {
@@ -164,7 +164,7 @@ async function executeTool(
     case "find_recurring": {
       const lookback = Math.max(1, Math.min(36, Number(args["lookback_months"] ?? 6)));
       const minOcc = Math.max(2, Math.min(50, Number(args["min_occurrences"] ?? 3)));
-      return findRecurring(userId, lookback, minOcc);
+      return findSubscriptionCandidates(userId, lookback, minOcc);
     }
     case "find_expenses_at_merchant": {
       const limit = Math.max(1, Math.min(100, Number(args["limit"] ?? 20)));

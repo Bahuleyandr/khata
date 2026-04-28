@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 import crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +12,18 @@ const merchantMocks = vi.hoisted(() => ({
 }));
 const storageMocks = vi.hoisted(() => ({
   getObjectStream: vi.fn(),
+  uploadStatement: vi.fn(),
+}));
+const statementParserMocks = vi.hoisted(() => ({
+  parseStatementBuffer: vi.fn(),
+}));
+const statementDedupMocks = vi.hoisted(() => ({
+  dedupeTransactions: vi.fn(),
+}));
+const statementImporterMocks = vi.hoisted(() => ({
+  bulkInsertTransactions: vi.fn(),
+  createStatementRecord: vi.fn(),
+  updateStatementStatus: vi.fn(),
 }));
 
 vi.mock("../config.js", () => ({
@@ -33,6 +46,9 @@ vi.mock("../config.js", () => ({
 vi.mock("../db/index.js", () => ({ sql: sqlMock }));
 vi.mock("../db/merchants.js", () => merchantMocks);
 vi.mock("../storage/index.js", () => storageMocks);
+vi.mock("../statement/parser.js", () => statementParserMocks);
+vi.mock("../statement/dedup.js", () => statementDedupMocks);
+vi.mock("../statement/importer.js", () => statementImporterMocks);
 
 import { authRoutes, signSession } from "./auth.js";
 import { auditRoutes } from "./audit.js";
@@ -43,12 +59,14 @@ import { installCsrfOriginGuard } from "./csrf.js";
 import { expensesRoutes } from "./expenses.js";
 import { monthlyReviewRoutes } from "./monthly-review.js";
 import { receiptsRoutes } from "./receipts.js";
+import { statementsRoutes } from "./statements.js";
 import { tagsRoutes } from "./tags.js";
 
 const EXPENSE_ID = "11111111-1111-4111-8111-111111111111";
 const DUPLICATE_ID = "22222222-2222-4222-8222-222222222222";
 const CATEGORY_ID = "33333333-3333-4333-8333-333333333333";
 const TAG_ID = "44444444-4444-4444-8444-444444444444";
+const STATEMENT_ID = "55555555-5555-4555-8555-555555555555";
 
 function authCookie(): string {
   return `session=${signSession(12345, "Subash", Math.floor(Date.now() / 1000))}`;
@@ -66,6 +84,7 @@ function makeTelegramHash(data: Record<string, string>, botToken = "123456:ABCde
 async function buildApp() {
   const app = Fastify();
   await app.register(cookie);
+  await app.register(multipart);
   await installCsrfOriginGuard(app);
   await app.register(authRoutes);
   await app.register(expensesRoutes);
@@ -73,6 +92,7 @@ async function buildApp() {
   await app.register(categoriesRoutes);
   await app.register(budgetsRoutes);
   await app.register(tagsRoutes);
+  await app.register(statementsRoutes);
   await app.register(monthlyReviewRoutes);
   await app.register(auditRoutes);
   await app.ready();
@@ -86,6 +106,12 @@ describe("route hardening", () => {
     merchantMocks.getOrCreateMerchantCanonical.mockReset();
     merchantMocks.setMerchantCategory.mockReset();
     storageMocks.getObjectStream.mockReset();
+    storageMocks.uploadStatement.mockReset();
+    statementParserMocks.parseStatementBuffer.mockReset();
+    statementDedupMocks.dedupeTransactions.mockReset();
+    statementImporterMocks.bulkInsertTransactions.mockReset();
+    statementImporterMocks.createStatementRecord.mockReset();
+    statementImporterMocks.updateStatementStatus.mockReset();
   });
 
   it("clears the session cookie on logout", async () => {
@@ -362,6 +388,99 @@ describe("route hardening", () => {
           },
         ],
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("uploads a dashboard statement, imports new rows, and writes an audit event", async () => {
+    statementImporterMocks.createStatementRecord.mockResolvedValueOnce(STATEMENT_ID);
+    statementParserMocks.parseStatementBuffer.mockResolvedValueOnce([
+      {
+        date: "2026-04-28",
+        description: "Metro card",
+        amountCents: 7500,
+        currency: "INR",
+        suggestedCategory: "Transport",
+      },
+    ]);
+    statementDedupMocks.dedupeTransactions.mockResolvedValueOnce([
+      {
+        transaction: {
+          date: "2026-04-28",
+          description: "Metro card",
+          amountCents: 7500,
+          currency: "INR",
+          suggestedCategory: "Transport",
+        },
+        alreadyLogged: false,
+      },
+    ]);
+    statementImporterMocks.bulkInsertTransactions.mockResolvedValueOnce(1);
+    storageMocks.uploadStatement.mockResolvedValueOnce(undefined);
+    statementImporterMocks.updateStatementStatus.mockResolvedValue(undefined);
+    sqlMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: STATEMENT_ID,
+          file_key: `statements/12345/${STATEMENT_ID}`,
+          mime_type: "application/pdf",
+          status: "imported",
+          parsed_count: 1,
+          imported_count: 1,
+          duplicate_count: 0,
+          error_reason: null,
+          created_at: new Date("2026-04-28T00:00:00.000Z"),
+          updated_at: new Date("2026-04-28T00:01:00.000Z"),
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const boundary = "----khata-test-boundary";
+    const payload = Buffer.from(
+      [
+        `--${boundary}`,
+        'Content-Disposition: form-data; name="statement"; filename="statement.pdf"',
+        "Content-Type: application/pdf",
+        "",
+        "%PDF-1.4 test statement",
+        `--${boundary}--`,
+        "",
+      ].join("\r\n"),
+    );
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/statements/upload",
+        headers: {
+          cookie: authCookie(),
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({
+        parsed_count: 1,
+        imported_count: 1,
+        duplicate_count: 0,
+        statement: {
+          id: STATEMENT_ID,
+          status: "imported",
+        },
+      });
+      expect(storageMocks.uploadStatement).toHaveBeenCalledWith(
+        `statements/12345/${STATEMENT_ID}`,
+        expect.any(Buffer),
+        "application/pdf",
+      );
+      expect(statementParserMocks.parseStatementBuffer).toHaveBeenCalledWith(
+        expect.any(Buffer),
+        "application/pdf",
+      );
     } finally {
       await app.close();
     }

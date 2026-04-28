@@ -479,6 +479,29 @@ tr:hover td { background: #f9fafb; }
 }
 .receipt-summary strong { font-size: 1rem; }
 .receipt-summary span { color: #6b7280; font-size: 0.82rem; }
+.quick-category-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+.quick-category-row button {
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  color: #374151;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  min-height: 32px;
+  padding: 0.3rem 0.65rem;
+}
+.quick-category-row button.active {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+  color: #075985;
+  font-weight: 700;
+}
 .raw-text-panel {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -560,6 +583,26 @@ tr:hover td { background: #f9fafb; }
 .statement-list {
   display: grid;
   gap: 0.55rem;
+}
+.statement-upload-panel {
+  align-items: center;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+}
+.statement-upload-panel input {
+  font: inherit;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.statement-upload-panel span {
+  color: #0f766e;
+  font-size: 0.8rem;
+  grid-column: 1 / -1;
 }
 .list-row,
 .statement-row {
@@ -799,10 +842,37 @@ tr:hover td { background: #f9fafb; }
   .segmented-field { flex-wrap: wrap; }
   .row-actions { justify-content: flex-start; flex-wrap: wrap; }
   .form-grid { grid-template-columns: 1fr; }
+  .modal-overlay { align-items: stretch; padding: 0; }
+  .receipt-review-modal {
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    max-height: 100vh;
+    max-width: none;
+    padding: 1rem;
+  }
   .receipt-review-layout { grid-template-columns: 1fr; }
   .receipt-preview { max-height: 42vh; }
   .receipt-review-toolbar { align-items: stretch; flex-direction: column; }
   .receipt-review-toolbar div { display: grid; grid-template-columns: 1fr 1fr; }
+  .quick-category-row {
+    flex-wrap: nowrap;
+    margin: 0 -0.15rem 1rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+  .quick-category-row button {
+    flex: 0 0 auto;
+    min-height: 38px;
+  }
+  .receipt-review-panel .modal-actions {
+    background: linear-gradient(180deg, rgba(255,255,255,0.9), #fff 35%);
+    bottom: -1rem;
+    margin-left: -1rem;
+    margin-right: -1rem;
+    padding: 0.75rem 1rem 1rem;
+    position: sticky;
+  }
   .modal-actions { flex-direction: column-reverse; }
   .modal-actions button { width: 100%; }
   .toolbar-inline,
@@ -812,9 +882,12 @@ tr:hover td { background: #f9fafb; }
   .inline-form input,
   .inline-form select,
   .inline-form button,
+  .statement-upload-panel,
+  .statement-upload-panel button,
   .bulk-bar input,
   .bulk-bar select,
   .bulk-bar button { width: 100%; }
+  .statement-upload-panel { grid-template-columns: 1fr; }
   .grid-2,
   .grid-3 { grid-template-columns: 1fr; }
   .wide-card { grid-column: auto; }

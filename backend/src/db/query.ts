@@ -157,6 +157,17 @@ export interface MerchantSpend {
   last_seen: string;
 }
 
+export interface SubscriptionCandidate extends MerchantSpend {
+  cadence: "weekly" | "fortnightly" | "monthly" | "quarterly" | "irregular";
+  confidence: number;
+  avg_amount_cents: string;
+  monthly_estimate_cents: string;
+  avg_interval_days: number | null;
+  interval_jitter_days: number | null;
+  amount_variance_pct: number;
+  charge_dates: string[];
+}
+
 /**
  * Find recurring expenses — merchants charged at least N times in the last
  * `lookback_months` months, ordered by occurrence count desc. Useful for
@@ -184,6 +195,171 @@ export async function findRecurring(
     ORDER BY count DESC, total_cents DESC
     LIMIT 50
   `;
+}
+
+function cadenceFromInterval(avgIntervalDays: number | null): SubscriptionCandidate["cadence"] {
+  if (avgIntervalDays === null) return "irregular";
+  if (avgIntervalDays >= 5 && avgIntervalDays <= 9) return "weekly";
+  if (avgIntervalDays >= 12 && avgIntervalDays <= 17) return "fortnightly";
+  if (avgIntervalDays >= 26 && avgIntervalDays <= 35) return "monthly";
+  if (avgIntervalDays >= 80 && avgIntervalDays <= 100) return "quarterly";
+  return "irregular";
+}
+
+function stabilizeCadence(
+  cadence: SubscriptionCandidate["cadence"],
+  avgIntervalDays: number | null,
+  intervalJitterDays: number | null,
+): SubscriptionCandidate["cadence"] {
+  if (cadence === "irregular" || avgIntervalDays === null || intervalJitterDays === null) {
+    return cadence;
+  }
+  const jitterLimit = Math.max(5, avgIntervalDays * 0.35);
+  return intervalJitterDays > jitterLimit ? "irregular" : cadence;
+}
+
+function monthlyEstimate(avgAmountCents: number, cadence: SubscriptionCandidate["cadence"]): number {
+  if (cadence === "weekly") return Math.round(avgAmountCents * 4.33);
+  if (cadence === "fortnightly") return Math.round(avgAmountCents * 2.17);
+  if (cadence === "quarterly") return Math.round(avgAmountCents / 3);
+  return Math.round(avgAmountCents);
+}
+
+function daysBetween(a: Date, b: Date): number {
+  return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+function scoreSubscription(input: {
+  count: number;
+  cadence: SubscriptionCandidate["cadence"];
+  avgIntervalDays: number | null;
+  intervalJitterDays: number | null;
+  amountVariancePct: number;
+  lastSeen: Date;
+}): number {
+  let score = 0;
+  if (input.count >= 2) score += 15;
+  if (input.count >= 3) score += 15;
+  if (input.count >= 4) score += 10;
+  if (input.cadence !== "irregular") score += 25;
+  if (input.intervalJitterDays !== null) {
+    const jitterLimit = input.avgIntervalDays !== null && input.avgIntervalDays < 10 ? 2 : 5;
+    if (input.intervalJitterDays <= jitterLimit) score += 20;
+    else if (input.intervalJitterDays <= jitterLimit * 2) score += 10;
+  }
+  if (input.amountVariancePct <= 5) score += 15;
+  else if (input.amountVariancePct <= 15) score += 8;
+  if (daysBetween(input.lastSeen, new Date()) <= 45) score += 10;
+  return Math.min(100, score);
+}
+
+/**
+ * Detect likely subscriptions by combining occurrence count, charge cadence,
+ * and amount stability. This is stricter than simple "charged N times" and is
+ * meant for dashboard review, where false positives are annoying.
+ */
+export async function findSubscriptionCandidates(
+  userId: number,
+  lookbackMonths: number = 6,
+  minOccurrences: number = 2,
+): Promise<SubscriptionCandidate[]> {
+  type Row = {
+    merchant: string;
+    total_cents: string;
+    count: number;
+    first_seen: string;
+    last_seen: string;
+    avg_amount_cents: string;
+    min_amount_cents: string;
+    max_amount_cents: string;
+    charge_dates: Array<string | Date>;
+  };
+
+  const rows = await sql<Row[]>`
+    WITH merchant_rows AS (
+      SELECT
+        lower(COALESCE(mc.name, e.merchant, e.description)) AS merchant_key,
+        COALESCE(mc.name, e.merchant, e.description) AS merchant,
+        e.amount_cents,
+        e.occurred_at::date AS charge_date
+      FROM expenses e
+      LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
+      WHERE e.user_id = ${userId}
+        AND e.amount_cents > 0
+        AND e.occurred_at >= NOW() - (${lookbackMonths} || ' months')::interval
+        AND COALESCE(mc.name, e.merchant, e.description) IS NOT NULL
+    )
+    SELECT
+      MIN(merchant) AS merchant,
+      SUM(amount_cents)::text AS total_cents,
+      COUNT(*)::int AS count,
+      MIN(charge_date)::text AS first_seen,
+      MAX(charge_date)::text AS last_seen,
+      ROUND(AVG(amount_cents))::bigint::text AS avg_amount_cents,
+      MIN(amount_cents)::text AS min_amount_cents,
+      MAX(amount_cents)::text AS max_amount_cents,
+      ARRAY_AGG(charge_date ORDER BY charge_date) AS charge_dates
+    FROM merchant_rows
+    GROUP BY merchant_key
+    HAVING COUNT(*) >= ${minOccurrences}
+    ORDER BY COUNT(*) DESC, SUM(amount_cents) DESC
+    LIMIT 50
+  `;
+
+  return rows
+    .map((row) => {
+      const dates = row.charge_dates.map((value) => new Date(value));
+      const intervals = dates.slice(1).map((date, index) => daysBetween(dates[index]!, date));
+      const avgIntervalDays =
+        intervals.length > 0
+          ? Math.round(intervals.reduce((sum, days) => sum + days, 0) / intervals.length)
+          : null;
+      const intervalJitterDays =
+        intervals.length > 0 && avgIntervalDays !== null
+          ? Math.round(
+              (intervals.reduce((sum, days) => sum + Math.abs(days - avgIntervalDays), 0) /
+                intervals.length) *
+                10,
+            ) / 10
+          : null;
+      const avgAmount = Number(row.avg_amount_cents);
+      const amountVariancePct =
+        avgAmount > 0
+          ? Math.round(((Number(row.max_amount_cents) - Number(row.min_amount_cents)) / avgAmount) * 100)
+          : 0;
+      const cadence = stabilizeCadence(
+        cadenceFromInterval(avgIntervalDays),
+        avgIntervalDays,
+        intervalJitterDays,
+      );
+      const confidence = scoreSubscription({
+        count: row.count,
+        cadence,
+        avgIntervalDays,
+        intervalJitterDays,
+        amountVariancePct,
+        lastSeen: new Date(row.last_seen),
+      });
+
+      return {
+        merchant: row.merchant,
+        total_cents: row.total_cents,
+        count: row.count,
+        first_seen: row.first_seen,
+        last_seen: row.last_seen,
+        cadence,
+        confidence,
+        avg_amount_cents: row.avg_amount_cents,
+        monthly_estimate_cents: String(monthlyEstimate(avgAmount, cadence)),
+        avg_interval_days: avgIntervalDays,
+        interval_jitter_days: intervalJitterDays,
+        amount_variance_pct: amountVariancePct,
+        charge_dates: dates.map((date) => date.toISOString().slice(0, 10)),
+      };
+    })
+    .filter((row) => row.confidence >= 55)
+    .sort((a, b) => b.confidence - a.confidence || b.count - a.count || Number(b.total_cents) - Number(a.total_cents))
+    .slice(0, 12);
 }
 
 export interface ExpenseAtMerchant {

@@ -119,6 +119,25 @@ function ReceiptModal({
               <span>{formatCents(receipt.amount_cents, receipt.currency)} on {formatDate(receipt.occurred_at)}</span>
               {receipt.review_status === 'needs_review' ? <span className="badge badge-review">Needs review</span> : null}
             </div>
+            <div className="quick-category-row" aria-label="Quick categories">
+              {categories.slice(0, 6).map((category) => (
+                <button
+                  key={category.id}
+                  type="button"
+                  className={draft.categoryId === category.id ? 'active' : ''}
+                  onClick={() => onDraftChange({ ...draft, categoryId: category.id })}
+                >
+                  {category.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                className={draft.categoryId === '' ? 'active' : ''}
+                onClick={() => onDraftChange({ ...draft, categoryId: '' })}
+              >
+                Uncategorized
+              </button>
+            </div>
             <div className="form-grid">
               <label>
                 Amount
@@ -201,6 +220,7 @@ export default function ReceiptsPage() {
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [reviewStatus, setReviewStatus] = useState('')
+  const nextReviewReceipt = receipts.find((receipt) => receipt.review_status === 'needs_review') ?? null
 
   const fetchPage = useCallback((p: number) => {
     setLoading(true)
@@ -332,6 +352,11 @@ export default function ReceiptsPage() {
     <div className="page">
       <div className="page-heading">
         <h2>Receipts</h2>
+        {nextReviewReceipt ? (
+          <button type="button" className="button-primary" onClick={() => openReceipt(nextReviewReceipt)}>
+            Review Next
+          </button>
+        ) : null}
       </div>
 
       <div className="card receipt-filter-card">

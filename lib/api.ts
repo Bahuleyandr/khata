@@ -59,6 +59,21 @@ export interface MerchantTrend {
   previous_avg_cents?: string
 }
 
+export interface SubscriptionCandidate {
+  name: string
+  count: number
+  total_cents: string
+  first_seen: string
+  last_seen: string
+  cadence: 'weekly' | 'fortnightly' | 'monthly' | 'quarterly' | 'irregular'
+  confidence: number
+  avg_amount_cents: string
+  monthly_estimate_cents: string
+  avg_interval_days: number | null
+  interval_jitter_days: number | null
+  amount_variance_pct: number
+}
+
 export interface Expense {
   id: string
   amount_cents: string
@@ -94,6 +109,7 @@ export interface ExpenseSummary {
     new: MerchantTrend[]
     spikes: MerchantTrend[]
   }
+  subscriptions: SubscriptionCandidate[]
   narrative: string
 }
 
@@ -405,6 +421,25 @@ export function getStatements(): Promise<{ statements: StatementImport[] }> {
   return apiFetch<{ statements: StatementImport[] }>('/api/statements')
 }
 
+export async function uploadStatement(file: File): Promise<{
+  statement: StatementImport
+  parsed_count: number
+  imported_count: number
+  duplicate_count: number
+}> {
+  const body = new FormData()
+  body.set('statement', file)
+  return apiFetch<{
+    statement: StatementImport
+    parsed_count: number
+    imported_count: number
+    duplicate_count: number
+  }>('/api/statements/upload', {
+    method: 'POST',
+    body,
+  })
+}
+
 export function getAuditLog(limit = 50): Promise<{ events: AuditEvent[] }> {
   const q = new URLSearchParams()
   q.set('limit', String(limit))
@@ -441,6 +476,13 @@ export interface RecurringPayload {
     total_cents: number
     first_seen: string
     last_seen: string
+    cadence?: string
+    confidence?: number
+    avg_amount_cents?: number
+    monthly_estimate_cents?: number
+    avg_interval_days?: number | null
+    interval_jitter_days?: number | null
+    amount_variance_pct?: number
   }>
 }
 

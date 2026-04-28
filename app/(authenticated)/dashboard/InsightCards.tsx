@@ -114,15 +114,16 @@ function RecurringCard({ p }: { p: RecurringPayload }) {
       </h3>
       {p.merchants.length === 0 ? (
         <p style={{ color: '#9ca3af', fontSize: '0.9rem', margin: 0 }}>
-          No recurring patterns detected (≥3 charges in 3 months).
+          No high-confidence subscriptions detected yet.
         </p>
       ) : (
         <table>
           <thead>
             <tr>
               <th>Merchant</th>
-              <th style={{ textAlign: 'right' }}>×</th>
-              <th style={{ textAlign: 'right' }}>Total</th>
+              <th>Cadence</th>
+              <th style={{ textAlign: 'right' }}>Monthly</th>
+              <th style={{ textAlign: 'right' }}>Confidence</th>
               <th>Last seen</th>
             </tr>
           </thead>
@@ -130,10 +131,11 @@ function RecurringCard({ p }: { p: RecurringPayload }) {
             {p.merchants.map((m) => (
               <tr key={m.name}>
                 <td>{m.name}</td>
-                <td style={{ textAlign: 'right' }}>{m.count}</td>
+                <td>{m.cadence ?? `${m.count} charges`}</td>
                 <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                  {formatCents(m.total_cents)}
+                  {formatCents(m.monthly_estimate_cents ?? m.total_cents)}
                 </td>
+                <td style={{ textAlign: 'right' }}>{m.confidence ? `${m.confidence}%` : '—'}</td>
                 <td style={{ whiteSpace: 'nowrap', color: '#6b7280' }}>{m.last_seen}</td>
               </tr>
             ))}
