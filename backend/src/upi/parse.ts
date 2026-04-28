@@ -29,6 +29,9 @@ export interface UpiParse {
 const PAYMENT_SIGNAL =
   /\b(?:UPI|GPay|G\s?Pay|Google\s?Pay|PhonePe|Phone\s?Pe|Paytm|debited|credited|transferred|payment\s+successful)\b/i;
 
+const CARD_PAYMENT_SIGNAL =
+  /\b(?:you(?:'ve|\s+have)?\s+spent|spent|charged|purchase(?:d)?)\b[\s\S]{0,140}\b(?:card|AMEX|American\s+Express|Visa|Mastercard|Master\s?Card|RuPay)\b|\b(?:card|AMEX|American\s+Express|Visa|Mastercard|Master\s?Card|RuPay)\b[\s\S]{0,140}\b(?:spent|charged|purchase(?:d)?)\b/i;
+
 // Allow up to 5 chars of whitespace + punctuation between the currency marker
 // and the digits — covers "Rs.500", "Rs 500", "Rs:500", "INR): 11942.89",
 // "(INR) 200", "₹ 500", etc. that show up in real bank/app/OCR text.
@@ -41,6 +44,9 @@ const AMOUNT_RE =
 // between consecutive digits, so the date branch needs its own form.
 const TO_MERCHANT_RE =
   /\bto\s+([A-Z][\w\s.&'@-]{1,60}?)(?=\s+(?:via|using|through|from|UPI|ref|on\s+account|account|a\/c)\b|\s+on\s+\d|\s*[.\n]|$)/i;
+
+const AT_MERCHANT_RE =
+  /\bat\s+([A-Z][\w\s.&'@-]{1,80}?)(?=\s+(?:on|at\s+\d|for|via|using|through|ref|rrn|txn|transaction|if|call)\b|\s*[.\n]|$)/i;
 
 // UPI ref / UTR / txn-id capture. Common shapes seen in real bank SMS and
 // receipt OCR:
@@ -58,13 +64,14 @@ function detectApp(text: string): UpiParse["app"] {
   if (/G\s?Pay|Google\s?Pay/i.test(text)) return "gpay";
   if (/Phone\s?Pe/i.test(text)) return "phonepe";
   if (/Paytm/i.test(text)) return "paytm";
+  if (CARD_PAYMENT_SIGNAL.test(text)) return "bank";
   if (/A\/c|Acct|account/i.test(text) && /(?:debited|credited)/i.test(text)) return "bank";
   return "upi";
 }
 
 export function tryParseUpi(text: string): UpiParse | null {
   if (!text || text.length > 2000) return null; // guard against pathological inputs
-  if (!PAYMENT_SIGNAL.test(text)) return null;
+  if (!PAYMENT_SIGNAL.test(text) && !CARD_PAYMENT_SIGNAL.test(text)) return null;
 
   const amtMatch = AMOUNT_RE.exec(text);
   if (!amtMatch) return null;
@@ -72,7 +79,7 @@ export function tryParseUpi(text: string): UpiParse | null {
   const amountRupees = parseFloat(amountStr);
   if (isNaN(amountRupees) || amountRupees <= 0 || amountRupees > 10_000_000) return null;
 
-  const merchMatch = TO_MERCHANT_RE.exec(text);
+  const merchMatch = TO_MERCHANT_RE.exec(text) ?? AT_MERCHANT_RE.exec(text);
   const merchant = merchMatch?.[1]?.trim().replace(/\s+/g, " ") ?? null;
 
   const refMatch = REF_RE.exec(text);

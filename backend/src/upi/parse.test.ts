@@ -37,6 +37,21 @@ describe("tryParseUpi", () => {
     expect(r!.app).toBe("bank");
   });
 
+  it("parses an AMEX card spend alert", () => {
+    const r = tryParseUpi(
+      "Alert: You've spent INR 19,900.00 on your AMEX card ** 31009 at OPENAI OPCO on 28 April 2026 at 10:58 AM IST. Call 18004190691 if this was not made by you.",
+    );
+    expect(r).not.toBeNull();
+    expect(r!.amountRupees).toBe(19900);
+    expect(r!.merchant).toBe("OPENAI OPCO");
+    expect(r!.app).toBe("bank");
+    expect(r!.reference).toBeNull();
+  });
+
+  it("does not parse card balance notices without spend language", () => {
+    expect(tryParseUpi("Your AMEX card balance is INR 19,900.00 as of today.")).toBeNull();
+  });
+
   it("parses a decimal amount", () => {
     const r = tryParseUpi("Paid ₹99.50 to Coffee Shop via UPI");
     expect(r).not.toBeNull();
