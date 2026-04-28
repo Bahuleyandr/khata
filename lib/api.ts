@@ -178,12 +178,21 @@ export interface StatementImportRow {
   amount_cents: string
   currency: string
   suggested_category: string | null
+  category_id: string | null
+  category: string | null
+  tag_names: string[]
   already_logged: boolean
   matched_expense_id: string | null
   status: 'pending' | 'imported' | 'ignored' | 'duplicate'
   imported_expense_id: string | null
   created_at: string
   updated_at: string
+}
+
+export interface StatementRowUpdateInput {
+  status?: 'pending' | 'ignored'
+  category_id?: string | null
+  tag_names?: string[]
 }
 
 export interface MonthlyReviewTask {
@@ -483,12 +492,12 @@ export async function importStatementRows(id: string, rowIds?: string[]): Promis
 export function updateStatementImportRow(
   statementId: string,
   rowId: string,
-  status: 'pending' | 'ignored',
+  data: StatementRowUpdateInput,
 ): Promise<StatementImportRow> {
   return apiFetch<StatementImportRow>(`/api/statements/${statementId}/rows/${rowId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(data),
   })
 }
 

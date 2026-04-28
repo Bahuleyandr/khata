@@ -64,6 +64,17 @@ function formatAuditJson(value: unknown) {
   return JSON.stringify(value, null, 2) ?? 'null'
 }
 
+function parseTagNames(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(',')
+        .map((tag) => tag.trim().toLowerCase().replace(/\s+/g, ' '))
+        .filter(Boolean),
+    ),
+  )
+}
+
 export default function ManagePage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<BudgetVariance[]>([])
@@ -72,6 +83,8 @@ export default function ManagePage() {
   const [statementRows, setStatementRows] = useState<StatementImportRow[]>([])
   const [selectedStatementId, setSelectedStatementId] = useState<string | null>(null)
   const [selectedStatementRowIds, setSelectedStatementRowIds] = useState<string[]>([])
+  const [bulkStatementCategory, setBulkStatementCategory] = useState('')
+  const [bulkStatementTags, setBulkStatementTags] = useState('')
   const [subscriptions, setSubscriptions] = useState<SubscriptionCandidate[]>([])
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [auditDetail, setAuditDetail] = useState<AuditEvent | null>(null)
@@ -149,14 +162,39 @@ export default function ManagePage() {
   async function ignoreSelectedRows() {
     if (!selectedStatementId || selectedPendingRowIds.length === 0) return
     await Promise.all(
-      selectedPendingRowIds.map((rowId) => updateStatementImportRow(selectedStatementId, rowId, 'ignored')),
+      selectedPendingRowIds.map((rowId) => updateStatementImportRow(selectedStatementId, rowId, { status: 'ignored' })),
     )
     await loadStatementReview(selectedStatementId)
   }
 
   async function restoreStatementRow(rowId: string) {
     if (!selectedStatementId) return
-    await updateStatementImportRow(selectedStatementId, rowId, 'pending')
+    await updateStatementImportRow(selectedStatementId, rowId, { status: 'pending' })
+    await loadStatementReview(selectedStatementId)
+  }
+
+  async function saveStatementRowCorrection(
+    rowId: string,
+    data: { category_id: string | null; tag_names: string[] },
+  ) {
+    if (!selectedStatementId) return
+    await updateStatementImportRow(selectedStatementId, rowId, data)
+    await loadStatementReview(selectedStatementId)
+  }
+
+  async function applyCorrectionsToSelected() {
+    if (!selectedStatementId || selectedPendingRowIds.length === 0) return
+    const body: { category_id?: string | null; tag_names?: string[] } = {}
+    if (bulkStatementCategory === '__none__') body.category_id = null
+    else if (bulkStatementCategory) body.category_id = bulkStatementCategory
+    if (bulkStatementTags.trim()) body.tag_names = parseTagNames(bulkStatementTags)
+    if (!Object.keys(body).length) {
+      throw new Error('Choose a category or enter tags to apply.')
+    }
+    await Promise.all(
+      selectedPendingRowIds.map((rowId) => updateStatementImportRow(selectedStatementId, rowId, body)),
+    )
+    setBulkStatementTags('')
     await loadStatementReview(selectedStatementId)
   }
 
@@ -425,6 +463,32 @@ export default function ManagePage() {
                   </button>
                 </div>
               </div>
+              <div className="statement-correction-bar">
+                <select
+                  value={bulkStatementCategory}
+                  onChange={(e) => setBulkStatementCategory(e.target.value)}
+                  aria-label="Bulk statement category"
+                >
+                  <option value="">Keep category</option>
+                  <option value="__none__">Uncategorized</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>{category.name}</option>
+                  ))}
+                </select>
+                <input
+                  value={bulkStatementTags}
+                  onChange={(e) => setBulkStatementTags(e.target.value)}
+                  placeholder="Tags: travel, reimbursable"
+                  aria-label="Bulk statement tags"
+                />
+                <button
+                  type="button"
+                  onClick={() => void run(applyCorrectionsToSelected)}
+                  disabled={busy || selectedPendingRowIds.length === 0}
+                >
+                  Apply to selected
+                </button>
+              </div>
               <div className="table-scroll">
                 <table>
                   <thead>
@@ -433,6 +497,8 @@ export default function ManagePage() {
                       <th>Date</th>
                       <th>Description</th>
                       <th>Suggested</th>
+                      <th>Category</th>
+                      <th>Tags</th>
                       <th>Status</th>
                       <th style={{ textAlign: 'right' }}>Amount</th>
                       <th style={{ textAlign: 'right' }}>Actions</th>
@@ -440,7 +506,7 @@ export default function ManagePage() {
                   </thead>
                   <tbody>
                     {statementRows.length === 0 ? (
-                      <tr><td colSpan={7}>No parsed rows for this statement.</td></tr>
+                      <tr><td colSpan={9}>No parsed rows for this statement.</td></tr>
                     ) : statementRows.map((row) => (
                       <tr key={row.id}>
                         <td>
@@ -455,10 +521,20 @@ export default function ManagePage() {
                         <td style={{ whiteSpace: 'nowrap' }}>{formatDate(row.occurred_at)}</td>
                         <td>{row.description}</td>
                         <td>{row.suggested_category ?? '—'}</td>
+                        <td>{row.category ?? 'Uncategorized'}</td>
+                        <td>{row.tag_names.length ? row.tag_names.map((tag) => `#${tag}`).join(' ') : '—'}</td>
                         <td><span className={`badge badge-${row.status}`}>{row.status}</span></td>
                         <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCents(row.amount_cents, row.currency)}</td>
                         <td>
                           <div className="row-actions">
+                            {row.status === 'pending' ? (
+                              <StatementRowCorrection
+                                row={row}
+                                categories={categories}
+                                busy={busy}
+                                onSave={(data) => run(() => saveStatementRowCorrection(row.id, data))}
+                              />
+                            ) : null}
                             {row.status === 'ignored' ? (
                               <button
                                 type="button"
@@ -559,6 +635,56 @@ function CategoryRow({
       </button>
       <button type="button" onClick={() => void onDelete()} disabled={busy || category.is_default}>
         Delete
+      </button>
+    </div>
+  )
+}
+
+function StatementRowCorrection({
+  row,
+  categories,
+  busy,
+  onSave,
+}: {
+  row: StatementImportRow
+  categories: Category[]
+  busy: boolean
+  onSave: (data: { category_id: string | null; tag_names: string[] }) => Promise<void>
+}) {
+  const [categoryId, setCategoryId] = useState(row.category_id ?? '')
+  const [tagText, setTagText] = useState(row.tag_names.join(', '))
+
+  useEffect(() => {
+    setCategoryId(row.category_id ?? '')
+    setTagText(row.tag_names.join(', '))
+  }, [row.category_id, row.tag_names])
+
+  return (
+    <div className="statement-row-correction">
+      <select
+        value={categoryId}
+        onChange={(e) => setCategoryId(e.target.value)}
+        disabled={busy}
+        aria-label={`Category for ${row.description}`}
+      >
+        <option value="">Uncategorized</option>
+        {categories.map((category) => (
+          <option key={category.id} value={category.id}>{category.name}</option>
+        ))}
+      </select>
+      <input
+        value={tagText}
+        onChange={(e) => setTagText(e.target.value)}
+        disabled={busy}
+        placeholder="tags"
+        aria-label={`Tags for ${row.description}`}
+      />
+      <button
+        type="button"
+        onClick={() => void onSave({ category_id: categoryId || null, tag_names: parseTagNames(tagText) })}
+        disabled={busy}
+      >
+        Save
       </button>
     </div>
   )

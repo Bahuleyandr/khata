@@ -48,7 +48,49 @@ async function mockApi(page: Page) {
     }),
   )
   await page.route('**/api/tags', (route) => route.fulfill({ json: { tags: [{ id: 'tag-1', name: 'team', count: 1 }] } }))
-  await page.route('**/api/statements', (route) => route.fulfill({ json: { statements: [] } }))
+  await page.route('**/api/statements/*/rows', (route) =>
+    route.fulfill({
+      json: {
+        rows: [{
+          id: '66666666-6666-4666-8666-666666666666',
+          statement_id: '55555555-5555-4555-8555-555555555555',
+          row_index: 0,
+          occurred_at: '2026-04-20',
+          description: 'Metro card',
+          amount_cents: '7500',
+          currency: 'INR',
+          suggested_category: 'Food',
+          category_id: '33333333-3333-4333-8333-333333333333',
+          category: 'Food',
+          tag_names: ['commute'],
+          already_logged: false,
+          matched_expense_id: null,
+          status: 'pending',
+          imported_expense_id: null,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/statements', (route) =>
+    route.fulfill({
+      json: {
+        statements: [{
+          id: '55555555-5555-4555-8555-555555555555',
+          file_key: 'statements/42/statement.pdf',
+          mime_type: 'application/pdf',
+          status: 'parsed',
+          parsed_count: 1,
+          imported_count: 0,
+          duplicate_count: 0,
+          error_reason: null,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
   await page.route('**/api/subscriptions**', (route) =>
     route.fulfill({
       json: {
@@ -266,5 +308,10 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByText('#team')).toBeVisible()
   await expect(page.getByText('MiniMax')).toBeVisible()
   await expect(page.getByLabel('Statement file')).toBeVisible()
+  await page.getByRole('button', { name: 'Review' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('Import Review')).toBeVisible()
+  await expect(page.getByLabel('Bulk statement category')).toBeVisible()
+  await expect(page.getByLabel('Tags for Metro card')).toHaveValue('commute')
   await expect(page.getByText('expense update')).toBeVisible()
 })

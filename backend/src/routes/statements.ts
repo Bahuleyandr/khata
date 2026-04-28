@@ -47,10 +47,16 @@ const importRowsSchema = {
 
 const updateStatementRowSchema = {
   type: "object",
-  required: ["status"],
+  minProperties: 1,
   additionalProperties: false,
   properties: {
     status: { type: "string", enum: ["pending", "ignored"] },
+    category_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
+    tag_names: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string", minLength: 1, maxLength: 80 },
+    },
   },
 } as const;
 
@@ -76,12 +82,21 @@ type StatementImportRow = {
   amount_cents: string;
   currency: string;
   suggested_category: string | null;
+  category_id: string | null;
+  category: string | null;
+  tag_names: string[];
   already_logged: boolean;
   matched_expense_id: string | null;
   status: "pending" | "imported" | "ignored" | "duplicate";
   imported_expense_id: string | null;
   created_at: Date;
   updated_at: Date;
+};
+
+type StatementRowUpdateBody = {
+  status?: "pending" | "ignored";
+  category_id?: string | null;
+  tag_names?: string[];
 };
 
 const MAX_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024;
@@ -112,6 +127,25 @@ function normalizeStatementMime(mimetype: string, filename?: string): string | n
   return null;
 }
 
+function normalizeTagName(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function normalizeTagNames(rawNames: string[]): string[] {
+  const names = rawNames.map(normalizeTagName).filter(Boolean);
+  return Array.from(new Set(names)).slice(0, 20);
+}
+
+async function categoryBelongsToUser(userId: number, categoryId: string): Promise<boolean> {
+  const [row] = await sql<Array<{ id: string }>>`
+    SELECT id FROM categories
+    WHERE id = ${categoryId}
+      AND user_id = ${userId}
+    LIMIT 1
+  `;
+  return !!row;
+}
+
 async function getStatementById(userId: number, statementId: string): Promise<StatementRow | null> {
   const [statement] = await sql<StatementRow[]>`
     SELECT id, file_key, mime_type, status, parsed_count, imported_count,
@@ -126,24 +160,28 @@ async function getStatementById(userId: number, statementId: string): Promise<St
 
 async function listStatementRows(userId: number, statementId: string): Promise<StatementImportRow[]> {
   return sql<StatementImportRow[]>`
-    SELECT id,
-           statement_id::text AS statement_id,
-           row_index,
-           occurred_at::date::text AS occurred_at,
-           description,
-           amount_cents::text AS amount_cents,
-           currency,
-           suggested_category,
-           already_logged,
-           matched_expense_id::text AS matched_expense_id,
-           status,
-           imported_expense_id::text AS imported_expense_id,
-           created_at,
-           updated_at
-    FROM statement_import_rows
-    WHERE user_id = ${userId}
-      AND statement_id = ${statementId}
-    ORDER BY row_index ASC
+    SELECT r.id,
+           r.statement_id::text AS statement_id,
+           r.row_index,
+           r.occurred_at::date::text AS occurred_at,
+           r.description,
+           r.amount_cents::text AS amount_cents,
+           r.currency,
+           r.suggested_category,
+           r.category_id::text AS category_id,
+           c.name AS category,
+           r.tag_names,
+           r.already_logged,
+           r.matched_expense_id::text AS matched_expense_id,
+           r.status,
+           r.imported_expense_id::text AS imported_expense_id,
+           r.created_at,
+           r.updated_at
+    FROM statement_import_rows r
+    LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = ${userId}
+    WHERE r.user_id = ${userId}
+      AND r.statement_id = ${statementId}
+    ORDER BY r.row_index ASC
   `;
 }
 
@@ -167,6 +205,7 @@ async function replaceStatementRows(
     amount_cents: result.transaction.amountCents,
     currency: result.transaction.currency,
     suggested_category: result.transaction.suggestedCategory || null,
+    tag_names: [],
     already_logged: result.alreadyLogged,
     matched_expense_id: result.matchedExpenseId ?? null,
     status: result.alreadyLogged ? "duplicate" : "pending",
@@ -182,6 +221,8 @@ async function replaceStatementRows(
       amount_cents,
       currency,
       suggested_category,
+      category_id,
+      tag_names,
       already_logged,
       matched_expense_id,
       status
@@ -195,6 +236,8 @@ async function replaceStatementRows(
       v.amount_cents,
       v.currency,
       v.suggested_category,
+      category_match.id,
+      v.tag_names,
       v.already_logged,
       v.matched_expense_id,
       v.status
@@ -205,10 +248,19 @@ async function replaceStatementRows(
       amount_cents BIGINT,
       currency CHAR(3),
       suggested_category TEXT,
+      tag_names TEXT[],
       already_logged BOOLEAN,
       matched_expense_id UUID,
       status TEXT
     )
+    LEFT JOIN LATERAL (
+      SELECT id
+      FROM categories
+      WHERE user_id = ${userId}
+        AND v.suggested_category IS NOT NULL
+        AND lower(name) = lower(v.suggested_category)
+      LIMIT 1
+    ) category_match ON TRUE
   `;
 }
 
@@ -253,6 +305,9 @@ async function importPendingStatementRows(
                    amount_cents::text AS amount_cents,
                    currency,
                    suggested_category,
+                   category_id::text AS category_id,
+                   NULL::text AS category,
+                   tag_names,
                    already_logged,
                    matched_expense_id::text AS matched_expense_id,
                    status,
@@ -276,6 +331,9 @@ async function importPendingStatementRows(
                    amount_cents::text AS amount_cents,
                    currency,
                    suggested_category,
+                   category_id::text AS category_id,
+                   NULL::text AS category,
+                   tag_names,
                    already_logged,
                    matched_expense_id::text AS matched_expense_id,
                    status,
@@ -301,6 +359,7 @@ async function importPendingStatementRows(
           occurred_at,
           source,
           statement_id,
+          category_id,
           review_status
         )
         VALUES (
@@ -311,11 +370,29 @@ async function importPendingStatementRows(
           ${row.occurred_at}::date,
           'statement',
           ${statementId},
+          ${row.category_id},
           'needs_review'
         )
         RETURNING id
       `;
       if (!inserted) continue;
+
+      for (const rawName of row.tag_names ?? []) {
+        const name = normalizeTagName(rawName);
+        if (!name) continue;
+        const [tag] = await tx<Array<{ id: string }>>`
+          INSERT INTO tags (user_id, name)
+          VALUES (${userId}, ${name})
+          ON CONFLICT (user_id, name) DO UPDATE SET name = EXCLUDED.name
+          RETURNING id
+        `;
+        if (!tag) continue;
+        await tx`
+          INSERT INTO expense_tags (expense_id, tag_id)
+          VALUES (${inserted.id}, ${tag.id})
+          ON CONFLICT DO NOTHING
+        `;
+      }
 
       await tx`
         UPDATE statement_import_rows
@@ -485,16 +562,30 @@ export async function statementsRoutes(app: FastifyInstance) {
     },
   );
 
-  app.patch<{ Params: { id: string; rowId: string }; Body: { status: "pending" | "ignored" } }>(
+  app.patch<{ Params: { id: string; rowId: string }; Body: StatementRowUpdateBody }>(
     "/api/statements/:id/rows/:rowId",
     { schema: { params: statementRowParamsSchema, body: updateStatementRowSchema } },
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
 
+      const hasCategory = Object.prototype.hasOwnProperty.call(request.body, "category_id");
+      if (
+        request.body.category_id &&
+        !(await categoryBelongsToUser(session.userId, request.body.category_id))
+      ) {
+        return reply.status(400).send({ error: "Category not found" });
+      }
+      const hasTags = request.body.tag_names !== undefined;
+      const tagNames = hasTags ? normalizeTagNames(request.body.tag_names ?? []) : [];
+      const categoryId = request.body.category_id ?? null;
+      const status = request.body.status ?? "pending";
+
       const [row] = await sql<StatementImportRow[]>`
         UPDATE statement_import_rows AS r
-        SET status = ${request.body.status},
+        SET status = CASE WHEN ${request.body.status !== undefined} THEN ${status} ELSE r.status END,
+            category_id = CASE WHEN ${hasCategory} THEN ${categoryId}::uuid ELSE r.category_id END,
+            tag_names = CASE WHEN ${hasTags} THEN ${tagNames}::text[] ELSE r.tag_names END,
             updated_at = NOW()
         FROM statements s
         WHERE r.id = ${request.params.rowId}
@@ -511,6 +602,9 @@ export async function statementsRoutes(app: FastifyInstance) {
                   r.amount_cents::text AS amount_cents,
                   r.currency,
                   r.suggested_category,
+                  r.category_id::text AS category_id,
+                  (SELECT c.name FROM categories c WHERE c.id = r.category_id AND c.user_id = ${session.userId}) AS category,
+                  r.tag_names,
                   r.already_logged,
                   r.matched_expense_id::text AS matched_expense_id,
                   r.status,
@@ -526,7 +620,12 @@ export async function statementsRoutes(app: FastifyInstance) {
         entityType: "statement",
         entityId: request.params.id,
         after: row,
-        metadata: { row_id: request.params.rowId, status: request.body.status },
+        metadata: {
+          row_id: request.params.rowId,
+          status: request.body.status ?? null,
+          category_id: hasCategory ? categoryId : undefined,
+          tag_names: hasTags ? tagNames : undefined,
+        },
       });
 
       return row;

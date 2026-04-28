@@ -471,6 +471,9 @@ describe("route hardening", () => {
           amount_cents: "7500",
           currency: "INR",
           suggested_category: "Transport",
+          category_id: CATEGORY_ID,
+          category: "Transport",
+          tag_names: [],
           already_logged: false,
           matched_expense_id: null,
           status: "pending",
@@ -550,6 +553,57 @@ describe("route hardening", () => {
     }
   });
 
+  it("updates pending statement row category and tags before import", async () => {
+    sqlMock
+      .mockResolvedValueOnce([{ id: CATEGORY_ID }])
+      .mockResolvedValueOnce([
+        {
+          id: STATEMENT_ROW_ID,
+          statement_id: STATEMENT_ID,
+          row_index: 0,
+          occurred_at: "2026-04-28",
+          description: "Metro card",
+          amount_cents: "7500",
+          currency: "INR",
+          suggested_category: "Transport",
+          category_id: CATEGORY_ID,
+          category: "Transport",
+          tag_names: ["metro", "commute"],
+          already_logged: false,
+          matched_expense_id: null,
+          status: "pending",
+          imported_expense_id: null,
+          created_at: new Date("2026-04-28T00:00:00.000Z"),
+          updated_at: new Date("2026-04-28T00:01:00.000Z"),
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/statements/${STATEMENT_ID}/rows/${STATEMENT_ROW_ID}`,
+        headers: { cookie: authCookie() },
+        payload: {
+          category_id: CATEGORY_ID,
+          tag_names: [" Metro ", "commute", "metro"],
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        id: STATEMENT_ROW_ID,
+        category_id: CATEGORY_ID,
+        tag_names: ["metro", "commute"],
+        status: "pending",
+      });
+      expect(sqlMock).toHaveBeenCalledTimes(3);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("imports selected reviewed statement rows into expenses", async () => {
     const beforeStatement = {
       id: STATEMENT_ID,
@@ -576,6 +630,9 @@ describe("route hardening", () => {
         suggested_category: "Transport",
         already_logged: false,
         matched_expense_id: null,
+        category_id: CATEGORY_ID,
+        category: "Transport",
+        tag_names: ["metro"],
         status: "pending",
         imported_expense_id: null,
         created_at: new Date("2026-04-28T00:00:00.000Z"),
@@ -583,6 +640,8 @@ describe("route hardening", () => {
       },
     ])
       .mockResolvedValueOnce([{ id: EXPENSE_ID }])
+      .mockResolvedValueOnce([{ id: TAG_ID }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ pending_count: "0" }])
       .mockResolvedValueOnce([{ ...beforeStatement, status: "imported", imported_count: 1 }]);
@@ -610,7 +669,7 @@ describe("route hardening", () => {
           imported_count: 1,
         },
       });
-      expect(tx).toHaveBeenCalledTimes(5);
+      expect(tx).toHaveBeenCalledTimes(7);
     } finally {
       await app.close();
     }

@@ -50,6 +50,10 @@ a { color: inherit; text-decoration: none; }
 .inline-form input,
 .inline-form select,
 .list-row input,
+.statement-correction-bar input,
+.statement-correction-bar select,
+.statement-row-correction input,
+.statement-row-correction select,
 .bulk-bar input,
 .bulk-bar select {
   border: 1px solid #d1d5db;
@@ -262,6 +266,7 @@ tr:hover td { background: #f9fafb; }
 .modal-actions button,
 .inline-form button,
 .list-row button,
+.statement-correction-bar button,
 .bulk-bar button,
 .statement-row button {
   min-height: 32px;
@@ -657,6 +662,24 @@ tr:hover td { background: #f9fafb; }
   color: #6b7280;
   font-size: 0.8rem;
 }
+.statement-correction-bar {
+  align-items: center;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(150px, 0.5fr) minmax(180px, 1fr) auto;
+  margin-bottom: 0.75rem;
+  padding: 0.65rem;
+}
+.statement-row-correction {
+  align-items: center;
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: minmax(140px, 0.85fr) minmax(130px, 1fr) auto;
+  min-width: 360px;
+}
 .subscription-row strong {
   align-items: center;
   display: flex;
@@ -974,6 +997,12 @@ tr:hover td { background: #f9fafb; }
   .inline-form input,
   .inline-form select,
   .inline-form button,
+  .statement-correction-bar input,
+  .statement-correction-bar select,
+  .statement-correction-bar button,
+  .statement-row-correction input,
+  .statement-row-correction select,
+  .statement-row-correction button,
   .statement-upload-panel,
   .statement-upload-panel button,
   .bulk-bar input,
@@ -987,6 +1016,12 @@ tr:hover td { background: #f9fafb; }
   .statement-row { grid-template-columns: 1fr; }
   .statement-row .row-actions { justify-content: flex-start; }
   .statement-review-toolbar { flex-direction: column; }
+  .statement-correction-bar,
+  .statement-row-correction {
+    grid-template-columns: 1fr;
+    min-width: 0;
+    width: 100%;
+  }
   .audit-json-grid { grid-template-columns: 1fr; }
   .monthly-summary-main { flex-direction: column; }
   .month-progress { min-width: 0; text-align: left; width: 100%; }
