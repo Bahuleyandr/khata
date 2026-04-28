@@ -1086,6 +1086,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       },
       subscriptions: subscriptions.map((subscription) => ({
         name: subscription.merchant,
+        merchant_key: subscription.merchant_key,
         count: subscription.count,
         total_cents: subscription.total_cents,
         first_seen: subscription.first_seen,
@@ -1097,6 +1098,7 @@ export async function expensesRoutes(app: FastifyInstance) {
         avg_interval_days: subscription.avg_interval_days,
         interval_jitter_days: subscription.interval_jitter_days,
         amount_variance_pct: subscription.amount_variance_pct,
+        preference_status: subscription.preference_status,
       })),
       narrative,
     };

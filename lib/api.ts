@@ -61,6 +61,7 @@ export interface MerchantTrend {
 
 export interface SubscriptionCandidate {
   name: string
+  merchant_key: string
   count: number
   total_cents: string
   first_seen: string
@@ -72,6 +73,7 @@ export interface SubscriptionCandidate {
   avg_interval_days: number | null
   interval_jitter_days: number | null
   amount_variance_pct: number
+  preference_status: 'confirmed' | 'ignored' | null
 }
 
 export interface Expense {
@@ -163,6 +165,23 @@ export interface StatementImport {
   imported_count: number
   duplicate_count: number
   error_reason: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface StatementImportRow {
+  id: string
+  statement_id: string
+  row_index: number
+  occurred_at: string
+  description: string
+  amount_cents: string
+  currency: string
+  suggested_category: string | null
+  already_logged: boolean
+  matched_expense_id: string | null
+  status: 'pending' | 'imported' | 'ignored' | 'duplicate'
+  imported_expense_id: string | null
   created_at: string
   updated_at: string
 }
@@ -423,6 +442,7 @@ export function getStatements(): Promise<{ statements: StatementImport[] }> {
 
 export async function uploadStatement(file: File): Promise<{
   statement: StatementImport
+  rows: StatementImportRow[]
   parsed_count: number
   imported_count: number
   duplicate_count: number
@@ -431,6 +451,7 @@ export async function uploadStatement(file: File): Promise<{
   body.set('statement', file)
   return apiFetch<{
     statement: StatementImport
+    rows: StatementImportRow[]
     parsed_count: number
     imported_count: number
     duplicate_count: number
@@ -440,14 +461,81 @@ export async function uploadStatement(file: File): Promise<{
   })
 }
 
+export function getStatementRows(id: string): Promise<{ rows: StatementImportRow[] }> {
+  return apiFetch<{ rows: StatementImportRow[] }>(`/api/statements/${id}/rows`)
+}
+
+export async function importStatementRows(id: string, rowIds?: string[]): Promise<{
+  ok: boolean
+  imported_count: number
+  statement: StatementImport | null
+}> {
+  return apiFetch<{ ok: boolean; imported_count: number; statement: StatementImport | null }>(
+    `/api/statements/${id}/import`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(rowIds && rowIds.length > 0 ? { row_ids: rowIds } : {}),
+    },
+  )
+}
+
+export function updateStatementImportRow(
+  statementId: string,
+  rowId: string,
+  status: 'pending' | 'ignored',
+): Promise<StatementImportRow> {
+  return apiFetch<StatementImportRow>(`/api/statements/${statementId}/rows/${rowId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+}
+
 export function getAuditLog(limit = 50): Promise<{ events: AuditEvent[] }> {
   const q = new URLSearchParams()
   q.set('limit', String(limit))
   return apiFetch<{ events: AuditEvent[] }>(`/api/audit-log?${q}`)
 }
 
-export async function retryStatement(id: string): Promise<void> {
-  await apiFetch<{ ok: boolean }>(`/api/statements/${id}/retry`, { method: 'POST' })
+export async function retryStatement(id: string): Promise<{
+  ok: boolean
+  rows: StatementImportRow[]
+  parsed_count: number
+  imported_count: number
+  duplicate_count: number
+}> {
+  return apiFetch<{
+    ok: boolean
+    rows: StatementImportRow[]
+    parsed_count: number
+    imported_count: number
+    duplicate_count: number
+  }>(`/api/statements/${id}/retry`, { method: 'POST' })
+}
+
+export function getSubscriptions(params: { includeIgnored?: boolean } = {}): Promise<{ subscriptions: SubscriptionCandidate[] }> {
+  const q = new URLSearchParams()
+  if (params.includeIgnored !== undefined) q.set('include_ignored', String(params.includeIgnored))
+  return apiFetch<{ subscriptions: SubscriptionCandidate[] }>(`/api/subscriptions?${q}`)
+}
+
+export async function setSubscriptionPreference(
+  merchantKey: string,
+  merchantName: string,
+  status: 'confirmed' | 'ignored',
+): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/subscriptions/${encodeURIComponent(merchantKey)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ merchant_name: merchantName, status }),
+  })
+}
+
+export async function clearSubscriptionPreference(merchantKey: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/subscriptions/${encodeURIComponent(merchantKey)}`, {
+    method: 'DELETE',
+  })
 }
 
 // Insights — populated by the nightly cron (backend/src/cron/insights.ts).

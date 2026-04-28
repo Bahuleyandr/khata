@@ -20,6 +20,7 @@ describe("findSubscriptionCandidates", () => {
   it("scores stable monthly charges above noisy repeat merchants", async () => {
     sqlMock.mockResolvedValueOnce([
       {
+        merchant_key: "minimax",
         merchant: "MiniMax",
         total_cents: "149700",
         count: 3,
@@ -29,8 +30,10 @@ describe("findSubscriptionCandidates", () => {
         min_amount_cents: "49900",
         max_amount_cents: "49900",
         charge_dates: ["2026-02-01", "2026-03-01", "2026-04-01"],
+        preference_status: "confirmed",
       },
       {
+        merchant_key: "corner store",
         merchant: "Corner Store",
         total_cents: "78000",
         count: 3,
@@ -40,6 +43,7 @@ describe("findSubscriptionCandidates", () => {
         min_amount_cents: "12000",
         max_amount_cents: "42000",
         charge_dates: ["2026-03-01", "2026-03-08", "2026-04-23"],
+        preference_status: null,
       },
     ]);
 
@@ -48,10 +52,12 @@ describe("findSubscriptionCandidates", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       merchant: "MiniMax",
+      merchant_key: "minimax",
       cadence: "monthly",
       confidence: 100,
       monthly_estimate_cents: "49900",
       amount_variance_pct: 0,
+      preference_status: "confirmed",
     });
   });
 });

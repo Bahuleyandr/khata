@@ -60,6 +60,7 @@ import { expensesRoutes } from "./expenses.js";
 import { monthlyReviewRoutes } from "./monthly-review.js";
 import { receiptsRoutes } from "./receipts.js";
 import { statementsRoutes } from "./statements.js";
+import { subscriptionsRoutes } from "./subscriptions.js";
 import { tagsRoutes } from "./tags.js";
 
 const EXPENSE_ID = "11111111-1111-4111-8111-111111111111";
@@ -67,6 +68,7 @@ const DUPLICATE_ID = "22222222-2222-4222-8222-222222222222";
 const CATEGORY_ID = "33333333-3333-4333-8333-333333333333";
 const TAG_ID = "44444444-4444-4444-8444-444444444444";
 const STATEMENT_ID = "55555555-5555-4555-8555-555555555555";
+const STATEMENT_ROW_ID = "66666666-6666-4666-8666-666666666666";
 
 function authCookie(): string {
   return `session=${signSession(12345, "Subash", Math.floor(Date.now() / 1000))}`;
@@ -93,6 +95,7 @@ async function buildApp() {
   await app.register(budgetsRoutes);
   await app.register(tagsRoutes);
   await app.register(statementsRoutes);
+  await app.register(subscriptionsRoutes);
   await app.register(monthlyReviewRoutes);
   await app.register(auditRoutes);
   await app.ready();
@@ -393,7 +396,43 @@ describe("route hardening", () => {
     }
   });
 
-  it("uploads a dashboard statement, imports new rows, and writes an audit event", async () => {
+  it("sets a subscription preference with audit logging", async () => {
+    sqlMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          merchant_key: "minimax",
+          merchant_name: "MiniMax",
+          status: "confirmed",
+          note: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/subscriptions/minimax",
+        headers: { cookie: authCookie() },
+        payload: { merchant_name: "MiniMax", status: "confirmed" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        ok: true,
+        preference: {
+          merchant_key: "minimax",
+          status: "confirmed",
+        },
+      });
+      expect(sqlMock).toHaveBeenCalledTimes(3);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("uploads a dashboard statement into review rows and writes an audit event", async () => {
     statementImporterMocks.createStatementRecord.mockResolvedValueOnce(STATEMENT_ID);
     statementParserMocks.parseStatementBuffer.mockResolvedValueOnce([
       {
@@ -416,19 +455,38 @@ describe("route hardening", () => {
         alreadyLogged: false,
       },
     ]);
-    statementImporterMocks.bulkInsertTransactions.mockResolvedValueOnce(1);
     storageMocks.uploadStatement.mockResolvedValueOnce(undefined);
     statementImporterMocks.updateStatementStatus.mockResolvedValue(undefined);
     sqlMock
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: STATEMENT_ROW_ID,
+          statement_id: STATEMENT_ID,
+          row_index: 0,
+          occurred_at: "2026-04-28",
+          description: "Metro card",
+          amount_cents: "7500",
+          currency: "INR",
+          suggested_category: "Transport",
+          already_logged: false,
+          matched_expense_id: null,
+          status: "pending",
+          imported_expense_id: null,
+          created_at: new Date("2026-04-28T00:00:00.000Z"),
+          updated_at: new Date("2026-04-28T00:01:00.000Z"),
+        },
+      ])
       .mockResolvedValueOnce([
         {
           id: STATEMENT_ID,
           file_key: `statements/12345/${STATEMENT_ID}`,
           mime_type: "application/pdf",
-          status: "imported",
+          status: "parsed",
           parsed_count: 1,
-          imported_count: 1,
+          imported_count: 0,
           duplicate_count: 0,
           error_reason: null,
           created_at: new Date("2026-04-28T00:00:00.000Z"),
@@ -465,11 +523,17 @@ describe("route hardening", () => {
       expect(res.statusCode).toBe(201);
       expect(res.json()).toMatchObject({
         parsed_count: 1,
-        imported_count: 1,
+        imported_count: 0,
         duplicate_count: 0,
+        rows: [
+          {
+            id: STATEMENT_ROW_ID,
+            status: "pending",
+          },
+        ],
         statement: {
           id: STATEMENT_ID,
-          status: "imported",
+          status: "parsed",
         },
       });
       expect(storageMocks.uploadStatement).toHaveBeenCalledWith(
@@ -481,6 +545,72 @@ describe("route hardening", () => {
         expect.any(Buffer),
         "application/pdf",
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("imports selected reviewed statement rows into expenses", async () => {
+    const beforeStatement = {
+      id: STATEMENT_ID,
+      file_key: `statements/12345/${STATEMENT_ID}`,
+      mime_type: "application/pdf",
+      status: "parsed",
+      parsed_count: 1,
+      imported_count: 0,
+      duplicate_count: 0,
+      error_reason: null,
+      created_at: new Date("2026-04-28T00:00:00.000Z"),
+      updated_at: new Date("2026-04-28T00:01:00.000Z"),
+    };
+    const tx = vi.fn();
+    tx.mockResolvedValueOnce([
+      {
+        id: STATEMENT_ROW_ID,
+        statement_id: STATEMENT_ID,
+        row_index: 0,
+        occurred_at: "2026-04-28",
+        description: "Metro card",
+        amount_cents: "7500",
+        currency: "INR",
+        suggested_category: "Transport",
+        already_logged: false,
+        matched_expense_id: null,
+        status: "pending",
+        imported_expense_id: null,
+        created_at: new Date("2026-04-28T00:00:00.000Z"),
+        updated_at: new Date("2026-04-28T00:01:00.000Z"),
+      },
+    ])
+      .mockResolvedValueOnce([{ id: EXPENSE_ID }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ pending_count: "0" }])
+      .mockResolvedValueOnce([{ ...beforeStatement, status: "imported", imported_count: 1 }]);
+    sqlMock.begin.mockImplementationOnce(async (fn: (client: typeof tx) => Promise<unknown>) =>
+      fn(tx),
+    );
+    sqlMock.mockResolvedValueOnce([beforeStatement]).mockResolvedValueOnce([]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/statements/${STATEMENT_ID}/import`,
+        headers: { cookie: authCookie() },
+        payload: { row_ids: [STATEMENT_ROW_ID] },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        ok: true,
+        imported_count: 1,
+        statement: {
+          id: STATEMENT_ID,
+          status: "imported",
+          imported_count: 1,
+        },
+      });
+      expect(tx).toHaveBeenCalledTimes(5);
     } finally {
       await app.close();
     }

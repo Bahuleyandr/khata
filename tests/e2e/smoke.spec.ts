@@ -49,6 +49,28 @@ async function mockApi(page: Page) {
   )
   await page.route('**/api/tags', (route) => route.fulfill({ json: { tags: [{ id: 'tag-1', name: 'team', count: 1 }] } }))
   await page.route('**/api/statements', (route) => route.fulfill({ json: { statements: [] } }))
+  await page.route('**/api/subscriptions**', (route) =>
+    route.fulfill({
+      json: {
+        subscriptions: [{
+          name: 'MiniMax',
+          merchant_key: 'minimax',
+          count: 3,
+          total_cents: '149700',
+          first_seen: '2026-02-01',
+          last_seen: '2026-04-01',
+          cadence: 'monthly',
+          confidence: 100,
+          avg_amount_cents: '49900',
+          monthly_estimate_cents: '49900',
+          avg_interval_days: 30,
+          interval_jitter_days: 1.5,
+          amount_variance_pct: 0,
+          preference_status: null,
+        }],
+      },
+    }),
+  )
   await page.route('**/api/audit-log**', (route) =>
     route.fulfill({
       json: {
@@ -98,6 +120,7 @@ async function mockApi(page: Page) {
     },
     subscriptions: [{
       name: 'MiniMax',
+      merchant_key: 'minimax',
       count: 3,
       total_cents: '149700',
       first_seen: '2026-02-01',
@@ -109,6 +132,7 @@ async function mockApi(page: Page) {
       avg_interval_days: 30,
       interval_jitter_days: 1.5,
       amount_variance_pct: 0,
+      preference_status: null,
     }],
     narrative: 'April 2026: ₹1,250 across 1 transaction. Top category is Food.',
   }
@@ -240,6 +264,7 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByText('Categories')).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()
   await expect(page.getByText('#team')).toBeVisible()
+  await expect(page.getByText('MiniMax')).toBeVisible()
   await expect(page.getByLabel('Statement file')).toBeVisible()
   await expect(page.getByText('expense update')).toBeVisible()
 })

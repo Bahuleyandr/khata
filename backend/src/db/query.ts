@@ -158,6 +158,7 @@ export interface MerchantSpend {
 }
 
 export interface SubscriptionCandidate extends MerchantSpend {
+  merchant_key: string;
   cadence: "weekly" | "fortnightly" | "monthly" | "quarterly" | "irregular";
   confidence: number;
   avg_amount_cents: string;
@@ -166,6 +167,7 @@ export interface SubscriptionCandidate extends MerchantSpend {
   interval_jitter_days: number | null;
   amount_variance_pct: number;
   charge_dates: string[];
+  preference_status: "confirmed" | "ignored" | null;
 }
 
 /**
@@ -262,8 +264,10 @@ export async function findSubscriptionCandidates(
   userId: number,
   lookbackMonths: number = 6,
   minOccurrences: number = 2,
+  options: { includeIgnored?: boolean } = {},
 ): Promise<SubscriptionCandidate[]> {
   type Row = {
+    merchant_key: string;
     merchant: string;
     total_cents: string;
     count: number;
@@ -273,6 +277,7 @@ export async function findSubscriptionCandidates(
     min_amount_cents: string;
     max_amount_cents: string;
     charge_dates: Array<string | Date>;
+    preference_status: "confirmed" | "ignored" | null;
   };
 
   const rows = await sql<Row[]>`
@@ -288,21 +293,41 @@ export async function findSubscriptionCandidates(
         AND e.amount_cents > 0
         AND e.occurred_at >= NOW() - (${lookbackMonths} || ' months')::interval
         AND COALESCE(mc.name, e.merchant, e.description) IS NOT NULL
+    ),
+    grouped AS (
+      SELECT
+        merchant_key,
+        MIN(merchant) AS merchant,
+        SUM(amount_cents)::text AS total_cents,
+        COUNT(*)::int AS count,
+        MIN(charge_date)::text AS first_seen,
+        MAX(charge_date)::text AS last_seen,
+        ROUND(AVG(amount_cents))::bigint::text AS avg_amount_cents,
+        MIN(amount_cents)::text AS min_amount_cents,
+        MAX(amount_cents)::text AS max_amount_cents,
+        ARRAY_AGG(charge_date ORDER BY charge_date) AS charge_dates
+      FROM merchant_rows
+      GROUP BY merchant_key
+      HAVING COUNT(*) >= ${minOccurrences}
     )
     SELECT
-      MIN(merchant) AS merchant,
-      SUM(amount_cents)::text AS total_cents,
-      COUNT(*)::int AS count,
-      MIN(charge_date)::text AS first_seen,
-      MAX(charge_date)::text AS last_seen,
-      ROUND(AVG(amount_cents))::bigint::text AS avg_amount_cents,
-      MIN(amount_cents)::text AS min_amount_cents,
-      MAX(amount_cents)::text AS max_amount_cents,
-      ARRAY_AGG(charge_date ORDER BY charge_date) AS charge_dates
-    FROM merchant_rows
-    GROUP BY merchant_key
-    HAVING COUNT(*) >= ${minOccurrences}
-    ORDER BY COUNT(*) DESC, SUM(amount_cents) DESC
+      grouped.merchant_key,
+      grouped.merchant,
+      grouped.total_cents,
+      grouped.count,
+      grouped.first_seen,
+      grouped.last_seen,
+      grouped.avg_amount_cents,
+      grouped.min_amount_cents,
+      grouped.max_amount_cents,
+      grouped.charge_dates,
+      sp.status AS preference_status
+    FROM grouped
+    LEFT JOIN subscription_preferences sp
+      ON sp.user_id = ${userId}
+     AND sp.merchant_key = grouped.merchant_key
+    WHERE ${options.includeIgnored === true} OR COALESCE(sp.status, '') <> 'ignored'
+    ORDER BY grouped.count DESC, grouped.total_cents::bigint DESC
     LIMIT 50
   `;
 
@@ -342,6 +367,7 @@ export async function findSubscriptionCandidates(
       });
 
       return {
+        merchant_key: row.merchant_key,
         merchant: row.merchant,
         total_cents: row.total_cents,
         count: row.count,
@@ -355,6 +381,7 @@ export async function findSubscriptionCandidates(
         interval_jitter_days: intervalJitterDays,
         amount_variance_pct: amountVariancePct,
         charge_dates: dates.map((date) => date.toISOString().slice(0, 10)),
+        preference_status: row.preference_status,
       };
     })
     .filter((row) => row.confidence >= 55)

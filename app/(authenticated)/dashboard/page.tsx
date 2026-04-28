@@ -8,9 +8,11 @@ import {
   getInsights,
   formatCents,
   formatDate,
+  setSubscriptionPreference,
   type ExpenseSummary,
   type CategoryTotal,
   type Insight,
+  type SubscriptionCandidate,
 } from '../../../lib/api'
 import { InsightCards } from './InsightCards'
 import { MonthlySummary } from './MonthlySummary'
@@ -38,6 +40,7 @@ export default function DashboardPage() {
   const [insights, setInsights] = useState<Insight[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [monthValue, setMonthValue] = useState(currentMonthValue)
+  const [busySubscription, setBusySubscription] = useState<string | null>(null)
 
   useEffect(() => {
     const { year, month } = parseMonthValue(monthValue)
@@ -53,6 +56,23 @@ export default function DashboardPage() {
       .then((r) => setInsights(r.insights))
       .catch(() => setInsights([]))
   }, [])
+
+  async function updateSubscriptionPreference(
+    subscription: SubscriptionCandidate,
+    status: 'confirmed' | 'ignored',
+  ) {
+    setBusySubscription(subscription.merchant_key)
+    setError(null)
+    try {
+      await setSubscriptionPreference(subscription.merchant_key, subscription.name, status)
+      const { year, month } = parseMonthValue(monthValue)
+      setSummary(await getExpenseSummary({ year, month }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update subscription')
+    } finally {
+      setBusySubscription(null)
+    }
+  }
 
   if (error) return <div className="page"><div className="error-msg">{error}</div></div>
 
@@ -97,7 +117,11 @@ export default function DashboardPage() {
             <span>{summary.narrative}</span>
           </div>
 
-          <DashboardActionCards summary={summary} />
+          <DashboardActionCards
+            summary={summary}
+            busySubscription={busySubscription}
+            onSubscriptionPreference={updateSubscriptionPreference}
+          />
 
           {insights !== null && <InsightCards insights={insights} />}
 
@@ -151,7 +175,15 @@ export default function DashboardPage() {
   )
 }
 
-function DashboardActionCards({ summary }: { summary: ExpenseSummary }) {
+function DashboardActionCards({
+  summary,
+  busySubscription,
+  onSubscriptionPreference,
+}: {
+  summary: ExpenseSummary
+  busySubscription: string | null
+  onSubscriptionPreference: (subscription: SubscriptionCandidate, status: 'confirmed' | 'ignored') => Promise<void>
+}) {
   const uncategorized = summary.mtd.find((category) => category.category === 'Uncategorized')
   const projectedOver = summary.budgets
     .filter((budget) => budget.projected_variance_cents > 0)
@@ -246,17 +278,39 @@ function DashboardActionCards({ summary }: { summary: ExpenseSummary }) {
                 <th>Cadence</th>
                 <th style={{ textAlign: 'right' }}>Monthly</th>
                 <th style={{ textAlign: 'right' }}>Confidence</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {summary.subscriptions.slice(0, 6).map((subscription) => (
-                <tr key={subscription.name}>
-                  <td>{subscription.name}</td>
+                <tr key={subscription.merchant_key}>
+                  <td>
+                    {subscription.name}
+                    {subscription.preference_status === 'confirmed' ? <span className="badge badge-confirmed">Confirmed</span> : null}
+                  </td>
                   <td>{subscription.cadence}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>
                     {formatCents(subscription.monthly_estimate_cents)}
                   </td>
                   <td style={{ textAlign: 'right' }}>{subscription.confidence}%</td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        type="button"
+                        onClick={() => void onSubscriptionPreference(subscription, 'confirmed')}
+                        disabled={busySubscription === subscription.merchant_key || subscription.preference_status === 'confirmed'}
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onSubscriptionPreference(subscription, 'ignored')}
+                        disabled={busySubscription === subscription.merchant_key}
+                      >
+                        Ignore
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
