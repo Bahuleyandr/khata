@@ -65,7 +65,7 @@ async function main() {
     "--name",
     container,
     "-e",
-    "POSTGRES_PASSWORD=postgres",
+    "POSTGRES_HOST_AUTH_METHOD=trust",
     "-e",
     `POSTGRES_DB=${dbName}`,
     "-p",
@@ -80,12 +80,12 @@ async function main() {
   ).trim().split(":").pop();
   if (!port) throw new Error("Could not discover mapped Postgres port");
 
-  console.log(`Running migrations on postgres://postgres:postgres@127.0.0.1:${port}/${dbName}`);
+  console.log(`Running migrations on postgres://postgres@127.0.0.1:${port}/${dbName}`);
   await run(npmCmd, ["--prefix", "backend", "run", "migrate:dev"], {
     shell: process.platform === "win32",
     env: {
       ...process.env,
-      DATABASE_URL: `postgres://postgres:postgres@127.0.0.1:${port}/${dbName}`,
+      DATABASE_URL: `postgres://postgres@127.0.0.1:${port}/${dbName}`,
       TELEGRAM_BOT_TOKEN: "test-token",
       ALLOWED_TELEGRAM_USER_IDS: "12345",
       SESSION_SECRET: "test-secret-that-is-at-least-32-chars-long",
