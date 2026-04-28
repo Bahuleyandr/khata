@@ -164,7 +164,7 @@ function DashboardActionCards({ summary }: { summary: ExpenseSummary }) {
         <span className="eyebrow">Cleanup</span>
         <h3>{uncategorized ? `${uncategorized.count} uncategorized` : 'All categorized'}</h3>
         <p>{uncategorized ? formatCents(uncategorized.total_cents, uncategorized.currency) : 'No cleanup queue.'}</p>
-        <Link href="/transactions?uncategorized=true" className="text-link">Review</Link>
+        <Link href={`/review?month=${summary.period.rangeKey}`} className="text-link">Monthly review</Link>
       </div>
       <div className="card compact-card">
         <span className="eyebrow">Budget variance</span>

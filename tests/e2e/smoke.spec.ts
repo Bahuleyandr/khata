@@ -81,6 +81,55 @@ async function mockApi(page: Page) {
     },
     narrative: 'April 2026: ₹1,250 across 1 transaction. Top category is Food.',
   }
+  await page.route('**/api/review/monthly**', (route) =>
+    route.fulfill({
+      json: {
+        period: summary.period,
+        overview: {
+          transaction_count: 1,
+          total_cents: '125000',
+          uncategorized_count: 0,
+          uncategorized_cents: '0',
+          needs_review_count: 1,
+          receipts_needs_review_count: 1,
+          missing_receipt_count: 0,
+          duplicate_candidate_count: 0,
+          open_task_count: 1,
+        },
+        tasks: [
+          {
+            id: 'receipts',
+            label: 'Review receipt OCR',
+            detail: 'Approve or correct receipt captures with raw OCR visible.',
+            count: 1,
+            status: 'attention',
+            href: '/receipts?start=2026-04-01&end=2026-04-30&review_status=needs_review',
+          },
+          {
+            id: 'export',
+            label: 'Export monthly workbook',
+            detail: 'Download the month once cleanup is done.',
+            count: 1,
+            status: 'ready',
+            href: '/api/export/xlsx?year=2026&month=4',
+          },
+        ],
+        budgets: summary.budgets,
+        statements: {
+          total: 0,
+          failed: 0,
+          pending: 0,
+          parsed: 0,
+          imported: 0,
+          parsed_count: 0,
+          imported_count: 0,
+          duplicate_count: 0,
+        },
+        samples: [expense],
+        narrative: 'April 2026 has 1 cleanup area before close.',
+      },
+    }),
+  )
   await page.route('**/api/expenses/**', (route) => {
     const url = route.request().url()
     if (url.includes('/summary') || url.includes('/duplicates')) {
@@ -129,6 +178,14 @@ test('login and dashboard shell render', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   await expect(page.getByText(/Top category is Food/)).toBeVisible()
   await expect(page.getByText('Budget Pace')).toBeVisible()
+})
+
+test('monthly review checklist renders action links', async ({ page }) => {
+  await page.goto('/review')
+  await expect(page.getByRole('heading', { name: 'Monthly Review' })).toBeVisible()
+  await expect(page.getByText('Close Checklist')).toBeVisible()
+  await expect(page.getByText('Review receipt OCR')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Export', exact: true })).toHaveAttribute('href', /\/api\/export\/xlsx/)
 })
 
 test('transactions and receipt review flows render', async ({ page }) => {

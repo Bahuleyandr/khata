@@ -40,6 +40,7 @@ import { budgetsRoutes } from "./budgets.js";
 import { categoriesRoutes } from "./categories.js";
 import { installCsrfOriginGuard } from "./csrf.js";
 import { expensesRoutes } from "./expenses.js";
+import { monthlyReviewRoutes } from "./monthly-review.js";
 import { receiptsRoutes } from "./receipts.js";
 import { tagsRoutes } from "./tags.js";
 
@@ -71,6 +72,7 @@ async function buildApp() {
   await app.register(categoriesRoutes);
   await app.register(budgetsRoutes);
   await app.register(tagsRoutes);
+  await app.register(monthlyReviewRoutes);
   await app.ready();
   return app;
 }
@@ -248,6 +250,92 @@ describe("route hardening", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true, updated: 1 });
       expect(sqlMock).toHaveBeenCalledTimes(4);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("returns a monthly close checklist with cleanup links", async () => {
+    sqlMock
+      .mockResolvedValueOnce([
+        {
+          transaction_count: "4",
+          total_cents: "250000",
+          uncategorized_count: "1",
+          uncategorized_cents: "50000",
+          needs_review_count: "2",
+          receipts_needs_review_count: "1",
+          missing_receipt_count: "1",
+        },
+      ])
+      .mockResolvedValueOnce([{ duplicate_count: "2" }])
+      .mockResolvedValueOnce([
+        {
+          total: "1",
+          failed: "1",
+          pending: "0",
+          parsed: "0",
+          imported: "0",
+          parsed_count: "8",
+          imported_count: "4",
+          duplicate_count: "2",
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: EXPENSE_ID,
+          amount_cents: "50000",
+          currency: "INR",
+          merchant: null,
+          description: "Cash lunch",
+          category: "Uncategorized",
+          review_status: "needs_review",
+          occurred_at: new Date("2026-04-20T10:00:00.000Z"),
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: "budget-1",
+          category_id: CATEGORY_ID,
+          category_name: "Food",
+          target_cents: "100000",
+          spent_cents: "200000",
+        },
+      ]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/review/monthly?year=2026&month=4",
+        headers: { cookie: authCookie() },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        period: { label: "April 2026", start: "2026-04-01", end: "2026-04-30" },
+        overview: {
+          transaction_count: 4,
+          uncategorized_count: 1,
+          receipts_needs_review_count: 1,
+          duplicate_candidate_count: 2,
+          open_task_count: 5,
+        },
+        statements: { total: 1, failed: 1, parsed_count: 8, imported_count: 4 },
+      });
+      expect(res.json().tasks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "uncategorized",
+            status: "attention",
+            href: "/transactions?start=2026-04-01&end=2026-04-30&uncategorized=true",
+          }),
+          expect.objectContaining({
+            id: "receipts",
+            href: "/receipts?start=2026-04-01&end=2026-04-30&review_status=needs_review",
+          }),
+        ]),
+      );
     } finally {
       await app.close();
     }

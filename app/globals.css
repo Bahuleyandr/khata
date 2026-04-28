@@ -589,6 +589,177 @@ tr:hover td { background: #f9fafb; }
   gap: 0.4rem;
 }
 
+.review-hero {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d9e7e3;
+  border-left: 4px solid #0f766e;
+  border-radius: 8px;
+  display: flex;
+  justify-content: space-between;
+  gap: 1.25rem;
+  margin-bottom: 1rem;
+  padding: 1.25rem 1.5rem;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+.review-hero .eyebrow {
+  color: #0f766e;
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+.review-hero h3 {
+  color: #111827;
+  font-size: 1.75rem;
+  line-height: 1.1;
+  margin: 0;
+}
+.review-hero p {
+  color: #4b5563;
+  font-size: 0.92rem;
+  margin-top: 0.45rem;
+}
+.review-progress {
+  min-width: 190px;
+  text-align: right;
+}
+.review-progress strong {
+  color: #0f766e;
+  display: block;
+  font-size: 1.6rem;
+}
+.review-progress span {
+  color: #6b7280;
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 0.45rem;
+}
+.review-progress div {
+  background: #e5e7eb;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+.review-progress i {
+  background: #0f766e;
+  display: block;
+  height: 100%;
+}
+.review-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1.25rem;
+}
+.review-metrics div {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+}
+.review-metrics span {
+  color: #6b7280;
+  display: block;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+.review-metrics strong {
+  color: #111827;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+}
+.review-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: 1.25rem;
+}
+.review-checklist h3,
+.review-panel h3 {
+  color: #111827;
+  font-size: 1rem;
+  margin-bottom: 0.9rem;
+}
+.review-task-list,
+.review-side-stack,
+.variance-list,
+.review-sample-list {
+  display: grid;
+  gap: 0.65rem;
+}
+.review-task {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: inherit;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.8rem;
+}
+.review-task:hover {
+  background: #f9fafb;
+}
+.review-task.attention {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+.review-task.ready {
+  border-color: #c7d2fe;
+  background: #f8f9ff;
+}
+.review-task-status {
+  color: #6b7280;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.review-task.attention .review-task-status { color: #b91c1c; }
+.review-task.ready .review-task-status { color: #4338ca; }
+.review-task strong {
+  color: #111827;
+  font-size: 0.95rem;
+}
+.review-task small,
+.review-task em {
+  color: #6b7280;
+  font-size: 0.8rem;
+  font-style: normal;
+}
+.review-task em {
+  font-weight: 700;
+}
+.review-panel p {
+  color: #6b7280;
+  font-size: 0.88rem;
+}
+.variance-list div,
+.review-sample-list a {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.7rem;
+}
+.variance-list span,
+.review-sample-list span,
+.review-sample-list small {
+  color: #6b7280;
+  font-size: 0.78rem;
+}
+.variance-list strong,
+.review-sample-list strong {
+  color: #111827;
+  font-size: 0.9rem;
+}
+.receipt-filter-card {
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+}
+
 .skeleton {
   background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
   background-size: 200% 100%;
@@ -652,8 +823,13 @@ tr:hover td { background: #f9fafb; }
   .monthly-summary-main { flex-direction: column; }
   .month-progress { min-width: 0; text-align: left; width: 100%; }
   .monthly-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .review-hero { align-items: stretch; flex-direction: column; }
+  .review-progress { min-width: 0; text-align: left; width: 100%; }
+  .review-metrics,
+  .review-layout { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 460px) {
   .monthly-summary-grid { grid-template-columns: 1fr; }
+  .review-metrics { grid-template-columns: 1fr; }
 }

@@ -151,6 +151,54 @@ export interface StatementImport {
   updated_at: string
 }
 
+export interface MonthlyReviewTask {
+  id: 'uncategorized' | 'receipts' | 'duplicates' | 'statements' | 'budgets' | 'export'
+  label: string
+  detail: string
+  count: number
+  amount_cents?: string
+  status: 'done' | 'attention' | 'ready'
+  href: string
+}
+
+export interface MonthlyReview {
+  period: SummaryPeriod
+  overview: {
+    transaction_count: number
+    total_cents: string
+    uncategorized_count: number
+    uncategorized_cents: string
+    needs_review_count: number
+    receipts_needs_review_count: number
+    missing_receipt_count: number
+    duplicate_candidate_count: number
+    open_task_count: number
+  }
+  tasks: MonthlyReviewTask[]
+  budgets: BudgetVariance[]
+  statements: {
+    total: number
+    failed: number
+    pending: number
+    parsed: number
+    imported: number
+    parsed_count: number
+    imported_count: number
+    duplicate_count: number
+  }
+  samples: Array<{
+    id: string
+    amount_cents: string
+    currency: string
+    merchant: string | null
+    description: string | null
+    category: string | null
+    review_status: 'needs_review' | 'reviewed' | 'ignored'
+    occurred_at: string
+  }>
+  narrative: string
+}
+
 export function getMe(): Promise<Me> {
   return apiFetch<Me>('/api/me')
 }
@@ -164,6 +212,13 @@ export function getExpenseSummary(params: { year?: number; month?: number } = {}
   if (params.year) q.set('year', String(params.year))
   if (params.month) q.set('month', String(params.month))
   return apiFetch<ExpenseSummary>(`/api/expenses/summary?${q}`)
+}
+
+export function getMonthlyReview(params: { year?: number; month?: number } = {}): Promise<MonthlyReview> {
+  const q = new URLSearchParams()
+  if (params.year) q.set('year', String(params.year))
+  if (params.month) q.set('month', String(params.month))
+  return apiFetch<MonthlyReview>(`/api/review/monthly?${q}`)
 }
 
 export function getExpenses(params: {
@@ -373,10 +428,19 @@ export function getInsights(): Promise<InsightsResponse> {
   return apiFetch<InsightsResponse>('/api/insights')
 }
 
-export function getReceipts(params: { page?: number; limit?: number }): Promise<ReceiptPage> {
+export function getReceipts(params: {
+  page?: number
+  limit?: number
+  start?: string
+  end?: string
+  reviewStatus?: string
+}): Promise<ReceiptPage> {
   const q = new URLSearchParams()
   if (params.page) q.set('page', String(params.page))
   if (params.limit) q.set('limit', String(params.limit))
+  if (params.start) q.set('start', params.start)
+  if (params.end) q.set('end', params.end)
+  if (params.reviewStatus) q.set('review_status', params.reviewStatus)
   return apiFetch<ReceiptPage>(`/api/receipts?${q}`)
 }
 

@@ -164,7 +164,17 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
+    const qsStart = params.get('start')
+    if (qsStart) setStart(qsStart)
+    const qsEnd = params.get('end')
+    if (qsEnd) setEnd(qsEnd)
+    const qsReview = params.get('review_status')
+    if (qsReview) setReviewStatus(qsReview)
+    const qsReceipt = params.get('has_receipt')
+    if (qsReceipt === 'true') setHasReceipt('yes')
+    if (qsReceipt === 'false') setHasReceipt('no')
     if (params.get('uncategorized') === 'true') setUncategorized(true)
+    if (params.get('duplicates') === 'true') setDuplicates(true)
     const qsTag = params.get('tag')
     if (qsTag) setTag(qsTag)
   }, [])

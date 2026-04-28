@@ -6,7 +6,12 @@ import { getSession } from "./auth.js";
 type ReceiptsQuery = {
   page?: number;
   limit?: number;
+  start?: string;
+  end?: string;
+  review_status?: "needs_review" | "reviewed" | "ignored";
 };
+
+const datePattern = "^\\d{4}-\\d{2}-\\d{2}$";
 
 const receiptsQuerySchema = {
   type: "object",
@@ -14,6 +19,9 @@ const receiptsQuerySchema = {
   properties: {
     page: { type: "integer", minimum: 1 },
     limit: { type: "integer", minimum: 1, maximum: 100 },
+    start: { type: "string", pattern: datePattern },
+    end: { type: "string", pattern: datePattern },
+    review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
   },
 } as const;
 
@@ -42,6 +50,9 @@ export async function receiptsRoutes(app: FastifyInstance) {
     const page = q.page ?? 1;
     const limit = q.limit ?? 20;
     const offset = (page - 1) * limit;
+    const start = q.start ?? null;
+    const end = q.end ?? null;
+    const reviewStatus = q.review_status ?? null;
 
     type ReceiptRow = {
       id: string;
@@ -73,6 +84,9 @@ export async function receiptsRoutes(app: FastifyInstance) {
       LEFT JOIN categories c ON e.category_id = c.id
       WHERE e.user_id = ${session.userId}
         AND e.image_key IS NOT NULL
+        AND (${start}::date IS NULL OR e.occurred_at >= ${start}::date)
+        AND (${end}::date IS NULL OR e.occurred_at < (${end}::date + INTERVAL '1 day'))
+        AND (${reviewStatus}::text IS NULL OR e.review_status = ${reviewStatus})
       ORDER BY e.occurred_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -80,7 +94,11 @@ export async function receiptsRoutes(app: FastifyInstance) {
     const [{ count }] = await sql<[{ count: string }]>`
       SELECT COUNT(*)::text AS count
       FROM expenses
-      WHERE user_id = ${session.userId} AND image_key IS NOT NULL
+      WHERE user_id = ${session.userId}
+        AND image_key IS NOT NULL
+        AND (${start}::date IS NULL OR occurred_at >= ${start}::date)
+        AND (${end}::date IS NULL OR occurred_at < (${end}::date + INTERVAL '1 day'))
+        AND (${reviewStatus}::text IS NULL OR review_status = ${reviewStatus})
     `;
 
     // receipt_url is a same-origin proxy path the browser hits with its

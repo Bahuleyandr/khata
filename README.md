@@ -4,7 +4,7 @@ Personal expense tracker. Capture spending via Telegram (text, voice notes, phot
 
 | Service | Description |
 |---|---|
-| `/` (root) | Next.js 15 dashboard — transactions, categories, tags, monthly Excel export |
+| `/` (root) | Next.js 15 dashboard — monthly review, transactions, receipts, categories, tags, Excel export |
 | `backend/` | Fastify API + grammy Telegram bot — capture, parse, classify, store |
 
 ## Quick start
@@ -44,7 +44,7 @@ echo NEXT_PUBLIC_API_URL=http://localhost:3001 > .env.local
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The current app should show the Telegram login shell, then the dashboard, transactions, receipts, and manage workspace after auth.
+Open [http://localhost:3000](http://localhost:3000). The current app should show the Telegram login shell, then the dashboard, monthly review, transactions, receipts, and manage workspace after auth.
 
 ## Scripts
 
@@ -63,7 +63,7 @@ Open [http://localhost:3000](http://localhost:3000). The current app should show
 ## Project structure
 
 ```
-app/          Next.js App Router dashboard, transactions, receipts, and manage pages
+app/          Next.js App Router dashboard, monthly review, transactions, receipts, and manage pages
 lib/          Shared frontend API client, formatting, auth, and utility modules
 backend/      Fastify API, Telegram bot handlers, migrations, parsing, and cron jobs
 deploy/       k3s manifests, Dockerfiles, backups, and Dalekdefender make targets
@@ -71,6 +71,10 @@ tests/e2e/    Playwright smoke tests with mocked dashboard APIs
 ```
 
 Frontend business logic lives in `lib/` where possible. Backend money/data logic lives under `backend/src/` and is covered by Vitest plus the migration smoke test.
+
+## Monthly review workflow
+
+The `/review` workspace is the month-close surface. It calls `/api/review/monthly?year=YYYY&month=M` and returns a deterministic checklist for uncategorized transactions, receipt OCR review, duplicate candidates, unresolved statement imports, budget variance, and the month export link. Checklist links deep-link into `/transactions` and `/receipts` with the same date range and filters, so the review flow stays month-scoped.
 
 ## Stack rationale
 

@@ -198,11 +198,14 @@ export default function ReceiptsPage() {
   const [selected, setSelected] = useState<Receipt | null>(null)
   const [draft, setDraft] = useState<ReceiptDraft | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('')
+  const [reviewStatus, setReviewStatus] = useState('')
 
   const fetchPage = useCallback((p: number) => {
     setLoading(true)
     setError(null)
-    getReceipts({ page: p, limit: 24 })
+    getReceipts({ page: p, limit: 24, start, end, reviewStatus })
       .then((res) => {
         setReceipts(res.data)
         setTotal(res.total)
@@ -214,11 +217,21 @@ export default function ReceiptsPage() {
         setError(e.message)
         setLoading(false)
       })
-  }, [])
+  }, [end, reviewStatus, start])
 
   useEffect(() => {
     fetchPage(1)
   }, [fetchPage])
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const qsStart = params.get('start')
+    if (qsStart) setStart(qsStart)
+    const qsEnd = params.get('end')
+    if (qsEnd) setEnd(qsEnd)
+    const qsReview = params.get('review_status')
+    if (qsReview) setReviewStatus(qsReview)
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -317,7 +330,31 @@ export default function ReceiptsPage() {
 
   return (
     <div className="page">
-      <h2 style={{ marginBottom: '1.25rem', fontSize: '1.3rem' }}>Receipts</h2>
+      <div className="page-heading">
+        <h2>Receipts</h2>
+      </div>
+
+      <div className="card receipt-filter-card">
+        <div className="filter-bar">
+          <div>
+            <label>From</label>
+            <input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+          </div>
+          <div>
+            <label>To</label>
+            <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+          </div>
+          <div>
+            <label>Review</label>
+            <select value={reviewStatus} onChange={(e) => setReviewStatus(e.target.value)}>
+              <option value="">Any</option>
+              <option value="needs_review">Needs review</option>
+              <option value="reviewed">Reviewed</option>
+              <option value="ignored">Ignored</option>
+            </select>
+          </div>
+        </div>
+      </div>
 
       {error && <div className="error-msg">{error}</div>}
 
