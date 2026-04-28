@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { sql } from "../db/index.js";
+import { recordAuditEvent } from "../db/audit.js";
 import { getBudgetsWithMtd } from "../db/budgets.js";
 import { getOrCreateMerchantCanonical, setMerchantCategory } from "../db/merchants.js";
 import { attachTagToExpense, getOrCreateTag, getTagsForExpenses } from "../db/tags.js";
@@ -42,6 +43,17 @@ type ExpenseUpdateBody = {
   category_id?: string | null;
   occurred_at?: string;
   review_status?: "needs_review" | "reviewed" | "ignored";
+};
+
+type ExpenseCreateBody = {
+  amount_cents: number;
+  currency?: string;
+  description?: string | null;
+  merchant?: string | null;
+  category_id?: string | null;
+  occurred_at: string;
+  review_status?: "needs_review" | "reviewed" | "ignored";
+  tag_names?: string[];
 };
 
 type ExpenseMergeBody = {
@@ -138,6 +150,26 @@ const expenseUpdateSchema = {
     category_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
     occurred_at: { type: "string", pattern: datePattern },
     review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+  },
+} as const;
+
+const expenseCreateSchema = {
+  type: "object",
+  required: ["amount_cents", "occurred_at"],
+  additionalProperties: false,
+  properties: {
+    amount_cents: { type: "integer", minimum: 1, maximum: 999999999999 },
+    currency: { type: "string", pattern: "^[A-Z]{3}$" },
+    description: { anyOf: [{ type: "string", maxLength: 500 }, { type: "null" }] },
+    merchant: { anyOf: [{ type: "string", maxLength: 160 }, { type: "null" }] },
+    category_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
+    occurred_at: { type: "string", pattern: datePattern },
+    review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+    tag_names: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string", minLength: 1, maxLength: 80 },
+    },
   },
 } as const;
 
@@ -375,6 +407,95 @@ export async function expensesRoutes(app: FastifyInstance) {
     },
   );
 
+  // POST /api/expenses — manual dashboard entry for cash/card items missed by capture.
+  app.post<{ Body: ExpenseCreateBody }>(
+    "/api/expenses",
+    { schema: { body: expenseCreateSchema } },
+    async (request, reply) => {
+      const session = await getSession(request, reply);
+      if (!session) return;
+
+      const body = request.body;
+      const occurredAt = parseIsoDate(body.occurred_at);
+      if (!occurredAt) return reply.status(400).send({ error: "Invalid occurred_at date" });
+
+      if (body.category_id && !(await categoryBelongsToUser(session.userId, body.category_id))) {
+        return reply.status(400).send({ error: "Category not found" });
+      }
+
+      const merchant = normalizeNullableText(body.merchant) ?? null;
+      const description = normalizeNullableText(body.description) ?? null;
+      if (!merchant && !description) {
+        return reply.status(400).send({ error: "Merchant or description is required" });
+      }
+
+      const merchantCanonicalId = merchant
+        ? await getOrCreateMerchantCanonical(session.userId, merchant)
+        : null;
+      const reviewStatus = body.review_status ?? "reviewed";
+
+      const rows = await sql<ExpenseRow[]>`
+        WITH inserted AS (
+          INSERT INTO expenses (
+            user_id,
+            amount_cents,
+            currency,
+            description,
+            merchant,
+            merchant_canonical_id,
+            category_id,
+            occurred_at,
+            source,
+            raw_text,
+            review_status,
+            reviewed_at
+          )
+          VALUES (
+            ${session.userId},
+            ${body.amount_cents},
+            ${body.currency ?? "INR"},
+            ${description},
+            ${merchant},
+            ${merchantCanonicalId},
+            ${body.category_id ?? null},
+            ${occurredAt},
+            'manual',
+            NULL,
+            ${reviewStatus},
+            CASE WHEN ${reviewStatus} = 'reviewed' THEN NOW() ELSE NULL END
+          )
+          RETURNING id, amount_cents::text, currency, description, merchant,
+                    merchant_canonical_id, category_id, source, occurred_at, image_key,
+                    review_status
+        )
+        SELECT inserted.*,
+               COALESCE(c.name, 'Uncategorized') AS category
+        FROM inserted
+        LEFT JOIN categories c ON c.id = inserted.category_id
+      `;
+
+      const created = rows[0];
+      if (!created) return reply.status(500).send({ error: "Failed to create transaction" });
+
+      if (body.category_id && merchantCanonicalId) {
+        await setMerchantCategory(session.userId, merchantCanonicalId, body.category_id);
+      }
+
+      await addTagsToExpenses(session.userId, [created.id], body.tag_names);
+      const [createdWithTags] = await withTags([created]);
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.create",
+        entityType: "expense",
+        entityId: created.id,
+        after: createdWithTags,
+        metadata: { source: "manual", tag_names: body.tag_names ?? [] },
+      });
+
+      return reply.status(201).send(createdWithTags);
+    },
+  );
+
   // POST /api/expenses/bulk — bulk dashboard correction.
   app.post<{ Body: ExpenseBulkBody }>(
     "/api/expenses/bulk",
@@ -408,6 +529,18 @@ export async function expensesRoutes(app: FastifyInstance) {
         RETURNING id
       `;
       await addTagsToExpenses(session.userId, updated.map((row) => row.id), body.tag_names);
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.bulk_update",
+        entityType: "expense",
+        metadata: {
+          requested_ids: body.ids,
+          updated_ids: updated.map((row) => row.id),
+          category_id: body.category_id,
+          tag_names: body.tag_names ?? [],
+          review_status: body.review_status,
+        },
+      });
       return { ok: true, updated: updated.length };
     },
   );
@@ -482,6 +615,27 @@ export async function expensesRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Category not found" });
       }
 
+      const [before] = await sql<ExpenseRow[]>`
+        SELECT e.id,
+               e.amount_cents::text,
+               e.currency,
+               e.description,
+               e.merchant,
+               e.merchant_canonical_id,
+               e.category_id,
+               COALESCE(c.name, 'Uncategorized') AS category,
+               e.source,
+               e.occurred_at,
+               e.image_key,
+               e.review_status
+        FROM expenses e
+        LEFT JOIN categories c ON e.category_id = c.id
+        WHERE e.id = ${request.params.id}
+          AND e.user_id = ${session.userId}
+        LIMIT 1
+      `;
+      if (!before) return reply.status(404).send({ error: "Transaction not found" });
+
       const merchant =
         body.merchant !== undefined ? normalizeNullableText(body.merchant) ?? null : undefined;
       const description =
@@ -553,6 +707,15 @@ export async function expensesRoutes(app: FastifyInstance) {
         await setMerchantCategory(session.userId, updated.merchant_canonical_id, body.category_id);
       }
 
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.update",
+        entityType: "expense",
+        entityId: updated.id,
+        before,
+        after: updated,
+      });
+
       return updated;
     },
   );
@@ -595,7 +758,16 @@ export async function expensesRoutes(app: FastifyInstance) {
 
       const updated = rows[0];
       if (!updated) return reply.status(404).send({ error: "Transaction not found" });
-      return (await withTags([updated]))[0];
+      const [updatedWithTags] = await withTags([updated]);
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.receipt_attach",
+        entityType: "expense",
+        entityId: updated.id,
+        after: updatedWithTags,
+        metadata: { image_key: imageKey, content_hash: contentHash },
+      });
+      return updatedWithTags;
     },
   );
 
@@ -607,13 +779,34 @@ export async function expensesRoutes(app: FastifyInstance) {
       const session = await getSession(request, reply);
       if (!session) return;
 
-      const result = await sql<Array<{ id: string }>>`
+      const result = await sql<Array<{
+        id: string;
+        amount_cents: string;
+        currency: string;
+        description: string | null;
+        merchant: string | null;
+        merchant_canonical_id: string | null;
+        category_id: string | null;
+        source: string;
+        occurred_at: Date;
+        image_key: string | null;
+        review_status: string;
+      }>>`
         DELETE FROM expenses
         WHERE id = ${request.params.id}
           AND user_id = ${session.userId}
-        RETURNING id
+        RETURNING id, amount_cents::text, currency, description, merchant,
+                  merchant_canonical_id, category_id, source, occurred_at, image_key,
+                  review_status
       `;
       if (!result[0]) return reply.status(404).send({ error: "Transaction not found" });
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.delete",
+        entityType: "expense",
+        entityId: result[0].id,
+        before: result[0],
+      });
       return { ok: true };
     },
   );
@@ -631,7 +824,7 @@ export async function expensesRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Choose two different transactions" });
       }
 
-      const merged = await sql.begin(async (tx) => {
+      const mergeResult = await sql.begin(async (tx) => {
         const [keeper] = await tx<ExpenseInternalRow[]>`
           SELECT id, description, merchant, merchant_canonical_id, category_id, raw_text,
                  statement_id, image_key, content_hash, upi_reference_id
@@ -682,18 +875,31 @@ export async function expensesRoutes(app: FastifyInstance) {
             WHERE id = ${keeper.id}
               AND user_id = ${session.userId}
             RETURNING id, amount_cents::text, currency, description, merchant,
-                      merchant_canonical_id, category_id, source, occurred_at, image_key
+                      merchant_canonical_id, category_id, source, occurred_at, image_key,
+                      review_status
           )
           SELECT updated.*,
                  COALESCE(c.name, 'Uncategorized') AS category
           FROM updated
           LEFT JOIN categories c ON c.id = updated.category_id
         `;
-        return rows[0] ?? null;
+        return { merged: rows[0] ?? null, keeper, duplicate };
       });
 
-      if (!merged) return reply.status(404).send({ error: "Transaction not found" });
-      return { ok: true, expense: merged };
+      if (!mergeResult?.merged) return reply.status(404).send({ error: "Transaction not found" });
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.merge",
+        entityType: "expense",
+        entityId: mergeResult.merged.id,
+        before: {
+          keeper: mergeResult.keeper,
+          duplicate: mergeResult.duplicate,
+        },
+        after: mergeResult.merged,
+        metadata: { duplicate_id: request.body.duplicateId },
+      });
+      return { ok: true, expense: mergeResult.merged };
     },
   );
 

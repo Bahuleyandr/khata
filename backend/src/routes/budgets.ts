@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { recordAuditEvent } from "../db/audit.js";
 import { clearBudget, getBudgetsWithMtd, setBudget } from "../db/budgets.js";
 import { sql } from "../db/index.js";
 import { getSession } from "./auth.js";
@@ -68,7 +69,35 @@ export async function budgetsRoutes(app: FastifyInstance) {
       if (!(await categoryBelongsToUser(session.userId, request.body.category_id))) {
         return reply.status(400).send({ error: "Category not found" });
       }
+      const [before] = await sql<Array<{ id: string; category_id: string; target_cents: string; period: string }>>`
+        SELECT id, category_id, target_cents::text AS target_cents, period
+        FROM category_budgets
+        WHERE user_id = ${session.userId}
+          AND category_id = ${request.body.category_id}
+          AND period = 'monthly'
+        LIMIT 1
+      `;
       await setBudget(session.userId, request.body.category_id, request.body.target_cents);
+      const [after] = await sql<Array<{ id: string; category_id: string; target_cents: string; period: string }>>`
+        SELECT id, category_id, target_cents::text AS target_cents, period
+        FROM category_budgets
+        WHERE user_id = ${session.userId}
+          AND category_id = ${request.body.category_id}
+          AND period = 'monthly'
+        LIMIT 1
+      `;
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "budget.set",
+        entityType: "budget",
+        entityId: request.body.category_id,
+        before: before ?? null,
+        after: after ?? {
+          category_id: request.body.category_id,
+          target_cents: String(request.body.target_cents),
+          period: "monthly",
+        },
+      });
       return { ok: true };
     },
   );
@@ -79,8 +108,23 @@ export async function budgetsRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
+      const [before] = await sql<Array<{ id: string; category_id: string; target_cents: string; period: string }>>`
+        SELECT id, category_id, target_cents::text AS target_cents, period
+        FROM category_budgets
+        WHERE user_id = ${session.userId}
+          AND category_id = ${request.params.categoryId}
+          AND period = 'monthly'
+        LIMIT 1
+      `;
       const deleted = await clearBudget(session.userId, request.params.categoryId);
       if (!deleted) return reply.status(404).send({ error: "Budget not found" });
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "budget.clear",
+        entityType: "budget",
+        entityId: request.params.categoryId,
+        before: before ?? { category_id: request.params.categoryId, period: "monthly" },
+      });
       return { ok: true };
     },
   );

@@ -199,6 +199,18 @@ export interface MonthlyReview {
   narrative: string
 }
 
+export interface AuditEvent {
+  id: string
+  actor_user_id: string
+  action: string
+  entity_type: string
+  entity_id: string | null
+  before: unknown
+  after: unknown
+  metadata: Record<string, unknown>
+  created_at: string
+}
+
 export function getMe(): Promise<Me> {
   return apiFetch<Me>('/api/me')
 }
@@ -263,6 +275,25 @@ export interface ExpenseUpdateInput {
   category_id?: string | null
   occurred_at?: string
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
+}
+
+export interface ExpenseCreateInput {
+  amount_cents: number
+  currency?: string
+  description?: string | null
+  merchant?: string | null
+  category_id?: string | null
+  occurred_at: string
+  review_status?: 'needs_review' | 'reviewed' | 'ignored'
+  tag_names?: string[]
+}
+
+export function createExpense(data: ExpenseCreateInput): Promise<Expense> {
+  return apiFetch<Expense>('/api/expenses', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
 }
 
 export function updateExpense(id: string, data: ExpenseUpdateInput): Promise<Expense> {
@@ -372,6 +403,12 @@ export async function removeExpenseTag(id: string, tagId: string): Promise<void>
 
 export function getStatements(): Promise<{ statements: StatementImport[] }> {
   return apiFetch<{ statements: StatementImport[] }>('/api/statements')
+}
+
+export function getAuditLog(limit = 50): Promise<{ events: AuditEvent[] }> {
+  const q = new URLSearchParams()
+  q.set('limit', String(limit))
+  return apiFetch<{ events: AuditEvent[] }>(`/api/audit-log?${q}`)
 }
 
 export async function retryStatement(id: string): Promise<void> {

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  createExpense,
   deleteExpense,
   formatCents,
   formatDate,
@@ -53,6 +54,12 @@ function dateInputValue(iso: string) {
   return new Date(iso).toISOString().slice(0, 10)
 }
 
+function todayInputValue() {
+  const now = new Date()
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 10)
+}
+
 function centsToAmountInput(cents: string) {
   return (parseInt(cents, 10) / 100).toFixed(2)
 }
@@ -77,6 +84,18 @@ function makeDraft(expense: Expense): EditDraft {
     categoryId: expense.category_id ?? '',
     reviewStatus: expense.review_status,
     tags: expense.tags.join(', '),
+  }
+}
+
+function makeCreateDraft(): EditDraft {
+  return {
+    amount: '',
+    date: todayInputValue(),
+    merchant: '',
+    description: '',
+    categoryId: '',
+    reviewStatus: 'reviewed',
+    tags: '',
   }
 }
 
@@ -111,6 +130,8 @@ export default function TransactionsPage() {
 
   const [editing, setEditing] = useState<Expense | null>(null)
   const [draft, setDraft] = useState<EditDraft | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [createDraft, setCreateDraft] = useState<EditDraft>(makeCreateDraft)
   const [mergeTarget, setMergeTarget] = useState<Expense | null>(null)
   const [mergeDuplicateId, setMergeDuplicateId] = useState('')
   const [mergeCandidates, setMergeCandidates] = useState<Expense[]>([])
@@ -217,11 +238,15 @@ export default function TransactionsPage() {
     setSelectedIds((ids) => (ids.includes(id) ? ids.filter((row) => row !== id) : [...ids, id]))
   }
 
-  async function syncTags(expense: Expense, desiredRaw: string) {
-    const desired = desiredRaw
+  function tagNames(raw: string) {
+    return raw
       .split(/[,;]+/)
-      .map((name) => name.trim().toLowerCase().replace(/\s+/g, ' '))
+      .map((name) => name.trim())
       .filter(Boolean)
+  }
+
+  async function syncTags(expense: Expense, desiredRaw: string) {
+    const desired = tagNames(desiredRaw).map((name) => name.toLowerCase().replace(/\s+/g, ' '))
     const current = expense.tags.map((name) => name.toLowerCase())
     await Promise.all(desired.filter((name) => !current.includes(name)).map((name) => addExpenseTag(expense.id, name)))
     const byName = new Map(allTags.map((item) => [item.name.toLowerCase(), item.id]))
@@ -232,6 +257,45 @@ export default function TransactionsPage() {
         .filter((id): id is string => !!id)
         .map((id) => removeExpenseTag(expense.id, id)),
     )
+  }
+
+  async function saveCreate() {
+    const amountCents = parseAmountCents(createDraft.amount)
+    if (!amountCents) {
+      setMutationError('Enter a valid amount greater than zero.')
+      return
+    }
+    if (!createDraft.date) {
+      setMutationError('Choose a transaction date.')
+      return
+    }
+    if (!createDraft.merchant.trim() && !createDraft.description.trim()) {
+      setMutationError('Enter a merchant or description.')
+      return
+    }
+
+    setBusyId('create')
+    setMutationError(null)
+    try {
+      await createExpense({
+        amount_cents: amountCents,
+        currency: 'INR',
+        description: createDraft.description.trim() || null,
+        merchant: createDraft.merchant.trim() || null,
+        category_id: createDraft.categoryId || null,
+        occurred_at: createDraft.date,
+        review_status: createDraft.reviewStatus,
+        tag_names: tagNames(createDraft.tags),
+      })
+      setCreating(false)
+      setCreateDraft(makeCreateDraft())
+      await refreshCurrentPage()
+      getTags().then((res) => setAllTags(res.tags)).catch(() => {})
+    } catch (e) {
+      setMutationError(e instanceof Error ? e.message : 'Failed to create transaction')
+    } finally {
+      setBusyId(null)
+    }
   }
 
   async function saveEdit() {
@@ -314,10 +378,7 @@ export default function TransactionsPage() {
       await bulkUpdateExpenses({
         ids: selectedIds,
         category_id: bulkCategoryId === 'null' ? null : bulkCategoryId || undefined,
-        tag_names: bulkTags
-          .split(/[,;]+/)
-          .map((name) => name.trim())
-          .filter(Boolean),
+        tag_names: tagNames(bulkTags),
         review_status: bulkReviewStatus ? (bulkReviewStatus as 'needs_review' | 'reviewed' | 'ignored') : undefined,
       })
       setSelectedIds([])
@@ -349,17 +410,22 @@ export default function TransactionsPage() {
     <div className="page">
       <div className="page-heading">
         <h2>Transactions</h2>
-        <a
-          href={(() => {
-            const now = new Date()
-            return `/api/export/xlsx?year=${now.getFullYear()}&month=${now.getMonth() + 1}`
-          })()}
-          download
-          className="button-primary"
-          title="Download this month as .xlsx"
-        >
-          Download Excel
-        </a>
+        <div className="toolbar-inline">
+          <button type="button" className="button-primary" onClick={() => { setCreateDraft(makeCreateDraft()); setCreating(true); setMutationError(null) }}>
+            Add Transaction
+          </button>
+          <a
+            href={(() => {
+              const now = new Date()
+              return `/api/export/xlsx?year=${now.getFullYear()}&month=${now.getMonth() + 1}`
+            })()}
+            download
+            className="button-primary"
+            title="Download this month as .xlsx"
+          >
+            Download Excel
+          </a>
+        </div>
       </div>
 
       <div className="card">
@@ -579,6 +645,85 @@ export default function TransactionsPage() {
           </>
         )}
       </div>
+
+      {creating ? (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="add-transaction-title">
+          <div className="modal transaction-modal">
+            <button className="close-btn" type="button" onClick={() => setCreating(false)}>x</button>
+            <h3 id="add-transaction-title">Add Transaction</h3>
+            <div className="form-grid">
+              <label>
+                Amount
+                <input
+                  inputMode="decimal"
+                  value={createDraft.amount}
+                  onChange={(e) => setCreateDraft({ ...createDraft, amount: e.target.value })}
+                />
+              </label>
+              <label>
+                Date
+                <input
+                  type="date"
+                  value={createDraft.date}
+                  onChange={(e) => setCreateDraft({ ...createDraft, date: e.target.value })}
+                />
+              </label>
+              <label>
+                Merchant
+                <input
+                  value={createDraft.merchant}
+                  onChange={(e) => setCreateDraft({ ...createDraft, merchant: e.target.value })}
+                />
+              </label>
+              <label>
+                Category
+                <select
+                  value={createDraft.categoryId}
+                  onChange={(e) => setCreateDraft({ ...createDraft, categoryId: e.target.value })}
+                >
+                  <option value="">Uncategorized</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Review
+                <select
+                  value={createDraft.reviewStatus}
+                  onChange={(e) => setCreateDraft({ ...createDraft, reviewStatus: e.target.value as EditDraft['reviewStatus'] })}
+                >
+                  <option value="needs_review">Needs review</option>
+                  <option value="reviewed">Reviewed</option>
+                  <option value="ignored">Ignored</option>
+                </select>
+              </label>
+              <label className="form-span">
+                Description
+                <textarea
+                  value={createDraft.description}
+                  onChange={(e) => setCreateDraft({ ...createDraft, description: e.target.value })}
+                  rows={3}
+                />
+              </label>
+              <label className="form-span">
+                Tags
+                <input
+                  value={createDraft.tags}
+                  onChange={(e) => setCreateDraft({ ...createDraft, tags: e.target.value })}
+                  placeholder="cash, lunch"
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setCreating(false)}>Cancel</button>
+              <button type="button" className="button-primary" onClick={() => void saveCreate()} disabled={busyId === 'create'}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {editing && draft ? (
         <div className="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="edit-transaction-title">

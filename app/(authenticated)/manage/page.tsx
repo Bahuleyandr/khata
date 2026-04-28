@@ -6,6 +6,7 @@ import {
   createCategory,
   deleteCategory,
   formatCents,
+  getAuditLog,
   getBudgets,
   getCategories,
   getStatements,
@@ -13,6 +14,7 @@ import {
   renameCategory,
   retryStatement,
   setBudget,
+  type AuditEvent,
   type BudgetVariance,
   type Category,
   type StatementImport,
@@ -31,11 +33,28 @@ function rupeesToCents(value: string) {
   return Number(rupees) * 100 + Number(paise.padEnd(2, '0'))
 }
 
+function formatAuditDate(value: string) {
+  return new Date(value).toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function auditLabel(event: AuditEvent) {
+  return event.action
+    .split('.')
+    .map((part) => part.replace(/_/g, ' '))
+    .join(' ')
+}
+
 export default function ManagePage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<BudgetVariance[]>([])
   const [tags, setTags] = useState<Tag[]>([])
   const [statements, setStatements] = useState<StatementImport[]>([])
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [month, setMonth] = useState(currentMonthValue)
   const [newCategory, setNewCategory] = useState('')
   const [budgetCategory, setBudgetCategory] = useState('')
@@ -45,16 +64,18 @@ export default function ManagePage() {
 
   const refresh = useCallback(async () => {
     setError(null)
-    const [cats, budgetRes, tagRes, statementRes] = await Promise.all([
+    const [cats, budgetRes, tagRes, statementRes, auditRes] = await Promise.all([
       getCategories(),
       getBudgets(month),
       getTags(),
       getStatements(),
+      getAuditLog(30),
     ])
     setCategories(cats)
     setBudgets(budgetRes.budgets)
     setTags(tagRes.tags)
     setStatements(statementRes.statements)
+    setAuditEvents(auditRes.events)
     setBudgetCategory((current) => current || cats[0]?.id || '')
   }, [month])
 
@@ -193,6 +214,22 @@ export default function ManagePage() {
                 >
                   Retry
                 </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card workspace-card wide-card">
+          <h3>Audit Trail</h3>
+          <div className="statement-list">
+            {auditEvents.length === 0 ? <p>No corrections recorded yet.</p> : auditEvents.map((event) => (
+              <div key={event.id} className="statement-row">
+                <div>
+                  <strong>{auditLabel(event)}</strong>
+                  <span>
+                    {event.entity_type}{event.entity_id ? ` · ${event.entity_id.slice(0, 8)}` : ''} · {formatAuditDate(event.created_at)}
+                  </span>
+                </div>
               </div>
             ))}
           </div>

@@ -35,6 +35,7 @@ vi.mock("../db/merchants.js", () => merchantMocks);
 vi.mock("../storage/index.js", () => storageMocks);
 
 import { authRoutes, signSession } from "./auth.js";
+import { auditRoutes } from "./audit.js";
 import { DASHBOARD_CORS_METHODS, dashboardCorsOptions } from "../http/cors.js";
 import { budgetsRoutes } from "./budgets.js";
 import { categoriesRoutes } from "./categories.js";
@@ -73,6 +74,7 @@ async function buildApp() {
   await app.register(budgetsRoutes);
   await app.register(tagsRoutes);
   await app.register(monthlyReviewRoutes);
+  await app.register(auditRoutes);
   await app.ready();
   return app;
 }
@@ -149,9 +151,9 @@ describe("route hardening", () => {
   });
 
   it("creates categories through the authenticated dashboard API", async () => {
-    sqlMock.mockResolvedValueOnce([
-      { id: CATEGORY_ID, name: "Travel", is_default: false },
-    ]);
+    sqlMock
+      .mockResolvedValueOnce([{ id: CATEGORY_ID, name: "Travel", is_default: false }])
+      .mockResolvedValueOnce([]);
 
     const app = await buildApp();
     try {
@@ -168,7 +170,7 @@ describe("route hardening", () => {
         name: "Travel",
         is_default: false,
       });
-      expect(sqlMock).toHaveBeenCalledTimes(1);
+      expect(sqlMock).toHaveBeenCalledTimes(2);
     } finally {
       await app.close();
     }
@@ -178,7 +180,16 @@ describe("route hardening", () => {
     sqlMock
       .mockResolvedValueOnce([{ id: CATEGORY_ID }])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "budget-1" }]);
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: "budget-1", category_id: CATEGORY_ID, target_cents: "250000", period: "monthly" },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { id: "budget-1", category_id: CATEGORY_ID, target_cents: "250000", period: "monthly" },
+      ])
+      .mockResolvedValueOnce([{ id: "budget-1" }])
+      .mockResolvedValueOnce([]);
 
     const app = await buildApp();
     try {
@@ -207,6 +218,7 @@ describe("route hardening", () => {
     sqlMock
       .mockResolvedValueOnce([{ id: EXPENSE_ID }])
       .mockResolvedValueOnce([{ id: TAG_ID }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
     const app = await buildApp();
@@ -220,7 +232,7 @@ describe("route hardening", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true, tag_id: TAG_ID });
-      expect(sqlMock).toHaveBeenCalledTimes(3);
+      expect(sqlMock).toHaveBeenCalledTimes(4);
     } finally {
       await app.close();
     }
@@ -231,6 +243,7 @@ describe("route hardening", () => {
       .mockResolvedValueOnce([{ id: CATEGORY_ID }])
       .mockResolvedValueOnce([{ id: EXPENSE_ID }])
       .mockResolvedValueOnce([{ id: TAG_ID }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
     const app = await buildApp();
@@ -249,7 +262,106 @@ describe("route hardening", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true, updated: 1 });
-      expect(sqlMock).toHaveBeenCalledTimes(4);
+      expect(sqlMock).toHaveBeenCalledTimes(5);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("creates a manual expense with category memory, tags, and audit logging", async () => {
+    const occurredAt = new Date("2026-04-28T00:00:00.000Z");
+    sqlMock
+      .mockResolvedValueOnce([{ id: CATEGORY_ID }])
+      .mockResolvedValueOnce([
+        {
+          id: EXPENSE_ID,
+          amount_cents: "19900",
+          currency: "INR",
+          description: "Lunch",
+          merchant: "OpenAI Cafe",
+          merchant_canonical_id: "merchant-1",
+          category_id: CATEGORY_ID,
+          category: "Food",
+          source: "manual",
+          occurred_at: occurredAt,
+          image_key: null,
+          review_status: "reviewed",
+        },
+      ])
+      .mockResolvedValueOnce([{ id: TAG_ID }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ expense_id: EXPENSE_ID, name: "cash" }])
+      .mockResolvedValueOnce([]);
+    merchantMocks.getOrCreateMerchantCanonical.mockResolvedValueOnce("merchant-1");
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/expenses",
+        headers: { cookie: authCookie() },
+        payload: {
+          amount_cents: 19900,
+          merchant: " OpenAI Cafe ",
+          description: "Lunch",
+          category_id: CATEGORY_ID,
+          occurred_at: "2026-04-28",
+          tag_names: ["cash"],
+        },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({
+        id: EXPENSE_ID,
+        amount_cents: "19900",
+        merchant: "OpenAI Cafe",
+        source: "manual",
+        tags: ["cash"],
+      });
+      expect(merchantMocks.setMerchantCategory).toHaveBeenCalledWith(
+        12345,
+        "merchant-1",
+        CATEGORY_ID,
+      );
+      expect(sqlMock).toHaveBeenCalledTimes(6);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("lists recent audit events for the authenticated user", async () => {
+    sqlMock.mockResolvedValueOnce([
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        actor_user_id: "12345",
+        action: "expense.update",
+        entity_type: "expense",
+        entity_id: EXPENSE_ID,
+        before: null,
+        after: { id: EXPENSE_ID },
+        metadata: {},
+        created_at: new Date("2026-04-28T10:00:00.000Z"),
+      },
+    ]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/audit-log?limit=10",
+        headers: { cookie: authCookie() },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        events: [
+          {
+            action: "expense.update",
+            entity_type: "expense",
+            entity_id: EXPENSE_ID,
+          },
+        ],
+      });
     } finally {
       await app.close();
     }
@@ -380,8 +492,26 @@ describe("route hardening", () => {
           source: "telegram",
           occurred_at: occurredAt,
           image_key: null,
+          review_status: "needs_review",
         },
-      ]);
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: EXPENSE_ID,
+          amount_cents: "12345",
+          currency: "INR",
+          description: "Dinner",
+          merchant: "Swiggy",
+          merchant_canonical_id: "merchant-1",
+          category_id: CATEGORY_ID,
+          category: "Food",
+          source: "telegram",
+          occurred_at: occurredAt,
+          image_key: null,
+          review_status: "reviewed",
+        },
+      ])
+      .mockResolvedValueOnce([]);
     merchantMocks.getOrCreateMerchantCanonical.mockResolvedValueOnce("merchant-1");
 
     const app = await buildApp();
@@ -419,7 +549,7 @@ describe("route hardening", () => {
   });
 
   it("deletes an owned expense", async () => {
-    sqlMock.mockResolvedValueOnce([{ id: EXPENSE_ID }]);
+    sqlMock.mockResolvedValueOnce([{ id: EXPENSE_ID }]).mockResolvedValueOnce([]);
     const app = await buildApp();
     try {
       const res = await app.inject({

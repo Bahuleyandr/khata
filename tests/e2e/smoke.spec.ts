@@ -49,6 +49,23 @@ async function mockApi(page: Page) {
   )
   await page.route('**/api/tags', (route) => route.fulfill({ json: { tags: [{ id: 'tag-1', name: 'team', count: 1 }] } }))
   await page.route('**/api/statements', (route) => route.fulfill({ json: { statements: [] } }))
+  await page.route('**/api/audit-log**', (route) =>
+    route.fulfill({
+      json: {
+        events: [{
+          id: 'audit-1',
+          actor_user_id: '42',
+          action: 'expense.update',
+          entity_type: 'expense',
+          entity_id: expense.id,
+          before: null,
+          after: { id: expense.id },
+          metadata: {},
+          created_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
   const summary = {
     period: {
       year: 2026,
@@ -208,4 +225,5 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByText('Categories')).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()
   await expect(page.getByText('#team')).toBeVisible()
+  await expect(page.getByText('expense update')).toBeVisible()
 })

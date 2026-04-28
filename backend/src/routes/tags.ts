@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { recordAuditEvent } from "../db/audit.js";
 import {
   attachTagToExpense,
   detachTagFromExpense,
@@ -59,6 +60,13 @@ export async function tagsRoutes(app: FastifyInstance) {
       const tagId = await getOrCreateTag(session.userId, request.body.name);
       if (!tagId) return reply.status(400).send({ error: "Invalid tag" });
       await attachTagToExpense(request.params.id, tagId);
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.tag_add",
+        entityType: "expense",
+        entityId: request.params.id,
+        metadata: { tag_id: tagId, tag_name: request.body.name.trim() },
+      });
       return { ok: true, tag_id: tagId };
     },
   );
@@ -76,6 +84,13 @@ export async function tagsRoutes(app: FastifyInstance) {
       if (!hasExpense || !hasTag) return reply.status(404).send({ error: "Tag not found" });
       const removed = await detachTagFromExpense(request.params.id, request.params.tagId);
       if (!removed) return reply.status(404).send({ error: "Tag not attached" });
+      await recordAuditEvent({
+        userId: session.userId,
+        action: "expense.tag_remove",
+        entityType: "expense",
+        entityId: request.params.id,
+        metadata: { tag_id: request.params.tagId },
+      });
       return { ok: true };
     },
   );

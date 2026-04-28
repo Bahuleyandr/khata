@@ -4,7 +4,7 @@ Personal expense tracker. Capture spending via Telegram (text, voice notes, phot
 
 | Service | Description |
 |---|---|
-| `/` (root) | Next.js 15 dashboard — monthly review, transactions, receipts, categories, tags, Excel export |
+| `/` (root) | Next.js 15 dashboard — monthly review, manual transactions, receipts, categories, budgets, tags, audit trail, Excel export |
 | `backend/` | Fastify API + grammy Telegram bot — capture, parse, classify, store |
 
 ## Quick start
@@ -75,6 +75,10 @@ Frontend business logic lives in `lib/` where possible. Backend money/data logic
 ## Monthly review workflow
 
 The `/review` workspace is the month-close surface. It calls `/api/review/monthly?year=YYYY&month=M` and returns a deterministic checklist for uncategorized transactions, receipt OCR review, duplicate candidates, unresolved statement imports, budget variance, and the month export link. Checklist links deep-link into `/transactions` and `/receipts` with the same date range and filters, so the review flow stays month-scoped.
+
+## Dashboard corrections and audit
+
+The `/transactions` workspace supports manual transaction entry for expenses missed by Telegram, SMS, receipt OCR, or statement import. Create/edit/delete/merge, receipt attachment, bulk correction, category/budget changes, and tag changes are recorded in the append-only `audit_log` table. The `/manage` workspace shows the latest audit events, backed by `GET /api/audit-log`.
 
 ## Stack rationale
 

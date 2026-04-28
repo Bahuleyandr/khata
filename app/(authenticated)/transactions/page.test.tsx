@@ -6,6 +6,7 @@ import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TransactionsPage from './page'
 import {
+  createExpense,
   deleteExpense,
   addExpenseTag,
   bulkUpdateExpenses,
@@ -20,6 +21,7 @@ import {
 } from '../../../lib/api'
 
 vi.mock('../../../lib/api', () => ({
+  createExpense: vi.fn(),
   deleteExpense: vi.fn(),
   addExpenseTag: vi.fn(),
   attachReceipt: vi.fn(),
@@ -74,6 +76,7 @@ describe('TransactionsPage', () => {
       totalPages: 1,
     })
     vi.mocked(updateExpense).mockResolvedValue({ ...baseExpense, amount_cents: '19900', merchant: 'OpenAI' })
+    vi.mocked(createExpense).mockResolvedValue({ ...baseExpense, id: 'expense-new', source: 'manual', tags: ['cash'] })
     vi.mocked(deleteExpense).mockResolvedValue()
     vi.mocked(mergeExpense).mockResolvedValue(baseExpense)
     vi.mocked(addExpenseTag).mockResolvedValue()
@@ -88,6 +91,25 @@ describe('TransactionsPage', () => {
     expect(await screen.findByText('OpenAI Cafe')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Download Excel' }).getAttribute('href')).toContain(
       '/api/export/xlsx?year=',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Add Transaction' }))
+    const addDialog = screen.getByRole('dialog', { name: 'Add Transaction' })
+    await user.type(within(addDialog).getByLabelText('Amount'), '45.50')
+    await user.type(within(addDialog).getByLabelText('Merchant'), 'Cash Cafe')
+    await user.selectOptions(within(addDialog).getByLabelText('Category'), 'cat-food')
+    await user.type(within(addDialog).getByLabelText('Tags'), 'cash')
+    await user.click(within(addDialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(createExpense).toHaveBeenCalledWith(
+        expect.objectContaining({
+          amount_cents: 4550,
+          merchant: 'Cash Cafe',
+          category_id: 'cat-food',
+          tag_names: ['cash'],
+        }),
+      ),
     )
 
     await user.click(screen.getByLabelText('Receipt'))
