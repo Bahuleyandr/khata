@@ -415,7 +415,12 @@ async function processUpiPayment(
     occurred_at,
   });
 
-  const sourceLabel = opts.source === "receipt" ? "Receipt logged" : "UPI logged";
+  const sourceLabel =
+    opts.source === "receipt"
+      ? "Receipt logged"
+      : upi.app === "bank"
+        ? "Payment logged"
+        : "UPI logged";
   await ctx.reply(
     `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${upi.app}_\n` +
       `Reply \`category: <name>\` or use the buttons.`,

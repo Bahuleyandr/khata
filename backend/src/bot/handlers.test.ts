@@ -96,6 +96,8 @@ vi.mock("../db/expenses.js", () => ({
   updateExpenseCategory: vi.fn().mockResolvedValue(true),
   updateExpenseDate: vi.fn().mockResolvedValue(true),
   findExpenseByContentHash: vi.fn().mockResolvedValue(null),
+  findExpenseByUpiRef: vi.fn().mockResolvedValue(null),
+  attachReceiptToExpense: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../receipt/ocr.js", () => ({
@@ -351,6 +353,28 @@ describe("handleTextMessage", () => {
     expect(text).toContain("Logged");
     expect(text).toContain("Food");
     expect(editStore.has(111111)).toBe(true);
+  });
+
+  it("logs AMEX card spend alerts through the payment fast path", async () => {
+    const text =
+      "Alert: You've spent INR 19,900.00 on your AMEX card ** 31009 at OPENAI OPCO on 28 April 2026 at 10:58 AM IST. Call 18004190691 if this was not made by you.";
+    const ctx = makeCtx({ message: { text } as Context["message"] });
+    await handleTextMessage(ctx);
+    expect(vi.mocked(mockAI.classifyMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(mockExpenses.insertExpense)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount_cents: 1990000,
+        currency: "INR",
+        description: "OPENAI OPCO",
+        merchant: "OPENAI OPCO",
+        source: "telegram",
+        raw_text: text,
+      }),
+    );
+    const [reply] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(reply).toContain("Payment logged");
+    expect(reply).toContain("OPENAI OPCO");
+    expect(reply).toContain("_via bank_");
   });
 
   it("does nothing when text is missing", async () => {
