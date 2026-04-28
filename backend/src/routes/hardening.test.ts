@@ -1,12 +1,16 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import crypto from "node:crypto";
+import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sqlMock = vi.hoisted(() => Object.assign(vi.fn(), { begin: vi.fn() }));
 const merchantMocks = vi.hoisted(() => ({
   getOrCreateMerchantCanonical: vi.fn(),
   setMerchantCategory: vi.fn(),
+}));
+const storageMocks = vi.hoisted(() => ({
+  getObjectStream: vi.fn(),
 }));
 
 vi.mock("../config.js", () => ({
@@ -16,14 +20,23 @@ vi.mock("../config.js", () => ({
     allowedTelegramUserIds: [12345],
     allowedOrigins: ["http://localhost:3000"],
     databaseUrl: "postgres://unused",
+    s3: {
+      endpoint: "http://s3.test",
+      bucket: "khata-test",
+      region: "us-east-1",
+      accessKeyId: "test-access-key",
+      secretAccessKey: "test-secret-key",
+    },
   },
 }));
 
 vi.mock("../db/index.js", () => ({ sql: sqlMock }));
 vi.mock("../db/merchants.js", () => merchantMocks);
+vi.mock("../storage/index.js", () => storageMocks);
 
 import { authRoutes, signSession } from "./auth.js";
 import { expensesRoutes } from "./expenses.js";
+import { receiptsRoutes } from "./receipts.js";
 
 const EXPENSE_ID = "11111111-1111-4111-8111-111111111111";
 const DUPLICATE_ID = "22222222-2222-4222-8222-222222222222";
@@ -47,6 +60,7 @@ async function buildApp() {
   await app.register(cookie);
   await app.register(authRoutes);
   await app.register(expensesRoutes);
+  await app.register(receiptsRoutes);
   await app.ready();
   return app;
 }
@@ -57,6 +71,7 @@ describe("route hardening", () => {
     sqlMock.begin.mockReset();
     merchantMocks.getOrCreateMerchantCanonical.mockReset();
     merchantMocks.setMerchantCategory.mockReset();
+    storageMocks.getObjectStream.mockReset();
   });
 
   it("clears the session cookie on logout", async () => {
@@ -248,6 +263,75 @@ describe("route hardening", () => {
         },
       });
       expect(tx).toHaveBeenCalledTimes(4);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("lists receipt review data with category ids and proxy URLs", async () => {
+    sqlMock
+      .mockResolvedValueOnce([
+        {
+          id: EXPENSE_ID,
+          amount_cents: "42500",
+          currency: "INR",
+          description: "Paper receipt",
+          merchant: "Corner Store",
+          category_id: CATEGORY_ID,
+          category: "Groceries",
+          occurred_at: new Date("2026-04-28T00:00:00.000Z"),
+          image_key: "receipts/corner-store.jpg",
+        },
+      ])
+      .mockResolvedValueOnce([{ count: "1" }]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/receipts?page=1&limit=24",
+        headers: { cookie: authCookie() },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        total: 1,
+        page: 1,
+        totalPages: 1,
+        data: [
+          {
+            id: EXPENSE_ID,
+            category_id: CATEGORY_ID,
+            category: "Groceries",
+            receipt_url: `/api/receipts/${EXPENSE_ID}/image`,
+          },
+        ],
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("streams receipt images only after ownership lookup succeeds", async () => {
+    sqlMock.mockResolvedValueOnce([{ image_key: "receipts/corner-store.jpg" }]);
+    storageMocks.getObjectStream.mockResolvedValueOnce({
+      body: Readable.from(["image-bytes"]),
+      contentType: "image/jpeg",
+    });
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/receipts/${EXPENSE_ID}/image`,
+        headers: { cookie: authCookie() },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["content-type"]).toContain("image/jpeg");
+      expect(res.headers["cache-control"]).toContain("private");
+      expect(res.body).toBe("image-bytes");
+      expect(storageMocks.getObjectStream).toHaveBeenCalledWith("receipts/corner-store.jpg");
     } finally {
       await app.close();
     }

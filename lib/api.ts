@@ -69,6 +69,7 @@ export interface Receipt {
   currency: string
   description: string | null
   merchant: string | null
+  category_id: string | null
   category: string | null
   occurred_at: string
   image_key: string

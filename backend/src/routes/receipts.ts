@@ -49,6 +49,7 @@ export async function receiptsRoutes(app: FastifyInstance) {
       currency: string;
       description: string | null;
       merchant: string | null;
+      category_id: string | null;
       category: string | null;
       occurred_at: Date;
       image_key: string;
@@ -60,6 +61,7 @@ export async function receiptsRoutes(app: FastifyInstance) {
              e.currency,
              e.description,
              e.merchant,
+             e.category_id,
              COALESCE(c.name, 'Uncategorized') AS category,
              e.occurred_at,
              e.image_key

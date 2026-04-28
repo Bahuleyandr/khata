@@ -1,0 +1,15 @@
+.git
+.github
+.githooks
+.next
+node_modules
+out
+output
+backups
+coverage
+*.log
+.env
+.env.*
+
+# Frontend image builds from the repo root but does not need backend sources.
+backend
