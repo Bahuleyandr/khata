@@ -90,6 +90,10 @@ export function getMe(): Promise<Me> {
   return apiFetch<Me>('/api/me')
 }
 
+export async function logout(): Promise<void> {
+  await apiFetch<{ ok: boolean }>('/api/logout', { method: 'POST' })
+}
+
 export function getExpenseSummary(): Promise<ExpenseSummary> {
   return apiFetch<ExpenseSummary>('/api/expenses/summary')
 }

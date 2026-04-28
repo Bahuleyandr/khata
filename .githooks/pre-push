@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+protected_branch="refs/heads/main"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "$protected_branch" ] && [ "${KHATA_ALLOW_MAIN_PUSH:-}" != "1" ]; then
+    echo "Blocked push to main. Open a PR, or set KHATA_ALLOW_MAIN_PUSH=1 for an intentional emergency push." >&2
+    exit 1
+  fi
+done
+
+npm run secrets:scan

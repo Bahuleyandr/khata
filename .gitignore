@@ -30,6 +30,9 @@ yarn-error.log*
 # backend build output
 backend/dist/
 
+# local operational artifacts
+backups/
+
 # vercel
 .vercel
 

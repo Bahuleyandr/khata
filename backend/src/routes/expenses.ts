@@ -2,15 +2,42 @@ import type { FastifyInstance } from "fastify";
 import { sql } from "../db/index.js";
 import { getSession } from "./auth.js";
 
+type ExpensesQuery = {
+  page?: number;
+  limit?: number;
+  start?: string;
+  end?: string;
+  category?: string;
+  source?: "bot" | "telegram" | "statement" | "receipt" | "manual";
+};
+
+const datePattern = "^\\d{4}-\\d{2}-\\d{2}$";
+
+const expensesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    page: { type: "integer", minimum: 1 },
+    limit: { type: "integer", minimum: 1, maximum: 100 },
+    start: { type: "string", pattern: datePattern },
+    end: { type: "string", pattern: datePattern },
+    category: { type: "string", minLength: 1, maxLength: 100 },
+    source: { type: "string", enum: ["bot", "telegram", "statement", "receipt", "manual"] },
+  },
+} as const;
+
 export async function expensesRoutes(app: FastifyInstance) {
   // GET /api/expenses
-  app.get("/api/expenses", async (request, reply) => {
+  app.get<{ Querystring: ExpensesQuery }>(
+    "/api/expenses",
+    { schema: { querystring: expensesQuerySchema } },
+    async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
 
-    const q = request.query as Record<string, string>;
-    const page = Math.max(1, parseInt(q["page"] ?? "1", 10));
-    const limit = Math.min(100, Math.max(1, parseInt(q["limit"] ?? "20", 10)));
+    const q = request.query;
+    const page = q.page ?? 1;
+    const limit = q.limit ?? 20;
     const offset = (page - 1) * limit;
 
     const start = q["start"];
@@ -69,9 +96,10 @@ export async function expensesRoutes(app: FastifyInstance) {
       data: rows,
       total,
       page,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.max(1, Math.ceil(total / limit)),
     };
-  });
+    },
+  );
 
   // GET /api/expenses/summary — MTD category totals + last 10 expenses
   app.get("/api/expenses/summary", async (request, reply) => {

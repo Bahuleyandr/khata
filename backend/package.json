@@ -10,6 +10,9 @@
     "migrate": "node dist/db/migrate.js",
     "migrate:dev": "tsx src/db/migrate.ts",
     "lint": "eslint src --ext .ts",
+    "secrets:scan": "node ../scripts/scan-secrets.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "verify": "npm run secrets:scan && npm run lint && npm test && npm run build",
     "test": "vitest run",
     "test:watch": "vitest"
   },

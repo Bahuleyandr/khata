@@ -20,6 +20,17 @@ a { color: inherit; text-decoration: none; }
 .nav .brand { font-weight: 700; font-size: 1.1rem; margin-right: auto; }
 .nav a { color: #4b5563; font-size: 0.9rem; padding: 0.4rem 0.8rem; border-radius: 6px; transition: background 0.15s; }
 .nav a:hover, .nav a.active { background: #f3f4f6; color: #111; }
+.nav-button-danger {
+  border: 0;
+  background: transparent;
+  color: #ef4444;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+}
+.nav-button-danger:hover { background: #fef2f2; }
 
 .page { padding: 1.5rem; max-width: 1100px; margin: 0 auto; }
 

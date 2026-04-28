@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS builder
+FROM node:22.21.1-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -6,9 +6,11 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runner
+FROM node:22.21.1-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+ARG MINIMAX_MCP_VERSION=0.0.4
+ARG WHISPER_CPP_REF=fc674574ca27cac59a15e5b22a09b9d9ad62aafe
 
 # Python + uv + MiniMax MCP server (`minimax-coding-plan-mcp`) — provides the
 # `understand_image` MCP tool used by vision intents. Installed at build time
@@ -24,9 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git curl && \
     rm -rf /var/lib/apt/lists/* && \
     pip3 install --break-system-packages --no-cache-dir uv && \
-    uv tool install minimax-coding-plan-mcp && \
-    git clone --depth 1 https://github.com/ggerganov/whisper.cpp /tmp/whisper.cpp && \
+    uv tool install "minimax-coding-plan-mcp==${MINIMAX_MCP_VERSION}" && \
+    git clone https://github.com/ggerganov/whisper.cpp /tmp/whisper.cpp && \
     cd /tmp/whisper.cpp && \
+    git checkout "${WHISPER_CPP_REF}" && \
     cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF && \
     cmake --build build --target whisper-cli -j"$(nproc)" && \
     cp build/bin/whisper-cli /usr/local/bin/whisper-cli && \

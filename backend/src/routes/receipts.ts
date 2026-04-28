@@ -3,15 +3,44 @@ import { sql } from "../db/index.js";
 import { getObjectStream } from "../storage/index.js";
 import { getSession } from "./auth.js";
 
+type ReceiptsQuery = {
+  page?: number;
+  limit?: number;
+};
+
+const receiptsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    page: { type: "integer", minimum: 1 },
+    limit: { type: "integer", minimum: 1, maximum: 100 },
+  },
+} as const;
+
+const receiptParamsSchema = {
+  type: "object",
+  required: ["id"],
+  additionalProperties: false,
+  properties: {
+    id: {
+      type: "string",
+      pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+    },
+  },
+} as const;
+
 export async function receiptsRoutes(app: FastifyInstance) {
   // GET /api/receipts — list of receipt expenses with proxy URLs
-  app.get("/api/receipts", async (request, reply) => {
+  app.get<{ Querystring: ReceiptsQuery }>(
+    "/api/receipts",
+    { schema: { querystring: receiptsQuerySchema } },
+    async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
 
-    const q = request.query as Record<string, string>;
-    const page = Math.max(1, parseInt(q["page"] ?? "1", 10));
-    const limit = Math.min(100, Math.max(1, parseInt(q["limit"] ?? "20", 10)));
+    const q = request.query;
+    const page = q.page ?? 1;
+    const limit = q.limit ?? 20;
     const offset = (page - 1) * limit;
 
     type ReceiptRow = {
@@ -60,14 +89,16 @@ export async function receiptsRoutes(app: FastifyInstance) {
       data,
       total,
       page,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.max(1, Math.ceil(total / limit)),
     };
-  });
+    },
+  );
 
   // GET /api/receipts/:id/image — stream a receipt image from MinIO,
   // gated by session ownership of the expense row.
   app.get<{ Params: { id: string } }>(
     "/api/receipts/:id/image",
+    { schema: { params: receiptParamsSchema } },
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;

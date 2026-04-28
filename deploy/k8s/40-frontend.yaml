@@ -13,16 +13,24 @@ spec:
       labels:
         app: khata-frontend
     spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: khata-frontend:latest
           imagePullPolicy: Never # built locally + loaded via `k3s ctr images import`
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
-            - containerPort: 80
+            - containerPort: 8080
           readinessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
           resources:
@@ -44,6 +52,6 @@ spec:
     app: khata-frontend
   ports:
     - port: 80
-      targetPort: 80
+      targetPort: 8080
       nodePort: 30080 # fixed so `tailscale serve` can target a stable URL
       name: http

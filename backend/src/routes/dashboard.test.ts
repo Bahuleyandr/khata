@@ -6,7 +6,7 @@ vi.mock("../config.js", () => ({
   config: {
     telegramBotToken: "123456:ABCdef-test",
     sessionSecret: "test-secret-that-is-at-least-32-chars-long",
-    allowedTelegramUserIds: [12345],
+    allowedTelegramUserIds: [1, 42, 99, 12345],
     allowedOrigins: ["https://example.com", "http://localhost:3000"],
   },
 }));
@@ -15,7 +15,7 @@ import { verifyTelegramHash, signSession, verifySession } from "./auth.js";
 import { config } from "../config.js";
 
 // ── Constants kept in sync with the mocked config above ──────────────────────
-const BOT_TOKEN = "123456:ABCdef-test";
+const BOT_TOKEN = "123456:ABCdef-test"; // secret-scan: allow
 const SESSION_SECRET = "test-secret-that-is-at-least-32-chars-long";
 const SESSION_MAX_AGE_S = 604800; // mirror SESSION_MAX_AGE_S from auth.ts
 
@@ -91,6 +91,14 @@ describe("signSession / verifySession", () => {
   it("rejects a token issued 8 days ago (expired)", () => {
     const expiredIat = now() - 8 * 24 * 3600;
     expect(verifySession(signSession(1, "Alice", expiredIat))).toBeNull();
+  });
+
+  it("rejects a token for a user removed from the allowlist", () => {
+    expect(verifySession(signSession(777, "Mallory", now()))).toBeNull();
+  });
+
+  it("rejects a token issued too far in the future", () => {
+    expect(verifySession(signSession(1, "Alice", now() + 120))).toBeNull();
   });
 
   it("rejects a token with a tampered signature", () => {

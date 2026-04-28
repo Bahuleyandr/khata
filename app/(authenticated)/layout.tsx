@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
-import { getMe, type Me } from '../../lib/api'
+import { getMe, logout, type Me } from '../../lib/api'
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -22,6 +22,14 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       })
   }, [router])
 
+  async function handleLogout() {
+    try {
+      await logout()
+    } finally {
+      router.replace('/login')
+    }
+  }
+
   if (checking) {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -38,7 +46,13 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <Link href="/transactions" className={pathname === '/transactions' ? 'active' : ''}>Transactions</Link>
         <Link href="/receipts" className={pathname === '/receipts' ? 'active' : ''}>Receipts</Link>
         <span style={{ fontSize: '0.85rem', color: '#9ca3af' }}>Hi, {me?.first_name}</span>
-        <Link href="/login" style={{ fontSize: '0.8rem', color: '#ef4444' }}>Logout</Link>
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="nav-button-danger"
+        >
+          Logout
+        </button>
       </nav>
       {children}
     </>
