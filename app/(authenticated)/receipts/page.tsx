@@ -54,8 +54,15 @@ function ReceiptModal({
   categories,
   busy,
   error,
+  position,
+  total,
+  hasPrevious,
+  hasNext,
   onDraftChange,
   onSave,
+  onSaveAndNext,
+  onPrevious,
+  onNext,
   onClose,
 }: {
   receipt: Receipt
@@ -63,8 +70,15 @@ function ReceiptModal({
   categories: Category[]
   busy: boolean
   error: string | null
+  position: number
+  total: number
+  hasPrevious: boolean
+  hasNext: boolean
   onDraftChange: (draft: ReceiptDraft) => void
   onSave: () => void
+  onSaveAndNext: () => void
+  onPrevious: () => void
+  onNext: () => void
   onClose: () => void
 }) {
   useEffect(() => {
@@ -87,6 +101,13 @@ function ReceiptModal({
         <button className="close-btn" type="button" onClick={onClose} aria-label="Close">x</button>
         <h3 id="receipt-review-title">Review Receipt</h3>
         {error ? <div className="error-msg">{error}</div> : null}
+        <div className="receipt-review-toolbar">
+          <span>Receipt {position} of {total}</span>
+          <div>
+            <button type="button" onClick={onPrevious} disabled={!hasPrevious || busy}>Previous</button>
+            <button type="button" onClick={onNext} disabled={!hasNext || busy}>Next</button>
+          </div>
+        </div>
         <div className="receipt-review-layout">
           <div className="receipt-preview">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -144,6 +165,11 @@ function ReceiptModal({
             </div>
             <div className="modal-actions">
               <button type="button" onClick={onClose}>Done</button>
+              {hasNext ? (
+                <button type="button" onClick={onSaveAndNext} disabled={busy}>
+                  Save & Next
+                </button>
+              ) : null}
               <button type="button" className="button-primary" onClick={onSave} disabled={busy}>
                 Save
               </button>
@@ -207,22 +233,33 @@ export default function ReceiptsPage() {
     setMutationError(null)
   }
 
+  function selectedIndex() {
+    if (!selected) return -1
+    return receipts.findIndex((receipt) => receipt.id === selected.id)
+  }
+
+  function openReceiptAt(index: number) {
+    const receipt = receipts[index]
+    if (!receipt) return
+    openReceipt(receipt)
+  }
+
   function closeReceipt() {
     setSelected(null)
     setDraft(null)
     setMutationError(null)
   }
 
-  async function saveReceipt() {
-    if (!selected || !draft) return
+  async function saveReceipt(): Promise<boolean> {
+    if (!selected || !draft) return false
     const amountCents = parseAmountCents(draft.amount)
     if (!amountCents || amountCents <= 0) {
       setMutationError('Enter a valid amount greater than zero.')
-      return
+      return false
     }
     if (!draft.date) {
       setMutationError('Choose a receipt date.')
-      return
+      return false
     }
 
     setBusyId(selected.id)
@@ -250,10 +287,20 @@ export default function ReceiptsPage() {
       setReceipts((rows) => rows.map((row) => (row.id === nextReceipt.id ? nextReceipt : row)))
       setSelected(nextReceipt)
       setDraft(makeDraft(nextReceipt))
+      return true
     } catch (e) {
       setMutationError(e instanceof Error ? e.message : 'Failed to save receipt')
+      return false
     } finally {
       setBusyId(null)
+    }
+  }
+
+  async function saveReceiptAndNext() {
+    const currentIndex = selectedIndex()
+    const saved = await saveReceipt()
+    if (saved && currentIndex >= 0) {
+      openReceiptAt(currentIndex + 1)
     }
   }
 
@@ -317,8 +364,15 @@ export default function ReceiptsPage() {
           categories={categories}
           busy={busyId === selected.id}
           error={mutationError}
+          position={selectedIndex() + 1}
+          total={receipts.length}
+          hasPrevious={selectedIndex() > 0}
+          hasNext={selectedIndex() >= 0 && selectedIndex() < receipts.length - 1}
           onDraftChange={setDraft}
           onSave={() => void saveReceipt()}
+          onSaveAndNext={() => void saveReceiptAndNext()}
+          onPrevious={() => openReceiptAt(selectedIndex() - 1)}
+          onNext={() => openReceiptAt(selectedIndex() + 1)}
           onClose={closeReceipt}
         />
       ) : null}

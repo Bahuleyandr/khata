@@ -12,12 +12,9 @@ import {
   type Insight,
 } from '../../../lib/api'
 import { InsightCards } from './InsightCards'
+import { MonthlySummary } from './MonthlySummary'
 
 const SpendingChart = dynamic(() => import('./SpendingChart'), { ssr: false })
-
-function mtdTotal(categories: CategoryTotal[]): number {
-  return categories.reduce((sum, c) => sum + parseInt(c.total_cents, 10), 0)
-}
 
 function top5(categories: CategoryTotal[]) {
   return categories
@@ -51,12 +48,7 @@ export default function DashboardPage() {
         <LoadingSkeleton />
       ) : (
         <>
-          <div style={{ marginBottom: '1.5rem' }}>
-            <div className="stat-card">
-              <span className="label">Month-to-date spend</span>
-              <span className="value">{formatCents(mtdTotal(summary.mtd))}</span>
-            </div>
-          </div>
+          <MonthlySummary categories={summary.mtd} />
 
           {insights !== null && <InsightCards insights={insights} />}
 
