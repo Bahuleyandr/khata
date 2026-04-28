@@ -27,6 +27,9 @@ spec:
           image: khata-backend:latest
           imagePullPolicy: Never # built locally + loaded via `k3s ctr images import`
           securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]

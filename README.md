@@ -178,7 +178,7 @@ The dashboard also runs as a **Telegram Mini App** — a webview embedded direct
 
 Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-checks `ALLOWED_TELEGRAM_USER_IDS`, so removing a Telegram ID invalidates its next request even before the cookie expires. Logout calls `POST /api/logout` and clears the cookie server-side.
 
-The current dashboard API is read-only apart from auth/logout. Before adding mutating dashboard APIs, keep SameSite/CSRF posture explicit: same-origin POSTs should either stay `sameSite: lax` for Tailnet-only browser flows or add a CSRF token if cross-site Mini App cookie behavior requires `sameSite: none`.
+Mutating dashboard APIs (`POST`, `PATCH`, `PUT`, `DELETE`) are protected by an Origin guard before route handlers run. Same-host requests are accepted for the production Tailscale hostname; explicitly configured `ALLOWED_ORIGINS` are accepted for local/dev flows. Other browser origins receive `403 Cross-site request blocked`. The cookie is `sameSite: none` in production to support Telegram webview/Mini App behavior, so keep the Origin guard in place for any new mutating dashboard route.
 
 ## Runbook
 

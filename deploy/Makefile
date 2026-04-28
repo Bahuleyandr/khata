@@ -30,10 +30,13 @@ ROOT           := $(realpath $(DEPLOY_DIR)/..)
 BOT_USERNAME ?= Apoorva_Expense_Tracker_bot
 BACKUP_DIR ?= $(ROOT)/backups/$$(date -u +%Y%m%dT%H%M%SZ)
 BACKUP_FILE ?=
+MINIO_BACKUP_FILE ?=
+MINIO_BACKUP_DIR ?=
 
 .PHONY: build build-backend build-frontend import import-backend import-frontend \
         deploy namespace migrate logs status secrets restart undeploy tailscale-serve \
-        tailscale-status minio-bucket backup backup-postgres backup-minio restore-dry-run smoke
+        tailscale-status minio-bucket backup backup-postgres backup-minio \
+        restore-dry-run restore-postgres-dry-run restore-minio-dry-run smoke
 
 build: build-backend build-frontend
 
@@ -90,10 +93,25 @@ backup-minio:
 	@mkdir -p "$(BACKUP_DIR)"
 	kubectl exec -n $(NS) deploy/khata-minio -- tar -C /data -cz . > "$(BACKUP_DIR)/khata-minio-data.tgz"
 
-restore-dry-run:
+restore-dry-run: restore-postgres-dry-run restore-minio-dry-run
+
+restore-postgres-dry-run:
 	@test -n "$(BACKUP_FILE)" || (echo "Set BACKUP_FILE=/path/to/khata-postgres.dump"; exit 1)
 	@cat "$(BACKUP_FILE)" | kubectl exec -i -n $(NS) deploy/khata-postgres -- pg_restore --list >/dev/null
 	@echo "Postgres backup is readable: $(BACKUP_FILE)"
+
+restore-minio-dry-run:
+	@if [ -n "$(MINIO_BACKUP_FILE)" ]; then \
+		tar -tzf "$(MINIO_BACKUP_FILE)" >/dev/null; \
+		echo "MinIO tar backup is readable: $(MINIO_BACKUP_FILE)"; \
+	elif [ -n "$(MINIO_BACKUP_DIR)" ]; then \
+		test -d "$(MINIO_BACKUP_DIR)" || (echo "No such MINIO_BACKUP_DIR: $(MINIO_BACKUP_DIR)"; exit 1); \
+		find "$(MINIO_BACKUP_DIR)" -type f -print -quit | grep -q . || (echo "MinIO backup directory has no files: $(MINIO_BACKUP_DIR)"; exit 1); \
+		echo "MinIO mirror backup has files: $(MINIO_BACKUP_DIR)"; \
+	else \
+		echo "Set MINIO_BACKUP_FILE=/path/to/khata-minio-data.tgz or MINIO_BACKUP_DIR=/path/to/khata-minio-..."; \
+		exit 1; \
+	fi
 
 smoke:
 	kubectl rollout status deployment/khata-postgres -n $(NS) --timeout=120s
@@ -101,6 +119,7 @@ smoke:
 	kubectl rollout status deployment/khata-backend -n $(NS) --timeout=120s
 	kubectl rollout status deployment/khata-frontend -n $(NS) --timeout=120s
 	kubectl get cronjob/khata-postgres-backup -n $(NS)
+	kubectl get cronjob/khata-minio-backup -n $(NS)
 	kubectl exec -n $(NS) deploy/khata-backend -- node -e "fetch('http://localhost:3001/health').then(r=>{if(!r.ok)process.exit(1);return r.text()}).then(console.log)"
 
 logs:

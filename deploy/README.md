@@ -16,7 +16,7 @@ Tailnet device  ─►  Tailscale edge  ─►  cloudflared/wireguard  ─►  T
                                                  nginx + static      Fastify                 Fastify
                                                  next.js export       │
                                                                       ├─►  khata-postgres (in-cluster, PVC)
-                                                                      ├─►  Cloudflare R2 (statements + receipts)
+                                                                      ├─►  khata-minio (statements + receipts)
                                                                       ├─►  api.minimax.io  (text via OpenAI-compat)
                                                                       └─►  uvx minimax-coding-plan-mcp (subprocess, vision)
 ```
@@ -26,7 +26,7 @@ Tailnet device  ─►  Tailscale edge  ─►  cloudflared/wireguard  ─►  T
 | | Where | Notes |
 |---|---|---|
 | Frontend | k3s Deployment `khata-frontend` (nginx + Next.js static export) | Path `/` on the Tailscale hostname |
-| Backend | k3s Deployment `khata-backend` (Fastify + grammy long-polling + MiniMax MCP subprocess) | Paths `/api/*` and `/health` |
+| Backend | k3s Deployment `khata-backend` (Fastify + grammy long-polling + MiniMax MCP subprocess) | Paths `/api/*` and `/health`; runs as non-root UID 1000 |
 | Postgres | k3s Deployment `khata-postgres` + PVC `khata-postgres-data` (5Gi local-path) | `khata-postgres.khata.svc.cluster.local:5432` |
 | Statement / receipt blobs | k3s Deployment `khata-minio` + PVC `khata-minio-data` (10Gi local-path) | Served through authenticated backend proxy routes |
 | LLM (text) | MiniMax `MiniMax-M2.7-highspeed` via `https://api.minimax.io/v1` | OpenAI-compat chat-completions |
@@ -108,8 +108,9 @@ Both images get rebuilt and re-imported; the deployments roll restart automatica
 | `make minio-bucket` | Create the MinIO bucket from `khata-secrets` |
 | `make migrate` | Apply pending Postgres schema migrations |
 | `make backup` | Write a timestamped local Postgres dump + MinIO data tarball under `backups/` |
-| `make restore-dry-run BACKUP_FILE=...` | Verify a Postgres custom-format dump is readable |
-| `make smoke` | Wait for rollouts, verify the backup CronJob exists, and hit backend `/health` from inside the cluster |
+| `make restore-dry-run BACKUP_FILE=... MINIO_BACKUP_FILE=...` | Verify a Postgres custom-format dump and MinIO tarball are readable |
+| `make restore-dry-run BACKUP_FILE=... MINIO_BACKUP_DIR=...` | Verify a Postgres dump and nightly MinIO mirror directory are readable |
+| `make smoke` | Wait for rollouts, verify both backup CronJobs exist, and hit backend `/health` from inside the cluster |
 | `make logs` | Tail backend logs (look for `LLM ` lines for per-call usage) |
 | `make status` | `kubectl get all -n khata` + ingress + tailscale serve status |
 | `make restart` | Restart both deployments |
@@ -129,7 +130,11 @@ Both images get rebuilt and re-imported; the deployments roll restart automatica
 
 ## Backups
 
-Postgres and MinIO data are both single-node PVCs on Dalekdefender, so a node/disk failure is a real data-loss event. The cluster applies `deploy/k8s/60-backups.yaml`, which runs a nightly Postgres `pg_dump` at 00:00 IST into PVC `khata-backups-data` and prunes dumps older than 14 days.
+Postgres and MinIO data are both single-node PVCs on Dalekdefender, so a node/disk failure is a real data-loss event. The cluster applies `deploy/k8s/60-backups.yaml`, which runs:
+
+- nightly Postgres `pg_dump` at 00:00 IST into PVC `khata-backups-data`
+- nightly MinIO `mc mirror` at 00:15 IST into the same backup PVC
+- 14-day pruning for both backup families
 
 Run a manual off-node/export backup before migrations and on a schedule:
 
@@ -143,10 +148,20 @@ That writes:
 - `backups/<timestamp>/khata-postgres.dump` — custom-format `pg_dump`
 - `backups/<timestamp>/khata-minio-data.tgz` — tarball of the MinIO `/data` volume
 
-Dry-check a Postgres dump before trusting it:
+Dry-check both backup halves before trusting them:
 
 ```bash
-make restore-dry-run BACKUP_FILE=~/khata/backups/<timestamp>/khata-postgres.dump
+make restore-dry-run \
+  BACKUP_FILE=~/khata/backups/<timestamp>/khata-postgres.dump \
+  MINIO_BACKUP_FILE=~/khata/backups/<timestamp>/khata-minio-data.tgz
+```
+
+For a nightly MinIO mirror created by the in-cluster CronJob, use the mirror directory instead of a tarball:
+
+```bash
+make restore-dry-run \
+  BACKUP_FILE=/path/to/khata-postgres-<timestamp>.dump \
+  MINIO_BACKUP_DIR=/path/to/khata-minio-<timestamp>/<bucket-name>
 ```
 
 For real resilience, sync `backups/` off the box after creation (R2, another NAS, or encrypted cloud storage). Keep at least one restore-tested copy away from Dalekdefender.

@@ -35,6 +35,7 @@ vi.mock("../db/merchants.js", () => merchantMocks);
 vi.mock("../storage/index.js", () => storageMocks);
 
 import { authRoutes, signSession } from "./auth.js";
+import { installCsrfOriginGuard } from "./csrf.js";
 import { expensesRoutes } from "./expenses.js";
 import { receiptsRoutes } from "./receipts.js";
 
@@ -58,6 +59,7 @@ function makeTelegramHash(data: Record<string, string>, botToken = "123456:ABCde
 async function buildApp() {
   const app = Fastify();
   await app.register(cookie);
+  await installCsrfOriginGuard(app);
   await app.register(authRoutes);
   await app.register(expensesRoutes);
   await app.register(receiptsRoutes);
@@ -118,6 +120,28 @@ describe("route hardening", () => {
         url: "/api/expenses?source=spreadsheet",
       });
       expect(badSource.statusCode).toBe(400);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("blocks cross-site mutating dashboard requests before database work", async () => {
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/expenses/${EXPENSE_ID}`,
+        headers: {
+          cookie: authCookie(),
+          host: "khata.tailnet.ts.net",
+          origin: "https://evil.example",
+        },
+        payload: { description: "tampered" },
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: "Cross-site request blocked" });
+      expect(sqlMock).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

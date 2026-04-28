@@ -9,10 +9,11 @@
     "lint": "next lint",
     "secrets:scan": "node scripts/scan-secrets.mjs",
     "audit:prod": "npm audit --omit=dev --audit-level=high",
-    "verify": "npm run secrets:scan && npm run lint && npm test && npm run build",
+    "verify": "npm run secrets:scan && npm run audit:all && npm run lint && npm test && npm run build",
     "hooks:install": "git config core.hooksPath .githooks",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "audit:all": "npm audit --audit-level=moderate"
   },
   "dependencies": {
     "next": "^15.0.0",
@@ -28,6 +29,9 @@
     "eslint": "^9",
     "eslint-config-next": "^15",
     "typescript": "5.9.3",
-    "vitest": "^2"
+    "vitest": "^4.1.5"
+  },
+  "overrides": {
+    "postcss": "8.5.12"
   }
 }
