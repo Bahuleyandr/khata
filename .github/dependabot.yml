@@ -9,6 +9,25 @@ updates:
       frontend:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "eslint"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "eslint-config-next"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "next"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "typescript"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "vitest"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: npm
     directory: /backend
@@ -19,6 +38,22 @@ updates:
       backend:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "eslint"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "node-cron"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "typescript"
+        update-types:
+          - version-update:semver-major
+      - dependency-name: "vitest"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
@@ -29,8 +64,16 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "node"
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: docker
     directory: /deploy
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "node"
+        update-types:
+          - version-update:semver-major
