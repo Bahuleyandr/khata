@@ -14,7 +14,7 @@ type SubscriptionParams = {
 
 type SubscriptionPreferenceBody = {
   merchant_name: string;
-  status: "confirmed" | "ignored";
+  status: "confirmed" | "ignored" | "inactive";
   note?: string | null;
 };
 
@@ -41,7 +41,7 @@ const subscriptionPreferenceSchema = {
   additionalProperties: false,
   properties: {
     merchant_name: { type: "string", minLength: 1, maxLength: 240 },
-    status: { type: "string", enum: ["confirmed", "ignored"] },
+    status: { type: "string", enum: ["confirmed", "ignored", "inactive"] },
     note: { anyOf: [{ type: "string", maxLength: 500 }, { type: "null" }] },
   },
 } as const;
@@ -65,6 +65,11 @@ function toApiSubscription(subscription: SubscriptionCandidate) {
     avg_interval_days: subscription.avg_interval_days,
     interval_jitter_days: subscription.interval_jitter_days,
     amount_variance_pct: subscription.amount_variance_pct,
+    charge_dates: subscription.charge_dates,
+    next_expected_at: subscription.next_expected_at,
+    days_until_next: subscription.days_until_next,
+    is_overdue: subscription.is_overdue,
+    not_seen_this_month: subscription.not_seen_this_month,
     preference_status: subscription.preference_status,
   };
 }

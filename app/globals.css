@@ -209,6 +209,7 @@ tr:hover td { background: #f9fafb; }
 .badge-pending { background: #e0f2fe; color: #075985; }
 .badge-imported { background: #dcfce7; color: #166534; }
 .badge-duplicate { background: #fef3c7; color: #92400e; }
+.badge-inactive { background: #e5e7eb; color: #374151; }
 
 .filter-bar {
   display: flex;
@@ -465,6 +466,27 @@ tr:hover td { background: #f9fafb; }
   cursor: default;
   opacity: 0.45;
 }
+.receipt-review-status {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.2rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  margin: -0.35rem 0 1rem;
+  padding: 0.55rem 0.7rem;
+}
+.receipt-review-status strong {
+  color: #111827;
+  font-size: 0.92rem;
+}
+.receipt-review-status span {
+  color: #64748b;
+  font-size: 0.8rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .receipt-preview {
   border: 1px solid #e5e7eb;
   border-radius: 8px;
@@ -680,6 +702,51 @@ tr:hover td { background: #f9fafb; }
   grid-template-columns: minmax(140px, 0.85fr) minmax(130px, 1fr) auto;
   min-width: 360px;
 }
+.segmented-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+.segmented-control button {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 999px;
+  color: #374151;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  min-height: 32px;
+  padding: 0.3rem 0.65rem;
+}
+.segmented-control button.active {
+  background: #e0f2fe;
+  border-color: #7dd3fc;
+  color: #075985;
+  font-weight: 700;
+}
+.subscription-summary-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 0.75rem;
+}
+.subscription-summary-grid span {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem;
+}
+.subscription-summary-grid strong {
+  color: #111827;
+  font-size: 0.95rem;
+}
+.subscription-summary-grid small {
+  color: #64748b;
+  font-size: 0.72rem;
+}
 .subscription-row strong {
   align-items: center;
   display: flex;
@@ -688,6 +755,25 @@ tr:hover td { background: #f9fafb; }
 }
 .subscription-row .badge {
   margin-left: 0;
+}
+.subscription-row small {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+.audit-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.audit-filter-bar select {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  color: #374151;
+  font: inherit;
+  font-size: 0.82rem;
+  min-height: 34px;
+  padding: 0.35rem 0.5rem;
 }
 .audit-row {
   background: #fff;
@@ -715,6 +801,23 @@ tr:hover td { background: #f9fafb; }
   color: #6b7280;
   font-size: 0.82rem;
   margin-bottom: 1rem;
+  overflow-wrap: anywhere;
+}
+.audit-diff {
+  margin-bottom: 1rem;
+}
+.audit-diff h4 {
+  color: #374151;
+  font-size: 0.82rem;
+  margin-bottom: 0.35rem;
+}
+.audit-diff table {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.audit-diff td {
+  max-width: 260px;
   overflow-wrap: anywhere;
 }
 .audit-json-grid {
@@ -970,6 +1073,10 @@ tr:hover td { background: #f9fafb; }
   .receipt-preview { max-height: 42vh; }
   .receipt-review-toolbar { align-items: stretch; flex-direction: column; }
   .receipt-review-toolbar div { display: grid; grid-template-columns: 1fr 1fr; }
+  .receipt-review-status {
+    grid-template-columns: 1fr;
+    margin-top: 0;
+  }
   .quick-category-row {
     flex-wrap: nowrap;
     margin: 0 -0.15rem 1rem;
@@ -1016,13 +1123,77 @@ tr:hover td { background: #f9fafb; }
   .statement-row { grid-template-columns: 1fr; }
   .statement-row .row-actions { justify-content: flex-start; }
   .statement-review-toolbar { flex-direction: column; }
+  .subscription-summary-grid { grid-template-columns: 1fr; }
+  .segmented-control button,
+  .audit-filter-bar select { flex: 1 1 auto; }
   .statement-correction-bar,
   .statement-row-correction {
     grid-template-columns: 1fr;
     min-width: 0;
     width: 100%;
   }
+  .statement-review-table,
+  .statement-review-table tbody,
+  .statement-review-table tr,
+  .statement-review-table td {
+    display: block;
+    width: 100%;
+  }
+  .statement-review-table thead {
+    display: none;
+  }
+  .statement-review-table tr {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+  }
+  .statement-review-table td {
+    border-bottom: 1px solid #f1f5f9;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: minmax(92px, 0.38fr) minmax(0, 1fr);
+    padding: 0.55rem 0.65rem;
+    text-align: left !important;
+  }
+  .statement-review-table td::before {
+    color: #64748b;
+    content: attr(data-label);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .statement-review-table td:last-child {
+    border-bottom: 0;
+  }
+  .statement-review-table td[data-label="Actions"] {
+    grid-template-columns: 1fr;
+  }
+  .statement-review-table td[data-label="Actions"]::before {
+    display: none;
+  }
   .audit-json-grid { grid-template-columns: 1fr; }
+  .audit-diff table,
+  .audit-diff thead,
+  .audit-diff tbody,
+  .audit-diff tr,
+  .audit-diff th,
+  .audit-diff td {
+    display: block;
+    width: 100%;
+  }
+  .audit-diff thead {
+    display: none;
+  }
+  .audit-diff tr {
+    border-bottom: 1px solid #e5e7eb;
+    padding: 0.45rem 0;
+  }
+  .audit-diff td {
+    border-bottom: 0;
+    max-width: none;
+    padding: 0.25rem 0.5rem;
+  }
   .monthly-summary-main { flex-direction: column; }
   .month-progress { min-width: 0; text-align: left; width: 100%; }
   .monthly-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

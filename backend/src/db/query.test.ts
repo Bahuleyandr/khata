@@ -57,6 +57,10 @@ describe("findSubscriptionCandidates", () => {
       confidence: 100,
       monthly_estimate_cents: "49900",
       amount_variance_pct: 0,
+      next_expected_at: "2026-05-01",
+      days_until_next: 2,
+      is_overdue: false,
+      not_seen_this_month: false,
       preference_status: "confirmed",
     });
   });

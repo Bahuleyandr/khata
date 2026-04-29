@@ -108,6 +108,11 @@ function ReceiptModal({
             <button type="button" onClick={onNext} disabled={!hasNext || busy}>Next</button>
           </div>
         </div>
+        <div className="receipt-review-status">
+          <strong>{formatCents(receipt.amount_cents, receipt.currency)}</strong>
+          <span>{formatDate(receipt.occurred_at)} · {receipt.category ?? 'Uncategorized'}</span>
+          {receipt.review_status === 'needs_review' ? <span className="badge badge-review">Needs review</span> : null}
+        </div>
         <div className="receipt-review-layout">
           <div className="receipt-preview">
             {/* eslint-disable-next-line @next/next/no-img-element */}

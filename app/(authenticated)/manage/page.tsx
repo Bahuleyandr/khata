@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   clearBudget,
   clearSubscriptionPreference,
@@ -28,6 +28,7 @@ import {
   type StatementImport,
   type StatementImportRow,
   type SubscriptionCandidate,
+  type SubscriptionPreferenceStatus,
   type Tag,
 } from '../../../lib/api'
 
@@ -64,6 +65,31 @@ function formatAuditJson(value: unknown) {
   return JSON.stringify(value, null, 2) ?? 'null'
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function formatAuditCell(value: unknown) {
+  if (value === undefined) return '—'
+  if (value === null) return 'null'
+  if (typeof value === 'object') return JSON.stringify(value) ?? 'null'
+  return String(value)
+}
+
+function auditDiff(event: AuditEvent) {
+  const before = event.before
+  const after = event.after
+  if (!isRecord(before) || !isRecord(after)) return []
+  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort()
+  return keys
+    .map((key) => ({
+      field: key,
+      before: before[key],
+      after: after[key],
+    }))
+    .filter((row) => JSON.stringify(row.before) !== JSON.stringify(row.after))
+}
+
 function parseTagNames(value: string) {
   return Array.from(
     new Set(
@@ -73,6 +99,38 @@ function parseTagNames(value: string) {
         .filter(Boolean),
     ),
   )
+}
+
+type SubscriptionFilter = 'active' | 'attention' | 'confirmed' | 'ignored' | 'inactive' | 'all'
+
+const AUDIT_ACTION_OPTIONS = [
+  'expense.create',
+  'expense.update',
+  'expense.delete',
+  'expense.merge',
+  'expenses.bulk_update',
+  'statement.upload',
+  'statement.import',
+  'statement.row_update',
+  'subscription.preference_set',
+  'subscription.preference_clear',
+]
+
+const AUDIT_ENTITY_OPTIONS = ['expense', 'statement', 'statement_row', 'subscription', 'category', 'budget', 'tag']
+
+function subscriptionTiming(subscription: SubscriptionCandidate) {
+  if (subscription.next_expected_at === null || subscription.days_until_next === null) return 'Timing unknown'
+  if (subscription.days_until_next < 0) {
+    return `Expected ${Math.abs(subscription.days_until_next)} days ago`
+  }
+  if (subscription.days_until_next === 0) return 'Expected today'
+  return `Expected in ${subscription.days_until_next} days`
+}
+
+function subscriptionBadgeClass(status: SubscriptionPreferenceStatus) {
+  if (status === 'confirmed') return 'badge-confirmed'
+  if (status === 'inactive') return 'badge-inactive'
+  return 'badge-muted'
 }
 
 export default function ManagePage() {
@@ -86,8 +144,12 @@ export default function ManagePage() {
   const [bulkStatementCategory, setBulkStatementCategory] = useState('')
   const [bulkStatementTags, setBulkStatementTags] = useState('')
   const [subscriptions, setSubscriptions] = useState<SubscriptionCandidate[]>([])
+  const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('active')
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [auditDetail, setAuditDetail] = useState<AuditEvent | null>(null)
+  const [auditLimit, setAuditLimit] = useState(30)
+  const [auditAction, setAuditAction] = useState('')
+  const [auditEntityType, setAuditEntityType] = useState('')
   const [month, setMonth] = useState(currentMonthValue)
   const [newCategory, setNewCategory] = useState('')
   const [budgetCategory, setBudgetCategory] = useState('')
@@ -106,7 +168,11 @@ export default function ManagePage() {
       getTags(),
       getStatements(),
       getSubscriptions({ includeIgnored: true }),
-      getAuditLog(30),
+      getAuditLog({
+        limit: auditLimit,
+        action: auditAction || undefined,
+        entityType: auditEntityType || undefined,
+      }),
     ])
     setCategories(cats)
     setBudgets(budgetRes.budgets)
@@ -115,7 +181,7 @@ export default function ManagePage() {
     setSubscriptions(subscriptionRes.subscriptions)
     setAuditEvents(auditRes.events)
     setBudgetCategory((current) => current || cats[0]?.id || '')
-  }, [month])
+  }, [auditAction, auditEntityType, auditLimit, month])
 
   useEffect(() => {
     refresh().catch((e: Error) => setError(e.message))
@@ -137,6 +203,30 @@ export default function ManagePage() {
   const pendingStatementRows = statementRows.filter((row) => row.status === 'pending')
   const selectedPendingRowIds = selectedStatementRowIds.filter((id) =>
     pendingStatementRows.some((row) => row.id === id),
+  )
+  const activeSubscriptions = subscriptions.filter(
+    (subscription) => !['ignored', 'inactive'].includes(subscription.preference_status ?? ''),
+  )
+  const attentionSubscriptions = activeSubscriptions.filter(
+    (subscription) => subscription.is_overdue || subscription.not_seen_this_month,
+  )
+  const confirmedSubscriptions = subscriptions.filter((subscription) => subscription.preference_status === 'confirmed')
+  const subscriptionMonthlyTotal = (
+    confirmedSubscriptions.length > 0 ? confirmedSubscriptions : activeSubscriptions
+  ).reduce((sum, subscription) => sum + Number(subscription.monthly_estimate_cents), 0)
+  const filteredSubscriptions = subscriptions.filter((subscription) => {
+    if (subscriptionFilter === 'all') return true
+    if (subscriptionFilter === 'active') return !['ignored', 'inactive'].includes(subscription.preference_status ?? '')
+    if (subscriptionFilter === 'attention') return subscription.is_overdue || subscription.not_seen_this_month
+    return subscription.preference_status === subscriptionFilter
+  })
+  const auditActions = useMemo(
+    () => Array.from(new Set([...AUDIT_ACTION_OPTIONS, ...auditEvents.map((event) => event.action)])).sort(),
+    [auditEvents],
+  )
+  const auditEntityTypes = useMemo(
+    () => Array.from(new Set([...AUDIT_ENTITY_OPTIONS, ...auditEvents.map((event) => event.entity_type)])).sort(),
+    [auditEvents],
   )
 
   async function loadStatementReview(statementId: string) {
@@ -208,7 +298,7 @@ export default function ManagePage() {
     setSelectedStatementRowIds(result.rows.filter((row) => row.status === 'pending').map((row) => row.id))
   }
 
-  async function updateSubscription(subscription: SubscriptionCandidate, status: 'confirmed' | 'ignored') {
+  async function updateSubscription(subscription: SubscriptionCandidate, status: SubscriptionPreferenceStatus) {
     await setSubscriptionPreference(subscription.merchant_key, subscription.name, status)
   }
 
@@ -329,21 +419,60 @@ export default function ManagePage() {
 
         <section className="card workspace-card">
           <h3>Subscriptions</h3>
+          <div className="subscription-summary-grid">
+            <span>
+              <strong>{formatCents(subscriptionMonthlyTotal)}</strong>
+              <small>monthly watch</small>
+            </span>
+            <span>
+              <strong>{confirmedSubscriptions.length}</strong>
+              <small>confirmed</small>
+            </span>
+            <span>
+              <strong>{attentionSubscriptions.length}</strong>
+              <small>need attention</small>
+            </span>
+          </div>
+          <div className="segmented-control subscription-filter" aria-label="Subscription filter">
+            {([
+              ['active', `Active ${activeSubscriptions.length}`],
+              ['attention', `Attention ${attentionSubscriptions.length}`],
+              ['confirmed', `Confirmed ${confirmedSubscriptions.length}`],
+              ['ignored', 'Ignored'],
+              ['inactive', 'Inactive'],
+              ['all', 'All'],
+            ] as Array<[SubscriptionFilter, string]>).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={subscriptionFilter === value ? 'active' : ''}
+                onClick={() => setSubscriptionFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="statement-list">
-            {subscriptions.length === 0 ? <p>No recurring signals yet.</p> : subscriptions.map((subscription) => (
+            {filteredSubscriptions.length === 0 ? <p>No recurring signals in this view.</p> : filteredSubscriptions.map((subscription) => (
               <div key={subscription.merchant_key} className="statement-row subscription-row">
                 <div>
                   <strong>
                     {subscription.name}
                     {subscription.preference_status ? (
-                      <span className={`badge ${subscription.preference_status === 'confirmed' ? 'badge-confirmed' : 'badge-muted'}`}>
+                      <span className={`badge ${subscriptionBadgeClass(subscription.preference_status)}`}>
                         {subscription.preference_status}
                       </span>
                     ) : null}
+                    {subscription.is_overdue ? <span className="badge badge-review">Overdue</span> : null}
                   </strong>
                   <span>
                     {subscription.cadence} · {formatCents(subscription.monthly_estimate_cents)} / mo · {subscription.confidence}% · {subscription.count} charges
                   </span>
+                  <small>
+                    {subscriptionTiming(subscription)}
+                    {subscription.last_seen ? ` · Last ${formatDate(subscription.last_seen)}` : ''}
+                    {subscription.not_seen_this_month ? ' · Not seen this month' : ''}
+                  </small>
                 </div>
                 <div className="row-actions">
                   <button
@@ -359,6 +488,13 @@ export default function ManagePage() {
                     disabled={busy || subscription.preference_status === 'ignored'}
                   >
                     Ignore
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void run(() => updateSubscription(subscription, 'inactive'))}
+                    disabled={busy || subscription.preference_status === 'inactive'}
+                  >
+                    Inactive
                   </button>
                   <button
                     type="button"
@@ -490,7 +626,7 @@ export default function ManagePage() {
                 </button>
               </div>
               <div className="table-scroll">
-                <table>
+                <table className="statement-review-table">
                   <thead>
                     <tr>
                       <th>Select</th>
@@ -509,7 +645,7 @@ export default function ManagePage() {
                       <tr><td colSpan={9}>No parsed rows for this statement.</td></tr>
                     ) : statementRows.map((row) => (
                       <tr key={row.id}>
-                        <td>
+                        <td data-label="Select">
                           <input
                             type="checkbox"
                             checked={selectedStatementRowIds.includes(row.id)}
@@ -518,14 +654,14 @@ export default function ManagePage() {
                             aria-label={`Select ${row.description}`}
                           />
                         </td>
-                        <td style={{ whiteSpace: 'nowrap' }}>{formatDate(row.occurred_at)}</td>
-                        <td>{row.description}</td>
-                        <td>{row.suggested_category ?? '—'}</td>
-                        <td>{row.category ?? 'Uncategorized'}</td>
-                        <td>{row.tag_names.length ? row.tag_names.map((tag) => `#${tag}`).join(' ') : '—'}</td>
-                        <td><span className={`badge badge-${row.status}`}>{row.status}</span></td>
-                        <td style={{ textAlign: 'right', fontWeight: 600 }}>{formatCents(row.amount_cents, row.currency)}</td>
-                        <td>
+                        <td data-label="Date" style={{ whiteSpace: 'nowrap' }}>{formatDate(row.occurred_at)}</td>
+                        <td data-label="Description">{row.description}</td>
+                        <td data-label="Suggested">{row.suggested_category ?? '—'}</td>
+                        <td data-label="Category">{row.category ?? 'Uncategorized'}</td>
+                        <td data-label="Tags">{row.tag_names.length ? row.tag_names.map((tag) => `#${tag}`).join(' ') : '—'}</td>
+                        <td data-label="Status"><span className={`badge badge-${row.status}`}>{row.status}</span></td>
+                        <td data-label="Amount" style={{ textAlign: 'right', fontWeight: 600 }}>{formatCents(row.amount_cents, row.currency)}</td>
+                        <td data-label="Actions">
                           <div className="row-actions">
                             {row.status === 'pending' ? (
                               <StatementRowCorrection
@@ -557,6 +693,37 @@ export default function ManagePage() {
 
         <section className="card workspace-card wide-card">
           <h3>Audit Trail</h3>
+          <div className="audit-filter-bar">
+            <select
+              value={auditAction}
+              onChange={(e) => setAuditAction(e.target.value)}
+              aria-label="Audit action"
+            >
+              <option value="">All actions</option>
+              {auditActions.map((action) => (
+                <option key={action} value={action}>{action}</option>
+              ))}
+            </select>
+            <select
+              value={auditEntityType}
+              onChange={(e) => setAuditEntityType(e.target.value)}
+              aria-label="Audit entity type"
+            >
+              <option value="">All entities</option>
+              {auditEntityTypes.map((entityType) => (
+                <option key={entityType} value={entityType}>{entityType}</option>
+              ))}
+            </select>
+            <select
+              value={auditLimit}
+              onChange={(e) => setAuditLimit(Number(e.target.value))}
+              aria-label="Audit limit"
+            >
+              {[30, 50, 100].map((limit) => (
+                <option key={limit} value={limit}>{limit} events</option>
+              ))}
+            </select>
+          </div>
           <div className="statement-list">
             {auditEvents.length === 0 ? <p>No corrections recorded yet.</p> : auditEvents.map((event) => (
               <button
@@ -588,6 +755,29 @@ export default function ManagePage() {
               {' · '}
               {formatAuditDate(auditDetail.created_at)}
             </p>
+            {auditDiff(auditDetail).length > 0 ? (
+              <section className="audit-diff">
+                <h4>Changed Fields</h4>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Field</th>
+                      <th>Before</th>
+                      <th>After</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {auditDiff(auditDetail).map((row) => (
+                      <tr key={row.field}>
+                        <td>{row.field}</td>
+                        <td>{formatAuditCell(row.before)}</td>
+                        <td>{formatAuditCell(row.after)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+            ) : null}
             <div className="audit-json-grid">
               <section>
                 <h4>Before</h4>

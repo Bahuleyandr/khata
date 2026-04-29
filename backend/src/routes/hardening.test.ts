@@ -377,7 +377,7 @@ describe("route hardening", () => {
     try {
       const res = await app.inject({
         method: "GET",
-        url: "/api/audit-log?limit=10",
+        url: `/api/audit-log?limit=10&action=expense.update&entity_type=expense&entity_id=${EXPENSE_ID}`,
         headers: { cookie: authCookie() },
       });
 

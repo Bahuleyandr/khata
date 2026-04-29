@@ -23,6 +23,13 @@ export interface AuditEventRow {
   created_at: Date;
 }
 
+export interface AuditEventFilters {
+  limit: number;
+  action?: string;
+  entityType?: string;
+  entityId?: string;
+}
+
 export async function recordAuditEvent(input: AuditEventInput): Promise<void> {
   const beforeJson = JSON.stringify(input.before ?? null);
   const afterJson = JSON.stringify(input.after ?? null);
@@ -52,7 +59,18 @@ export async function recordAuditEvent(input: AuditEventInput): Promise<void> {
   `;
 }
 
-export async function listAuditEvents(userId: number, limit: number): Promise<AuditEventRow[]> {
+export async function listAuditEvents(
+  userId: number,
+  filtersOrLimit: AuditEventFilters | number,
+): Promise<AuditEventRow[]> {
+  const filters =
+    typeof filtersOrLimit === "number"
+      ? { limit: filtersOrLimit }
+      : filtersOrLimit;
+  const action = filters.action ?? null;
+  const entityType = filters.entityType ?? null;
+  const entityId = filters.entityId ?? null;
+
   return sql<AuditEventRow[]>`
     SELECT id,
            actor_user_id::text AS actor_user_id,
@@ -65,7 +83,10 @@ export async function listAuditEvents(userId: number, limit: number): Promise<Au
            created_at
     FROM audit_log
     WHERE user_id = ${userId}
+      AND (${action}::text IS NULL OR action = ${action})
+      AND (${entityType}::text IS NULL OR entity_type = ${entityType})
+      AND (${entityId}::uuid IS NULL OR entity_id = ${entityId}::uuid)
     ORDER BY created_at DESC
-    LIMIT ${limit}
+    LIMIT ${filters.limit}
   `;
 }

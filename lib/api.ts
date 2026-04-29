@@ -73,8 +73,15 @@ export interface SubscriptionCandidate {
   avg_interval_days: number | null
   interval_jitter_days: number | null
   amount_variance_pct: number
-  preference_status: 'confirmed' | 'ignored' | null
+  charge_dates: string[]
+  next_expected_at: string | null
+  days_until_next: number | null
+  is_overdue: boolean
+  not_seen_this_month: boolean
+  preference_status: SubscriptionPreferenceStatus | null
 }
+
+export type SubscriptionPreferenceStatus = 'confirmed' | 'ignored' | 'inactive'
 
 export interface Expense {
   id: string
@@ -501,9 +508,15 @@ export function updateStatementImportRow(
   })
 }
 
-export function getAuditLog(limit = 50): Promise<{ events: AuditEvent[] }> {
+export function getAuditLog(
+  params: number | { limit?: number; action?: string; entityType?: string; entityId?: string } = 50,
+): Promise<{ events: AuditEvent[] }> {
+  const normalized = typeof params === 'number' ? { limit: params } : params
   const q = new URLSearchParams()
-  q.set('limit', String(limit))
+  q.set('limit', String(normalized.limit ?? 50))
+  if (normalized.action) q.set('action', normalized.action)
+  if (normalized.entityType) q.set('entity_type', normalized.entityType)
+  if (normalized.entityId) q.set('entity_id', normalized.entityId)
   return apiFetch<{ events: AuditEvent[] }>(`/api/audit-log?${q}`)
 }
 
@@ -532,7 +545,7 @@ export function getSubscriptions(params: { includeIgnored?: boolean } = {}): Pro
 export async function setSubscriptionPreference(
   merchantKey: string,
   merchantName: string,
-  status: 'confirmed' | 'ignored',
+  status: SubscriptionPreferenceStatus,
 ): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/subscriptions/${encodeURIComponent(merchantKey)}`, {
     method: 'PUT',

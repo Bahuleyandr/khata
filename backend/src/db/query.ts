@@ -167,7 +167,11 @@ export interface SubscriptionCandidate extends MerchantSpend {
   interval_jitter_days: number | null;
   amount_variance_pct: number;
   charge_dates: string[];
-  preference_status: "confirmed" | "ignored" | null;
+  next_expected_at: string | null;
+  days_until_next: number | null;
+  is_overdue: boolean;
+  not_seen_this_month: boolean;
+  preference_status: "confirmed" | "ignored" | "inactive" | null;
 }
 
 /**
@@ -227,6 +231,18 @@ function monthlyEstimate(avgAmountCents: number, cadence: SubscriptionCandidate[
   return Math.round(avgAmountCents);
 }
 
+function cadenceIntervalDays(
+  cadence: SubscriptionCandidate["cadence"],
+  avgIntervalDays: number | null,
+): number | null {
+  if (avgIntervalDays !== null) return avgIntervalDays;
+  if (cadence === "weekly") return 7;
+  if (cadence === "fortnightly") return 14;
+  if (cadence === "monthly") return 30;
+  if (cadence === "quarterly") return 91;
+  return null;
+}
+
 function daysBetween(a: Date, b: Date): number {
   return Math.round((b.getTime() - a.getTime()) / (24 * 60 * 60 * 1000));
 }
@@ -277,7 +293,7 @@ export async function findSubscriptionCandidates(
     min_amount_cents: string;
     max_amount_cents: string;
     charge_dates: Array<string | Date>;
-    preference_status: "confirmed" | "ignored" | null;
+    preference_status: "confirmed" | "ignored" | "inactive" | null;
   };
 
   const rows = await sql<Row[]>`
@@ -326,7 +342,7 @@ export async function findSubscriptionCandidates(
     LEFT JOIN subscription_preferences sp
       ON sp.user_id = ${userId}
      AND sp.merchant_key = grouped.merchant_key
-    WHERE ${options.includeIgnored === true} OR COALESCE(sp.status, '') <> 'ignored'
+    WHERE ${options.includeIgnored === true} OR COALESCE(sp.status, '') NOT IN ('ignored', 'inactive')
     ORDER BY grouped.count DESC, grouped.total_cents::bigint DESC
     LIMIT 50
   `;
@@ -365,6 +381,14 @@ export async function findSubscriptionCandidates(
         amountVariancePct,
         lastSeen: new Date(row.last_seen),
       });
+      const intervalDays = cadenceIntervalDays(cadence, avgIntervalDays);
+      let nextExpectedDate: Date | null = null;
+      if (intervalDays !== null) {
+        nextExpectedDate = new Date(row.last_seen);
+        nextExpectedDate.setUTCDate(nextExpectedDate.getUTCDate() + intervalDays);
+      }
+      const daysUntilNext = nextExpectedDate ? daysBetween(new Date(), nextExpectedDate) : null;
+      const currentMonth = new Date().toISOString().slice(0, 7);
 
       return {
         merchant_key: row.merchant_key,
@@ -381,6 +405,10 @@ export async function findSubscriptionCandidates(
         interval_jitter_days: intervalJitterDays,
         amount_variance_pct: amountVariancePct,
         charge_dates: dates.map((date) => date.toISOString().slice(0, 10)),
+        next_expected_at: nextExpectedDate ? nextExpectedDate.toISOString().slice(0, 10) : null,
+        days_until_next: daysUntilNext,
+        is_overdue: daysUntilNext !== null && daysUntilNext < -3,
+        not_seen_this_month: row.last_seen.slice(0, 7) !== currentMonth,
         preference_status: row.preference_status,
       };
     })
