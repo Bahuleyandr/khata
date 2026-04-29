@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import {
+  apiAssetUrl,
   formatCents,
   formatDate,
   getCategories,
@@ -116,7 +117,7 @@ function ReceiptModal({
         <div className="receipt-review-layout">
           <div className="receipt-preview">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={receipt.receipt_url} alt={receiptTitle(receipt)} />
+            <img src={apiAssetUrl(receipt.receipt_url)} alt={receiptTitle(receipt)} />
           </div>
           <div className="receipt-review-panel">
             <div className="receipt-summary">
@@ -411,7 +412,7 @@ export default function ReceiptsPage() {
                   type="button"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={receipt.receipt_url} alt={receiptTitle(receipt)} />
+                  <img src={apiAssetUrl(receipt.receipt_url)} alt={receiptTitle(receipt)} />
                   <span className="info">
                     <span className="merchant">{receiptTitle(receipt)}</span>
                     <span className="amount">{formatCents(receipt.amount_cents, receipt.currency)}</span>

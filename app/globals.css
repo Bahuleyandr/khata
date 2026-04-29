@@ -1069,8 +1069,17 @@ tr:hover td { background: #f9fafb; }
     max-width: none;
     padding: 1rem;
   }
-  .receipt-review-layout { grid-template-columns: 1fr; }
-  .receipt-preview { max-height: 42vh; }
+  .receipt-review-layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .receipt-review-panel {
+    order: 1;
+  }
+  .receipt-preview {
+    max-height: 32vh;
+    order: 2;
+  }
   .receipt-review-toolbar { align-items: stretch; flex-direction: column; }
   .receipt-review-toolbar div { display: grid; grid-template-columns: 1fr 1fr; }
   .receipt-review-status {
@@ -1088,12 +1097,11 @@ tr:hover td { background: #f9fafb; }
     min-height: 38px;
   }
   .receipt-review-panel .modal-actions {
-    background: linear-gradient(180deg, rgba(255,255,255,0.9), #fff 35%);
-    bottom: -1rem;
-    margin-left: -1rem;
-    margin-right: -1rem;
-    padding: 0.75rem 1rem 1rem;
-    position: sticky;
+    background: transparent;
+    margin-left: 0;
+    margin-right: 0;
+    padding: 0;
+    position: static;
   }
   .modal-actions { flex-direction: column-reverse; }
   .modal-actions button { width: 100%; }

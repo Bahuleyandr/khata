@@ -979,7 +979,7 @@ export async function expensesRoutes(app: FastifyInstance) {
         WHERE e.user_id = ${session.userId}
           AND e.occurred_at >= ${bounds.start}::date
           AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
-        GROUP BY name
+        GROUP BY COALESCE(mc.name, e.merchant, e.description, 'Unknown')
         ORDER BY SUM(e.amount_cents) DESC
         LIMIT 5
       `,
@@ -1000,7 +1000,7 @@ export async function expensesRoutes(app: FastifyInstance) {
               AND lower(COALESCE(older_mc.name, older.merchant, older.description, '')) =
                   lower(COALESCE(mc.name, e.merchant, e.description, ''))
           )
-        GROUP BY name
+        GROUP BY COALESCE(mc.name, e.merchant, e.description, 'Unknown')
         ORDER BY SUM(e.amount_cents) DESC
         LIMIT 5
       `,
@@ -1015,7 +1015,9 @@ export async function expensesRoutes(app: FastifyInstance) {
           WHERE e.user_id = ${session.userId}
             AND e.occurred_at >= ${bounds.start}::date
             AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
-          GROUP BY key, name
+          GROUP BY
+            lower(COALESCE(mc.name, e.merchant, e.description, 'Unknown')),
+            COALESCE(mc.name, e.merchant, e.description, 'Unknown')
         ),
         previous_three AS (
           SELECT lower(COALESCE(mc.name, e.merchant, e.description, 'Unknown')) AS key,
@@ -1025,7 +1027,7 @@ export async function expensesRoutes(app: FastifyInstance) {
           WHERE e.user_id = ${session.userId}
             AND e.occurred_at >= (${bounds.start}::date - INTERVAL '3 months')
             AND e.occurred_at < ${bounds.start}::date
-          GROUP BY key
+          GROUP BY lower(COALESCE(mc.name, e.merchant, e.description, 'Unknown'))
         )
         SELECT c.name,
                c.total_cents::text,

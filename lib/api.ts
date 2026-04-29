@@ -16,6 +16,13 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export function apiAssetUrl(path: string): string {
+  if (!path || path.startsWith('http://') || path.startsWith('https://') || !API_BASE) {
+    return path
+  }
+  return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`
+}
+
 export interface Me {
   telegram_user_id: number
   first_name: string

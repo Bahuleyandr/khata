@@ -14,6 +14,7 @@ import {
 } from '../../../lib/api'
 
 vi.mock('../../../lib/api', () => ({
+  apiAssetUrl: (path: string) => path,
   getCategories: vi.fn(),
   getReceipts: vi.fn(),
   updateExpense: vi.fn(),
