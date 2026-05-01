@@ -371,10 +371,36 @@ describe("handleTextMessage", () => {
         raw_text: text,
       }),
     );
+    const payload = vi.mocked(mockExpenses.insertExpense).mock.calls[0]![0] as {
+      occurred_at: Date;
+    };
+    expect(payload.occurred_at.toISOString().slice(0, 10)).toBe("2026-04-28");
     const [reply] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(reply).toContain("Payment logged");
     expect(reply).toContain("OPENAI OPCO");
     expect(reply).toContain("_via bank_");
+  });
+
+  it("logs the exact AMEX PAYU SWIGGY alert through the payment fast path", async () => {
+    const text =
+      "Alert: You've spent INR 301.00 on your AMEX card ** 31009 at PAYU SWIGGY on 29 April 2026 at 12:56 PM IST. Call 18004190691 if this was not made by you.";
+    const ctx = makeCtx({ message: { text } as Context["message"] });
+    await handleTextMessage(ctx);
+    expect(vi.mocked(mockAI.classifyMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(mockExpenses.insertExpense)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount_cents: 30100,
+        currency: "INR",
+        description: "PAYU SWIGGY",
+        merchant: "PAYU SWIGGY",
+        source: "telegram",
+        raw_text: text,
+      }),
+    );
+    const payload = vi.mocked(mockExpenses.insertExpense).mock.calls[0]![0] as {
+      occurred_at: Date;
+    };
+    expect(payload.occurred_at.toISOString().slice(0, 10)).toBe("2026-04-29");
   });
 
   it("does nothing when text is missing", async () => {
@@ -710,6 +736,56 @@ describe("handlePhoto — receipt pipeline", () => {
     expect(lastReply).toContain("Receipt logged");
     expect(lastReply).toContain("Food");
     expect(editStore.has(111111)).toBe(true);
+  });
+
+  it("logs an IMPS payment confirmation screenshot through the receipt fast path", async () => {
+    stubFetch();
+    const ocrText = [
+      "GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT",
+      "₹73,386",
+      "Apartment 1A",
+      "Request Accepted | Apr 29, 2026",
+      "Transaction Summary",
+      "Paid To : GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT",
+      "Indian Overseas Bank",
+      "Savings A/c: 209601000001470",
+      "Paid By : DR T SUBASH CHANDHAR",
+      "Payment Method",
+      "Bank Transfer | IMPS",
+      "HDFC Transaction ID",
+      "HDFCDF529F4E338E",
+      "Reference Number",
+      "611954154961",
+    ].join("\n");
+    vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValueOnce(ocrText);
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "photo-id-1", width: 1280, height: 960, file_size: 98304 }],
+      } as Context["message"],
+    });
+    await handlePhoto(ctx);
+    expect(vi.mocked(mockAI.parseExpense)).not.toHaveBeenCalled();
+    expect(vi.mocked(mockExpenses.insertExpense)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount_cents: 7338600,
+        currency: "INR",
+        description: "GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT",
+        merchant: "GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT",
+        source: "receipt",
+        raw_text: ocrText,
+        upi_reference_id: "611954154961",
+        review_status: "needs_review",
+        image_key: expect.stringMatching(/^receipts\/111111\//),
+        content_hash: expect.any(String),
+      }),
+    );
+    const payload = vi.mocked(mockExpenses.insertExpense).mock.calls[0]![0] as {
+      occurred_at: Date;
+    };
+    expect(payload.occurred_at.toISOString().slice(0, 10)).toBe("2026-04-29");
+    const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
+    expect(lastReply).toContain("Receipt logged");
+    expect(lastReply).toContain("GEE GEE MINAR");
   });
 
   it("skips duplicate image and does not insert an expense", async () => {

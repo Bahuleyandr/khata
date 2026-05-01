@@ -394,7 +394,9 @@ async function processUpiPayment(
   }
 
   const amount_cents = Math.round(upi.amountRupees * 100);
-  const occurred_at = new Date(); // same-day; user can edit
+  const occurred_at = upi.occurredOn
+    ? new Date(`${upi.occurredOn}T12:00:00Z`)
+    : new Date(); // same-day fallback; user can edit
   const description = upi.merchant ?? `UPI payment (${upi.app})`;
 
   const expenseId = await insertExpense({

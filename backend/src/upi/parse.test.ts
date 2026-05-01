@@ -35,6 +35,7 @@ describe("tryParseUpi", () => {
     expect(r!.amountRupees).toBe(450);
     expect(r!.merchant).toBe("ZOMATO ONLINE");
     expect(r!.app).toBe("bank");
+    expect(r!.occurredOn).toBe("2026-04-27");
   });
 
   it("parses an AMEX card spend alert", () => {
@@ -46,6 +47,18 @@ describe("tryParseUpi", () => {
     expect(r!.merchant).toBe("OPENAI OPCO");
     expect(r!.app).toBe("bank");
     expect(r!.reference).toBeNull();
+    expect(r!.occurredOn).toBe("2026-04-28");
+  });
+
+  it("parses the exact AMEX PAYU SWIGGY alert format", () => {
+    const r = tryParseUpi(
+      "Alert: You've spent INR 301.00 on your AMEX card ** 31009 at PAYU SWIGGY on 29 April 2026 at 12:56 PM IST. Call 18004190691 if this was not made by you.",
+    );
+    expect(r).not.toBeNull();
+    expect(r!.amountRupees).toBe(301);
+    expect(r!.merchant).toBe("PAYU SWIGGY");
+    expect(r!.app).toBe("bank");
+    expect(r!.occurredOn).toBe("2026-04-29");
   });
 
   it("does not parse card balance notices without spend language", () => {
@@ -103,6 +116,7 @@ describe("tryParseUpi", () => {
     expect(r!.merchant).toBe("AMERICAN EXPRESS CREDIT"); // double-space collapsed
     expect(r!.app).toBe("upi");
     expect(r!.reference).toBe("112749168520");
+    expect(r!.occurredOn).toBe("2026-04-27");
   });
 
   it("parses an AmEx bill-payment confirmation OCR (INR): amount pattern", () => {
@@ -122,6 +136,34 @@ describe("tryParseUpi", () => {
     // No "to <merchant>" pattern in this OCR — merchant null is acceptable
     expect(r!.app).toBe("upi");
     expect(r!.reference).toBe("CHD53OR1IHJ2Z1");
+    expect(r!.occurredOn).toBe("2026-04-27");
+  });
+
+  it("parses an IMPS payment confirmation screenshot OCR", () => {
+    const text = [
+      "GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT",
+      "₹73,386",
+      "Apartment 1A",
+      "Request Accepted | Apr 29, 2026",
+      "Transaction Summary",
+      "Paid To : GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT",
+      "Indian Overseas Bank",
+      "Savings A/c: 209601000001470",
+      "Paid By : DR T SUBASH CHANDHAR",
+      "Payment Method",
+      "Bank Transfer | IMPS",
+      "HDFC Transaction ID",
+      "HDFCDF529F4E338E",
+      "Reference Number",
+      "611954154961",
+    ].join("\n");
+    const r = tryParseUpi(text);
+    expect(r).not.toBeNull();
+    expect(r!.amountRupees).toBe(73386);
+    expect(r!.merchant).toBe("GEE GEE MINAR RESIDENTS WELFARE ASSOCIAT");
+    expect(r!.app).toBe("bank");
+    expect(r!.reference).toBe("611954154961");
+    expect(r!.occurredOn).toBe("2026-04-29");
   });
 
   describe("UPI reference / UTR extraction", () => {
