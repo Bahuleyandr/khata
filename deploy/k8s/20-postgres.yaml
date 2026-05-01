@@ -34,10 +34,6 @@ spec:
       containers:
         - name: postgres
           image: postgres:16.8-alpine
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
           ports:
             - containerPort: 5432
               name: postgres
