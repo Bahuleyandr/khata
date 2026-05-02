@@ -45,7 +45,7 @@ describe("tryParseUpi", () => {
     expect(r).not.toBeNull();
     expect(r!.amountRupees).toBe(19900);
     expect(r!.merchant).toBe("OPENAI OPCO");
-    expect(r!.app).toBe("bank");
+    expect(r!.app).toBe("amex");
     expect(r!.reference).toBeNull();
     expect(r!.occurredOn).toBe("2026-04-28");
   });
@@ -57,8 +57,19 @@ describe("tryParseUpi", () => {
     expect(r).not.toBeNull();
     expect(r!.amountRupees).toBe(301);
     expect(r!.merchant).toBe("PAYU SWIGGY");
-    expect(r!.app).toBe("bank");
+    expect(r!.app).toBe("amex");
     expect(r!.occurredOn).toBe("2026-04-29");
+  });
+
+  it("parses generic card spend alerts as card, not bank transfer", () => {
+    const r = tryParseUpi(
+      "Alert: You've spent INR 2,499.00 on your credit card ** 1234 at AMAZON INDIA on 1 May 2026 at 02:32 PM IST.",
+    );
+    expect(r).not.toBeNull();
+    expect(r!.amountRupees).toBe(2499);
+    expect(r!.merchant).toBe("AMAZON INDIA");
+    expect(r!.app).toBe("card");
+    expect(r!.occurredOn).toBe("2026-05-01");
   });
 
   it("does not parse card balance notices without spend language", () => {

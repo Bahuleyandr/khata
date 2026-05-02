@@ -119,6 +119,29 @@ function editKeyboard(expenseId: string): InlineKeyboard {
     .text("Edit Date", `editdt:${expenseId}`);
 }
 
+function paymentMethodLabel(app: UpiParse["app"]): string {
+  switch (app) {
+    case "gpay":
+      return "Google Pay";
+    case "phonepe":
+      return "PhonePe";
+    case "paytm":
+      return "Paytm";
+    case "upi":
+      return "UPI";
+    case "bank":
+      return "bank";
+    case "card":
+      return "credit card";
+    case "amex":
+      return "AmEx";
+  }
+}
+
+function isNonUpiPaymentRail(app: UpiParse["app"]): boolean {
+  return app === "bank" || app === "card" || app === "amex";
+}
+
 async function downloadTelegramFile(fileId: string): Promise<{ buffer: Buffer; mimeType: string }> {
   const fileResp = await fetch(
     `https://api.telegram.org/bot${config.telegramBotToken}/getFile?file_id=${fileId}`,
@@ -427,11 +450,12 @@ async function processUpiPayment(
   const sourceLabel =
     opts.source === "receipt"
       ? "Receipt logged"
-      : upi.app === "bank"
+      : isNonUpiPaymentRail(upi.app)
         ? "Payment logged"
         : "UPI logged";
+  const methodLabel = paymentMethodLabel(upi.app);
   await ctx.reply(
-    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${upi.app}_\n` +
+    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${methodLabel}_\n` +
       `Reply \`category: <name>\` or use the buttons.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
   );

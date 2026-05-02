@@ -15,7 +15,7 @@
 export interface UpiParse {
   amountRupees: number;
   merchant: string | null;
-  app: "gpay" | "phonepe" | "paytm" | "upi" | "bank";
+  app: "gpay" | "phonepe" | "paytm" | "upi" | "bank" | "card" | "amex";
   /**
    * UPI ref / UTR / txn-id when present in the source text. Used as a stable
    * dedup key so the same transaction arriving via two channels (forwarded SMS
@@ -104,7 +104,9 @@ function detectApp(text: string): UpiParse["app"] {
   if (/G\s?Pay|Google\s?Pay/i.test(text)) return "gpay";
   if (/Phone\s?Pe/i.test(text)) return "phonepe";
   if (/Paytm/i.test(text)) return "paytm";
-  if (CARD_PAYMENT_SIGNAL.test(text)) return "bank";
+  if (CARD_PAYMENT_SIGNAL.test(text)) {
+    return /\b(?:AMEX|American\s+Express)\b/i.test(text) ? "amex" : "card";
+  }
   if (/\b(?:IMPS|NEFT|RTGS|bank\s+transfer|savings\s+a\/c|acct|account)\b/i.test(text)) return "bank";
   if (/A\/c|Acct|account/i.test(text) && /(?:debited|credited)/i.test(text)) return "bank";
   return "upi";

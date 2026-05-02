@@ -378,7 +378,7 @@ describe("handleTextMessage", () => {
     const [reply] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(reply).toContain("Payment logged");
     expect(reply).toContain("OPENAI OPCO");
-    expect(reply).toContain("_via bank_");
+    expect(reply).toContain("_via AmEx_");
   });
 
   it("logs the exact AMEX PAYU SWIGGY alert through the payment fast path", async () => {
@@ -401,6 +401,10 @@ describe("handleTextMessage", () => {
       occurred_at: Date;
     };
     expect(payload.occurred_at.toISOString().slice(0, 10)).toBe("2026-04-29");
+    const [reply] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(reply).toContain("Payment logged");
+    expect(reply).toContain("PAYU SWIGGY");
+    expect(reply).toContain("_via AmEx_");
   });
 
   it("does nothing when text is missing", async () => {
