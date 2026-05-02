@@ -584,6 +584,140 @@ tr:hover td { background: #f9fafb; }
 }
 .notice-card span { color: #315b57; font-size: 0.9rem; }
 .text-link { color: #0f766e; display: inline-block; font-size: 0.85rem; font-weight: 700; margin-top: 0.6rem; }
+.dashboard-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.chart-card {
+  border-radius: 8px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 1rem;
+}
+.chart-card-wide { grid-column: 1 / -1; }
+.chart-card-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  margin-bottom: 0.9rem;
+}
+.chart-card-heading span {
+  color: #0f766e;
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+}
+.chart-card-heading h3 {
+  color: #111827;
+  font-size: 1rem;
+  line-height: 1.25;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.chart-card-heading a {
+  color: #0f766e;
+  flex: 0 0 auto;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.chart-card .recharts-wrapper {
+  cursor: default;
+}
+.chart-card .recharts-cartesian-axis-tick text,
+.chart-card .recharts-legend-item-text,
+.chart-card .recharts-tooltip-label {
+  color: #4b5563;
+}
+.empty-chart {
+  align-items: center;
+  background: #f9fafb;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  color: #6b7280;
+  display: flex;
+  font-size: 0.88rem;
+  justify-content: center;
+  min-height: 220px;
+  padding: 1rem;
+  text-align: center;
+}
+.chart-link-row,
+.budget-chip-row,
+.capture-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+.chart-link-row a,
+.budget-chip-row a,
+.capture-list a {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  color: #374151;
+  display: inline-flex;
+  gap: 0.4rem;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0.25rem 0.55rem;
+}
+.chart-link-row a,
+.budget-chip-row a {
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+.chart-link-row span,
+.budget-chip-row span {
+  color: #64748b;
+  font-weight: 700;
+}
+.budget-chip-row a.over {
+  background: #fff1f2;
+  border-color: #fecdd3;
+  color: #9f1239;
+}
+.budget-chip-row a.tight {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+.budget-chip-row a.ok {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+.capture-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.capture-list a {
+  border-radius: 8px;
+  display: grid;
+  gap: 0.12rem;
+}
+.capture-list strong {
+  color: #111827;
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+.capture-list span,
+.capture-list em {
+  color: #64748b;
+  font-size: 0.74rem;
+  font-style: normal;
+}
+.recent-card {
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+}
 .signal-list {
   display: flex;
   flex-wrap: wrap;
@@ -1126,6 +1260,24 @@ tr:hover td { background: #f9fafb; }
   .statement-upload-panel { grid-template-columns: 1fr; }
   .grid-2,
   .grid-3 { grid-template-columns: 1fr; }
+  .dashboard-charts { grid-template-columns: 1fr; }
+  .chart-card-wide { grid-column: auto; }
+  .chart-card { padding: 0.85rem; }
+  .chart-card-heading { align-items: stretch; flex-direction: column; }
+  .chart-card-heading a { align-self: flex-start; }
+  .chart-link-row,
+  .budget-chip-row {
+    flex-wrap: nowrap;
+    margin-left: -0.1rem;
+    margin-right: -0.1rem;
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+  }
+  .chart-link-row a,
+  .budget-chip-row a {
+    flex: 0 0 auto;
+  }
+  .capture-list { grid-template-columns: 1fr; }
   .wide-card { grid-column: auto; }
   .list-row,
   .statement-row { grid-template-columns: 1fr; }

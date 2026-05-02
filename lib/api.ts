@@ -66,6 +66,23 @@ export interface MerchantTrend {
   previous_avg_cents?: string
 }
 
+export interface DailyTotal {
+  date: string
+  day: number
+  total_cents: string
+  count: number
+  cumulative_cents: string
+}
+
+export interface SourceBreakdown {
+  source: string
+  total_cents: string
+  count: number
+  needs_review_count: number
+  reviewed_count: number
+  ignored_count: number
+}
+
 export interface SubscriptionCandidate {
   name: string
   merchant_key: string
@@ -119,6 +136,8 @@ export interface ExpenseSummary {
   period: SummaryPeriod
   mtd: CategoryTotal[]
   recent: RecentExpense[]
+  daily: DailyTotal[]
+  sources: SourceBreakdown[]
   budgets: BudgetVariance[]
   merchants: {
     top: MerchantTrend[]

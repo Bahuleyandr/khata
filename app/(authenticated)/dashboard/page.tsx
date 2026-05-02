@@ -10,14 +10,13 @@ import {
   formatDate,
   setSubscriptionPreference,
   type ExpenseSummary,
-  type CategoryTotal,
   type Insight,
   type SubscriptionCandidate,
 } from '../../../lib/api'
 import { InsightCards } from './InsightCards'
 import { MonthlySummary } from './MonthlySummary'
 
-const SpendingChart = dynamic(() => import('./SpendingChart'), { ssr: false })
+const DashboardCharts = dynamic(() => import('./DashboardCharts'), { ssr: false })
 
 function currentMonthValue() {
   const now = new Date()
@@ -27,12 +26,6 @@ function currentMonthValue() {
 function parseMonthValue(value: string) {
   const [year, month] = value.split('-').map(Number)
   return { year, month }
-}
-
-function top5(categories: CategoryTotal[]) {
-  return categories
-    .slice(0, 5)
-    .map((c) => ({ name: c.category, value: Math.round(parseInt(c.total_cents, 10) / 100) }))
 }
 
 export default function DashboardPage() {
@@ -123,51 +116,40 @@ export default function DashboardPage() {
             onSubscriptionPreference={updateSubscriptionPreference}
           />
 
+          <DashboardCharts summary={summary} />
+
           {insights !== null && <InsightCards insights={insights} />}
 
-          <div className="grid-2" style={{ marginBottom: '1.5rem' }}>
-            <div className="card">
-              <h3 style={{ marginBottom: '1rem', fontSize: '1rem', color: '#374151' }}>
-                Top 5 Categories (MTD)
-              </h3>
-              {summary.mtd.length === 0 ? (
-                <p style={{ color: '#9ca3af', fontSize: '0.9rem' }}>No expenses this month.</p>
-              ) : (
-                <SpendingChart data={top5(summary.mtd)} />
-              )}
-            </div>
-
-            <div className="card">
-              <h3 style={{ marginBottom: '1rem', fontSize: '1rem', color: '#374151' }}>
-                Recent Expenses
-              </h3>
-              {summary.recent.length === 0 ? (
-                <p style={{ color: '#9ca3af', fontSize: '0.9rem' }}>No expenses yet.</p>
-              ) : (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Date</th>
-                      <th>Merchant</th>
-                      <th>Category</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
+          <div className="card recent-card">
+            <h3 style={{ marginBottom: '1rem', fontSize: '1rem', color: '#374151' }}>
+              Recent Expenses
+            </h3>
+            {summary.recent.length === 0 ? (
+              <p style={{ color: '#9ca3af', fontSize: '0.9rem' }}>No expenses yet.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Merchant</th>
+                    <th>Category</th>
+                    <th style={{ textAlign: 'right' }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.recent.map((e) => (
+                    <tr key={e.id}>
+                      <td style={{ whiteSpace: 'nowrap' }}>{formatDate(e.occurred_at)}</td>
+                      <td>{e.merchant ?? e.description ?? '—'}</td>
+                      <td>{e.category ?? '—'}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                        {formatCents(e.amount_cents, e.currency)}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {summary.recent.map((e) => (
-                      <tr key={e.id}>
-                        <td style={{ whiteSpace: 'nowrap' }}>{formatDate(e.occurred_at)}</td>
-                        <td>{e.merchant ?? e.description ?? '—'}</td>
-                        <td>{e.category ?? '—'}</td>
-                        <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                          {formatCents(e.amount_cents, e.currency)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </>
       )}

@@ -936,11 +936,36 @@ export async function expensesRoutes(app: FastifyInstance) {
       total_cents: string;
       count: number;
     };
+    type DailyTotal = {
+      date: string;
+      day: number;
+      total_cents: string;
+      count: number;
+      cumulative_cents: string;
+    };
+    type SourceBreakdown = {
+      source: string;
+      total_cents: string;
+      count: number;
+      needs_review_count: number;
+      reviewed_count: number;
+      ignored_count: number;
+    };
     type SpikeRow = MerchantTrend & {
       previous_avg_cents: string;
     };
 
-    const [categoryTotals, recentExpenses, topMerchants, newMerchants, spikes, budgets, subscriptions] = await Promise.all([
+    const [
+      categoryTotals,
+      recentExpenses,
+      topMerchants,
+      newMerchants,
+      spikes,
+      dailyTotals,
+      sourceBreakdown,
+      budgets,
+      subscriptions,
+    ] = await Promise.all([
       sql<CategoryTotal[]>`
         SELECT COALESCE(c.name, 'Uncategorized') AS category,
                SUM(e.amount_cents)::text AS total_cents,
@@ -1040,6 +1065,44 @@ export async function expensesRoutes(app: FastifyInstance) {
         ORDER BY c.total_cents DESC
         LIMIT 5
       `,
+      sql<DailyTotal[]>`
+        WITH days AS (
+          SELECT day::date AS day
+          FROM generate_series(${bounds.start}::date, ${bounds.end}::date, INTERVAL '1 day') AS d(day)
+        ),
+        totals AS (
+          SELECT e.occurred_at::date AS day,
+                 SUM(e.amount_cents) AS total_cents,
+                 COUNT(*)::int AS count
+          FROM expenses e
+          WHERE e.user_id = ${session.userId}
+            AND e.occurred_at >= ${bounds.start}::date
+            AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+          GROUP BY e.occurred_at::date
+        )
+        SELECT days.day::text AS date,
+               EXTRACT(DAY FROM days.day)::int AS day,
+               COALESCE(totals.total_cents, 0)::text AS total_cents,
+               COALESCE(totals.count, 0)::int AS count,
+               SUM(COALESCE(totals.total_cents, 0)) OVER (ORDER BY days.day)::text AS cumulative_cents
+        FROM days
+        LEFT JOIN totals ON totals.day = days.day
+        ORDER BY days.day
+      `,
+      sql<SourceBreakdown[]>`
+        SELECT e.source,
+               SUM(e.amount_cents)::text AS total_cents,
+               COUNT(*)::int AS count,
+               COUNT(*) FILTER (WHERE e.review_status = 'needs_review')::int AS needs_review_count,
+               COUNT(*) FILTER (WHERE e.review_status = 'reviewed')::int AS reviewed_count,
+               COUNT(*) FILTER (WHERE e.review_status = 'ignored')::int AS ignored_count
+        FROM expenses e
+        WHERE e.user_id = ${session.userId}
+          AND e.occurred_at >= ${bounds.start}::date
+          AND e.occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+        GROUP BY e.source
+        ORDER BY SUM(e.amount_cents) DESC
+      `,
       getBudgetsWithMtd(session.userId, bounds.rangeKey),
       findSubscriptionCandidates(session.userId, 6, 2),
     ]);
@@ -1080,6 +1143,8 @@ export async function expensesRoutes(app: FastifyInstance) {
       },
       mtd: categoryTotals,
       recent: recentExpenses,
+      daily: dailyTotals,
+      sources: sourceBreakdown,
       budgets: budget_variance,
       merchants: {
         top: topMerchants,

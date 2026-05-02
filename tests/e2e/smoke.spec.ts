@@ -148,6 +148,19 @@ async function mockApi(page: Page) {
     },
     mtd: [{ category: 'Food', total_cents: '125000', currency: 'INR', count: '1' }],
     recent: [expense],
+    daily: [
+      { date: '2026-04-01', day: 1, total_cents: '0', count: 0, cumulative_cents: '0' },
+      { date: '2026-04-20', day: 20, total_cents: '125000', count: 1, cumulative_cents: '125000' },
+      { date: '2026-04-30', day: 30, total_cents: '0', count: 0, cumulative_cents: '125000' },
+    ],
+    sources: [{
+      source: 'receipt',
+      total_cents: '125000',
+      count: 1,
+      needs_review_count: 1,
+      reviewed_count: 0,
+      ignored_count: 0,
+    }],
     budgets: [{
       id: 'budget-1',
       category_id: '33333333-3333-4333-8333-333333333333',
@@ -284,6 +297,10 @@ test('login and dashboard shell render', async ({ page }) => {
   await page.goto('/dashboard')
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
   await expect(page.getByText(/Top category is Food/)).toBeVisible()
+  await expect(page.getByText('Daily Trend')).toBeVisible()
+  await expect(page.getByText('Category Split')).toBeVisible()
+  await expect(page.getByText('Top Merchants')).toBeVisible()
+  await expect(page.getByText('Capture Mix')).toBeVisible()
   await expect(page.getByText('Budget Pace')).toBeVisible()
   await expect(page.getByText('Subscription Watch')).toBeVisible()
 })
