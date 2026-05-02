@@ -58,6 +58,15 @@ function receiptHref(bounds: { start: string; end: string }, params: Record<stri
   return `/receipts?${query.toString()}`;
 }
 
+function exportHref(year: number, month: number, ledgerId: number) {
+  const query = new URLSearchParams({
+    year: String(year),
+    month: String(month),
+    ledger_id: String(ledgerId),
+  });
+  return `/api/export/xlsx?${query.toString()}`;
+}
+
 export async function monthlyReviewRoutes(app: FastifyInstance) {
   app.get<{ Querystring: MonthlyReviewQuery }>(
     "/api/review/monthly",
@@ -247,7 +256,7 @@ export async function monthlyReviewRoutes(app: FastifyInstance) {
           detail: "Download the month once cleanup is done.",
           count: Number(overview.transaction_count),
           status: Number(overview.transaction_count) > 0 ? "ready" : "done",
-          href: `/api/export/xlsx?year=${year}&month=${month}`,
+          href: exportHref(year, month, session.userId),
         },
       ];
 

@@ -82,7 +82,7 @@ The `/transactions` workspace supports manual transaction entry for expenses mis
 
 Statement imports can be uploaded from `/manage` via `POST /api/statements/upload`. The dashboard accepts PDF or receipt-like statement images, stores the original file in MinIO/S3, parses and deduplicates rows, imports new transactions as `needs_review`, and records the upload in the audit trail.
 
-Household access is owner-managed from `/manage`. The bootstrap owner signs in with a Telegram ID listed in `ALLOWED_TELEGRAM_USER_IDS`, then adds a spouse/household member by numeric Telegram ID in the Household Access panel. Added members log in as themselves, but their dashboard and bot activity writes to the shared household ledger.
+Ledger access is owner-managed from `/manage`. Every Telegram user gets a private personal ledger; bootstrap owners listed in `ALLOWED_TELEGRAM_USER_IDS` also get a separate Household ledger. Use the ledger switcher in the top navigation to move between personal and shared views. Owners can add a spouse/household member by numeric Telegram ID and control whether that member can view and/or add to the selected ledger. Bot messages go to the sender's personal ledger by default; prefix a text entry with `shared` or `household` to write to an accessible household ledger.
 
 Recurring spend is surfaced as Subscription Watch on `/dashboard`. Detection combines charge cadence, interval jitter, amount stability, recency, and occurrence count, so frequent-but-irregular merchants do not look like subscriptions just because they appear often.
 
@@ -223,7 +223,7 @@ The dashboard also runs as a **Telegram Mini App** — a webview embedded direct
 
 ## Security notes
 
-Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-checks the DB-backed household access table on each request; bootstrap owners listed in `ALLOWED_TELEGRAM_USER_IDS` remain emergency owners of their own ledger. Revoking a member in `/manage` invalidates their next request even before the cookie expires. Logout calls `POST /api/logout` and clears the cookie server-side.
+Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-checks the DB-backed access table and selected ledger membership on each request; bootstrap owners listed in `ALLOWED_TELEGRAM_USER_IDS` remain emergency owners of their own personal and household ledgers. Revoking or hiding a member in `/manage` invalidates their next request for that ledger even before the cookie expires. Logout calls `POST /api/logout` and clears the cookie server-side.
 
 Mutating dashboard APIs (`POST`, `PATCH`, `PUT`, `DELETE`) are protected by an Origin guard before route handlers run. Same-host requests are accepted for the production Tailscale hostname; explicitly configured `ALLOWED_ORIGINS` are accepted for local/dev flows. Other browser origins receive `403 Cross-site request blocked`. The cookie is `sameSite: none` in production to support Telegram webview/Mini App behavior, so keep the Origin guard in place for any new mutating dashboard route.
 

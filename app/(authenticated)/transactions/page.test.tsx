@@ -17,6 +17,7 @@ import {
   mergeExpense,
   removeExpenseTag,
   updateExpense,
+  withLedgerParam,
   type Expense,
 } from '../../../lib/api'
 
@@ -33,6 +34,7 @@ vi.mock('../../../lib/api', () => ({
   mergeExpense: vi.fn(),
   removeExpenseTag: vi.fn(),
   updateExpense: vi.fn(),
+  withLedgerParam: vi.fn((path: string) => path),
   formatCents: (cents: string | number, currency = 'INR') => `${currency} ${(Number(cents) / 100).toFixed(2)}`,
   formatDate: (iso: string) => iso.slice(0, 10),
 }))
@@ -82,6 +84,7 @@ describe('TransactionsPage', () => {
     vi.mocked(addExpenseTag).mockResolvedValue()
     vi.mocked(removeExpenseTag).mockResolvedValue()
     vi.mocked(bulkUpdateExpenses).mockResolvedValue({ ok: true, updated: 1 })
+    vi.mocked(withLedgerParam).mockImplementation((path: string) => path)
   })
 
   it('loads, filters, edits, merges, and deletes transactions', async () => {

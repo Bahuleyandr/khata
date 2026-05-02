@@ -3,24 +3,42 @@
 import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
-import { getMe, logout, type Me } from '../../lib/api'
+import {
+  getLedgers,
+  getMe,
+  getSelectedLedgerId,
+  logout,
+  setSelectedLedgerId,
+  type Ledger,
+  type Me,
+} from '../../lib/api'
 import { ThemeToggle } from './ThemeToggle'
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
   const [me, setMe] = useState<Me | null>(null)
+  const [ledgers, setLedgers] = useState<Ledger[]>([])
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {
-    getMe()
-      .then((data) => {
-        setMe(data)
+    async function loadSession(retried = false) {
+      try {
+        const [meRes, ledgerRes] = await Promise.all([getMe(), getLedgers()])
+        setMe(meRes)
+        setLedgers(ledgerRes.ledgers)
         setChecking(false)
-      })
-      .catch(() => {
+      } catch (e) {
+        const status = (e as { status?: number }).status
+        if (!retried && status === 403 && getSelectedLedgerId() !== null) {
+          setSelectedLedgerId(null)
+          await loadSession(true)
+          return
+        }
         router.replace('/login')
-      })
+      }
+    }
+    void loadSession()
   }, [router])
 
   async function handleLogout() {
@@ -29,6 +47,12 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
     } finally {
       router.replace('/login')
     }
+  }
+
+  function handleLedgerChange(value: string) {
+    const ledgerId = Number(value)
+    setSelectedLedgerId(Number.isSafeInteger(ledgerId) ? ledgerId : null)
+    window.location.reload()
   }
 
   if (checking) {
@@ -48,6 +72,19 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <Link href="/transactions" className={pathname === '/transactions' ? 'active' : ''}>Transactions</Link>
         <Link href="/receipts" className={pathname === '/receipts' ? 'active' : ''}>Receipts</Link>
         <Link href="/manage" className={pathname === '/manage' ? 'active' : ''}>Manage</Link>
+        <select
+          className="ledger-switcher"
+          aria-label="Ledger"
+          value={me?.selected_ledger_id ?? ''}
+          onChange={(e) => handleLedgerChange(e.target.value)}
+        >
+          {ledgers.map((ledger) => (
+            <option key={ledger.id} value={ledger.id}>
+              {ledger.kind === 'household' ? 'Household' : 'My Ledger'}
+              {ledger.name && ledger.name !== 'Personal' && ledger.name !== 'Household' ? ` · ${ledger.name}` : ''}
+            </option>
+          ))}
+        </select>
         <span className="nav-greeting">Hi, {me?.first_name}</span>
         <ThemeToggle />
         <button

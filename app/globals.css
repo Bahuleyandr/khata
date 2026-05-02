@@ -54,6 +54,17 @@ a { color: inherit; text-decoration: none; }
   font-size: 0.85rem;
   white-space: nowrap;
 }
+.ledger-switcher {
+  background: #f8fafc;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  color: #374151;
+  font: inherit;
+  font-size: 0.8rem;
+  min-height: 32px;
+  max-width: 150px;
+  padding: 0.3rem 0.45rem;
+}
 .theme-toggle {
   align-items: center;
   background: #f3f4f6;
@@ -977,6 +988,9 @@ tr:hover td { background: #f9fafb; }
 .access-form input:first-child {
   max-width: 170px;
 }
+.access-note {
+  margin: -0.25rem 0 0.75rem;
+}
 .access-row strong {
   align-items: center;
   display: flex;
@@ -990,6 +1004,17 @@ tr:hover td { background: #f9fafb; }
   background: #fff;
   min-height: 32px;
   min-width: 96px;
+}
+.access-toggle {
+  align-items: center;
+  color: #4b5563;
+  display: inline-flex;
+  font-size: 0.8rem;
+  gap: 0.25rem;
+  min-height: 32px;
+}
+.access-toggle input {
+  accent-color: #0f766e;
 }
 .subscription-row strong {
   align-items: center;
@@ -1333,6 +1358,10 @@ tr:hover td { background: #f9fafb; }
     max-width: 100%;
     overflow-x: auto;
   }
+  .ledger-switcher {
+    flex: 1 1 160px;
+    max-width: none;
+  }
   .page-heading { align-items: stretch; flex-direction: column; }
   .filter-bar { align-items: stretch; }
   .filter-bar > div,
@@ -1404,6 +1433,7 @@ tr:hover td { background: #f9fafb; }
   .access-form select,
   .access-form button,
   .access-row select,
+  .access-toggle,
   .statement-upload-panel,
   .statement-upload-panel button,
   .bulk-bar input,
@@ -1606,6 +1636,10 @@ html[data-theme="dark"] .muted-copy {
   color: var(--text-muted);
 }
 
+html[data-theme="dark"] .access-toggle {
+  color: var(--text-muted);
+}
+
 html[data-theme="dark"] .nav a:hover,
 html[data-theme="dark"] .nav a.active {
   background: var(--surface-muted);
@@ -1619,6 +1653,12 @@ html[data-theme="dark"] .nav-greeting {
 html[data-theme="dark"] .theme-toggle {
   background: var(--surface-subtle);
   border-color: var(--border);
+}
+
+html[data-theme="dark"] .ledger-switcher {
+  background: var(--surface-subtle);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 html[data-theme="dark"] .theme-toggle button {

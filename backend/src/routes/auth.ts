@@ -3,9 +3,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { verifyWebAppInitData } from "../auth/telegram-webapp.js";
 import {
+  listLedgersForTelegramUser,
+  resolveLedgerForTelegramUser,
   resolveAccessForTelegramUser,
   resolveSessionAccessForTelegramUser,
   type AccessRole,
+  type LedgerKind,
 } from "../db/access.js";
 
 // ─── Session helpers ─────────────────────────────────────────────────────────
@@ -24,11 +27,18 @@ export interface VerifiedSession {
 export interface AuthenticatedSession {
   userId: number;
   ledgerUserId: number;
+  personalLedgerId: number;
   telegramUserId: number;
   actorUserId: number;
   firstName: string;
   role: AccessRole;
   isOwner: boolean;
+  selectedLedgerId: number;
+  selectedLedgerName: string;
+  selectedLedgerKind: LedgerKind;
+  canView: boolean;
+  canAdd: boolean;
+  canManage: boolean;
 }
 
 const SESSION_MAX_AGE_S = 604800;
@@ -45,6 +55,27 @@ function isConfigAllowedUser(userId: number): boolean {
 
 function isProd(): boolean {
   return process.env.NODE_ENV === "production";
+}
+
+function isWriteMethod(method: string): boolean {
+  return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+}
+
+function parseLedgerIdValue(value: unknown): number | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const raw = String(value).trim();
+  if (!/^-?\d+$/.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) && parsed !== 0 ? parsed : null;
+}
+
+function requestedLedgerId(request: FastifyRequest): number | null {
+  const headerValue = request.headers["x-khata-ledger-id"];
+  const header = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const fromHeader = parseLedgerIdValue(header);
+  if (fromHeader !== null) return fromHeader;
+  const query = request.query as { ledger_id?: unknown } | undefined;
+  return parseLedgerIdValue(query?.ledger_id);
 }
 
 function setSessionCookie(reply: FastifyReply, userId: number, firstName: string): void {
@@ -121,14 +152,30 @@ export async function getSession(
     reply.status(403).send({ error: "Access not approved yet" });
     return null;
   }
+  const ledgerAccess = await resolveLedgerForTelegramUser({
+    telegramUserId: session.userId,
+    requestedLedgerId: requestedLedgerId(request),
+    requireWrite: isWriteMethod(request.method),
+  });
+  if (!ledgerAccess) {
+    reply.status(403).send({ error: "Ledger access denied" });
+    return null;
+  }
   return {
-    userId: access.ledgerUserId,
-    ledgerUserId: access.ledgerUserId,
+    userId: ledgerAccess.ledgerId,
+    ledgerUserId: ledgerAccess.ledgerId,
+    personalLedgerId: access.ledgerUserId,
     telegramUserId: session.userId,
     actorUserId: session.userId,
     firstName: session.firstName,
-    role: access.role,
-    isOwner: access.role === "owner",
+    role: ledgerAccess.role,
+    isOwner: ledgerAccess.canManage,
+    selectedLedgerId: ledgerAccess.ledgerId,
+    selectedLedgerName: ledgerAccess.ledgerName,
+    selectedLedgerKind: ledgerAccess.ledgerKind,
+    canView: ledgerAccess.canView,
+    canAdd: ledgerAccess.canAdd,
+    canManage: ledgerAccess.canManage,
   };
 }
 
@@ -142,14 +189,26 @@ async function authenticateTelegramUser(
     username,
   });
   if (!access || access.status !== "active" || access.ledgerUserId === null) return null;
+  const ledgerAccess = await resolveLedgerForTelegramUser({
+    telegramUserId: userId,
+    requestedLedgerId: access.ledgerUserId,
+  });
+  if (!ledgerAccess) return null;
   return {
-    userId: access.ledgerUserId,
-    ledgerUserId: access.ledgerUserId,
+    userId: ledgerAccess.ledgerId,
+    ledgerUserId: ledgerAccess.ledgerId,
+    personalLedgerId: access.ledgerUserId,
     telegramUserId: userId,
     actorUserId: userId,
     firstName,
-    role: access.role,
-    isOwner: access.role === "owner",
+    role: ledgerAccess.role,
+    isOwner: ledgerAccess.canManage,
+    selectedLedgerId: ledgerAccess.ledgerId,
+    selectedLedgerName: ledgerAccess.ledgerName,
+    selectedLedgerKind: ledgerAccess.ledgerKind,
+    canView: ledgerAccess.canView,
+    canAdd: ledgerAccess.canAdd,
+    canManage: ledgerAccess.canManage,
   };
 }
 
@@ -241,6 +300,32 @@ export async function authRoutes(app: FastifyInstance) {
       first_name: session.firstName,
       role: session.role,
       is_owner: session.isOwner,
+      personal_ledger_id: session.personalLedgerId,
+      selected_ledger_id: session.selectedLedgerId,
+      selected_ledger_name: session.selectedLedgerName,
+      selected_ledger_kind: session.selectedLedgerKind,
+      can_view: session.canView,
+      can_add: session.canAdd,
+      can_manage: session.canManage,
+    };
+  });
+
+  app.get("/api/ledgers", async (request, reply) => {
+    const session = await getSession(request, reply);
+    if (!session) return;
+    const ledgers = await listLedgersForTelegramUser(session.telegramUserId);
+    return {
+      selected_ledger_id: session.selectedLedgerId,
+      ledgers: ledgers.map((ledger) => ({
+        id: ledger.ledgerId,
+        name: ledger.ledgerName,
+        kind: ledger.ledgerKind,
+        owner_telegram_user_id: ledger.ownerTelegramUserId,
+        role: ledger.role,
+        can_view: ledger.canView,
+        can_add: ledger.canAdd,
+        can_manage: ledger.canManage,
+      })),
     };
   });
 

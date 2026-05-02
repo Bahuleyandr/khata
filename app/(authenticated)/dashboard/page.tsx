@@ -9,6 +9,7 @@ import {
   formatCents,
   formatDate,
   setSubscriptionPreference,
+  withLedgerParam,
   type ExpenseSummary,
   type Insight,
   type SubscriptionCandidate,
@@ -82,7 +83,7 @@ export default function DashboardPage() {
           />
           {summary ? (
             <a
-              href={`/api/export/xlsx?year=${summary.period.year}&month=${summary.period.month}`}
+              href={withLedgerParam(`/api/export/xlsx?year=${summary.period.year}&month=${summary.period.month}`)}
               download
               className="button-primary"
             >

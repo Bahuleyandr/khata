@@ -195,7 +195,7 @@ export default function ManagePage() {
     const meRes = await mePromise
     const [cats, budgetRes, tagRes, statementRes, subscriptionRes, auditRes, accessRes] = await Promise.all([
       ...dataPromises,
-      meRes.is_owner ? getAccessUsers() : Promise.resolve({ users: [] }),
+      meRes.can_manage ? getAccessUsers() : Promise.resolve({ users: [] }),
     ])
     setMe(meRes)
     setAccessUsers(accessRes.users)
@@ -335,6 +335,8 @@ export default function ManagePage() {
       first_name: newAccessName.trim() || undefined,
       username: newAccessUsername.trim().replace(/^@/, '') || undefined,
       role: newAccessRole,
+      can_view: true,
+      can_add: true,
     })
     setNewAccessTelegramId('')
     setNewAccessName('')
@@ -342,8 +344,11 @@ export default function ManagePage() {
     setNewAccessRole('member')
   }
 
-  async function changeAccessRole(user: AccessUser, role: AccessRole) {
-    await updateAccessUserRole(user.telegram_user_id, role)
+  async function changeAccessUser(
+    user: AccessUser,
+    data: { role?: AccessRole; can_view?: boolean; can_add?: boolean },
+  ) {
+    await updateAccessUserRole(user.telegram_user_id, data)
   }
 
   async function revokeAccess(user: AccessUser) {
@@ -394,23 +399,26 @@ export default function ManagePage() {
 
       <div className="grid-2">
         <section className="card workspace-card wide-card">
-          <h3>Household Access</h3>
+          <h3>Ledger Access</h3>
           <div className="access-summary-grid">
             <span>
               <strong>{me?.telegram_user_id ?? '...'}</strong>
               <small>Your Telegram ID</small>
             </span>
             <span>
-              <strong>{me?.ledger_user_id ?? '...'}</strong>
-              <small>Shared ledger</small>
+              <strong>{me?.selected_ledger_name ?? '...'}</strong>
+              <small>{me?.selected_ledger_kind === 'household' ? 'Shared ledger' : 'Personal ledger'}</small>
             </span>
             <span>
               <strong>{me?.role ?? '...'}</strong>
               <small>Your role</small>
             </span>
           </div>
-          {me?.is_owner ? (
+          {me?.can_manage ? (
             <>
+              <p className="muted-copy access-note">
+                Access changes apply only to the selected ledger in the top navigation.
+              </p>
               <div className="inline-form access-form">
                 <input
                   inputMode="numeric"
@@ -450,20 +458,22 @@ export default function ManagePage() {
                     user={user}
                     me={me}
                     busy={busy}
-                    onRole={(role) => run(() => changeAccessRole(user, role))}
+                    onChange={(data) => run(() => changeAccessUser(user, data))}
                     onRevoke={() => run(() => revokeAccess(user))}
                     onReactivate={() => run(() => grantAccessUser({
                       telegram_user_id: user.telegram_user_id,
                       first_name: user.first_name,
                       username: user.username,
                       role: user.role,
+                      can_view: true,
+                      can_add: user.can_add,
                     }).then(() => undefined))}
                   />
                 ))}
               </div>
             </>
           ) : (
-            <p className="muted-copy">Only owners can add or remove Telegram accounts.</p>
+            <p className="muted-copy">Only ledger owners can add, remove, or change visibility.</p>
           )}
         </section>
 
@@ -928,18 +938,18 @@ function AccessUserRow({
   user,
   me,
   busy,
-  onRole,
+  onChange,
   onRevoke,
   onReactivate,
 }: {
   user: AccessUser
   me: Me
   busy: boolean
-  onRole: (role: AccessRole) => Promise<void>
+  onChange: (data: { role?: AccessRole; can_view?: boolean; can_add?: boolean }) => Promise<void>
   onRevoke: () => Promise<void>
   onReactivate: () => Promise<void>
 }) {
-  const isSelf = me.telegram_user_id === user.telegram_user_id
+  const isProtectedOwner = user.telegram_user_id === user.ledger_id || me.telegram_user_id === user.telegram_user_id
   const name = user.first_name || user.username || `Telegram ${user.telegram_user_id}`
   const username = user.username ? `@${user.username.replace(/^@/, '')}` : null
 
@@ -949,30 +959,50 @@ function AccessUserRow({
         <strong>
           {name}
           <span className={`badge badge-${user.status}`}>{user.status}</span>
-          {isSelf ? <span className="badge badge-muted">you</span> : null}
+          {me.telegram_user_id === user.telegram_user_id ? <span className="badge badge-muted">you</span> : null}
+          {user.can_view ? null : <span className="badge badge-muted">hidden</span>}
         </strong>
         <span>
           {user.telegram_user_id}
           {username ? ` · ${username}` : ''}
+          {` · ${user.can_add ? 'can add' : 'view only'}`}
           {user.last_login_at ? ` · Last login ${formatDate(user.last_login_at)}` : ''}
         </span>
       </div>
       <div className="row-actions">
         <select
           value={user.role}
-          onChange={(e) => void onRole(e.target.value as AccessRole)}
-          disabled={busy || isSelf || user.status !== 'active'}
+          onChange={(e) => void onChange({ role: e.target.value as AccessRole })}
+          disabled={busy || isProtectedOwner || user.status !== 'active'}
           aria-label={`Role for ${name}`}
         >
           <option value="member">Member</option>
           <option value="owner">Owner</option>
         </select>
+        <label className="access-toggle">
+          <input
+            type="checkbox"
+            checked={user.can_view}
+            onChange={(e) => void onChange({ can_view: e.target.checked })}
+            disabled={busy || isProtectedOwner || user.status !== 'active'}
+          />
+          View
+        </label>
+        <label className="access-toggle">
+          <input
+            type="checkbox"
+            checked={user.can_add}
+            onChange={(e) => void onChange({ can_add: e.target.checked })}
+            disabled={busy || isProtectedOwner || user.status !== 'active' || !user.can_view}
+          />
+          Add
+        </label>
         {user.status === 'revoked' ? (
           <button type="button" onClick={() => void onReactivate()} disabled={busy}>
             Re-activate
           </button>
         ) : (
-          <button type="button" className="danger" onClick={() => void onRevoke()} disabled={busy || isSelf}>
+          <button type="button" className="danger" onClick={() => void onRevoke()} disabled={busy || isProtectedOwner}>
             Revoke
           </button>
         )}

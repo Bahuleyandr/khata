@@ -11,6 +11,7 @@ const exportQuerySchema = {
   properties: {
     year: { type: "integer", minimum: 2000, maximum: 2100 },
     month: { type: "integer", minimum: 1, maximum: 12 },
+    ledger_id: { anyOf: [{ type: "integer" }, { type: "string", pattern: "^-?[0-9]+$" }] },
   },
 } as const;
 
@@ -22,7 +23,7 @@ export async function exportRoutes(app: FastifyInstance) {
    * authenticated user. Year/month default to the current month if omitted.
    * Browser sees a download via Content-Disposition.
    */
-  app.get<{ Querystring: { year?: number; month?: number } }>(
+  app.get<{ Querystring: { year?: number; month?: number; ledger_id?: number | string } }>(
     "/api/export/xlsx",
     { schema: { querystring: exportQuerySchema } },
     async (request, reply) => {

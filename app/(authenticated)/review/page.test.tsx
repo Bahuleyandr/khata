@@ -4,10 +4,11 @@ import { render, screen, waitFor } from '@testing-library/react'
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ReviewPage from './page'
-import { getMonthlyReview, type MonthlyReview } from '../../../lib/api'
+import { getMonthlyReview, withLedgerParam, type MonthlyReview } from '../../../lib/api'
 
 vi.mock('../../../lib/api', () => ({
   getMonthlyReview: vi.fn(),
+  withLedgerParam: vi.fn((path: string) => path),
   formatCents: (cents: string | number, currency = 'INR') => `${currency} ${(Number(cents) / 100).toFixed(2)}`,
   formatDate: (iso: string) => iso.slice(0, 10),
 }))
@@ -100,6 +101,7 @@ describe('ReviewPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(getMonthlyReview).mockResolvedValue(review)
+    vi.mocked(withLedgerParam).mockImplementation((path: string) => path)
   })
 
   it('renders the monthly checklist and action links', async () => {

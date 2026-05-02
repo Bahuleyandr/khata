@@ -5,6 +5,7 @@ import {
   revokeAccessUser,
   updateAccessUserRole,
   type AccessRole,
+  type LedgerMember,
 } from "../db/access.js";
 import { recordAuditEvent } from "../db/audit.js";
 import { getSession } from "./auth.js";
@@ -13,15 +14,21 @@ function serializeDate(value: Date | null): string | null {
   return value ? value.toISOString() : null;
 }
 
-function serializeAccessUser(user: Awaited<ReturnType<typeof listAccessUsers>>[number]) {
+function serializeAccessUser(user: LedgerMember) {
   return {
     telegram_user_id: user.telegramUserId,
     first_name: user.firstName,
     username: user.username,
     role: user.role,
     status: user.status,
+    ledger_id: user.ledgerId,
+    ledger_name: user.ledgerName,
+    ledger_kind: user.ledgerKind,
     ledger_user_id: user.ledgerUserId,
     invited_by: user.invitedBy,
+    can_view: user.canView,
+    can_add: user.canAdd,
+    can_manage: user.canManage,
     created_at: serializeDate(user.createdAt)!,
     updated_at: serializeDate(user.updatedAt)!,
     last_login_at: serializeDate(user.lastLoginAt),
@@ -29,12 +36,16 @@ function serializeAccessUser(user: Awaited<ReturnType<typeof listAccessUsers>>[n
   };
 }
 
+function boolOrDefault(value: boolean | undefined, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export async function accessRoutes(app: FastifyInstance) {
   app.get("/api/access/users", async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
-    if (!session.isOwner) {
-      return reply.status(403).send({ error: "Only owners can manage access" });
+    if (!session.canManage) {
+      return reply.status(403).send({ error: "Only ledger owners can manage access" });
     }
 
     const users = await listAccessUsers(session.userId);
@@ -54,6 +65,8 @@ export async function accessRoutes(app: FastifyInstance) {
             first_name: { type: "string", maxLength: 128 },
             username: { type: "string", maxLength: 128 },
             role: { type: "string", enum: ["owner", "member"] },
+            can_view: { type: "boolean" },
+            can_add: { type: "boolean" },
           },
         },
       },
@@ -61,8 +74,8 @@ export async function accessRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
-      if (!session.isOwner) {
-        return reply.status(403).send({ error: "Only owners can manage access" });
+      if (!session.canManage) {
+        return reply.status(403).send({ error: "Only ledger owners can manage access" });
       }
 
       const body = request.body as {
@@ -70,6 +83,8 @@ export async function accessRoutes(app: FastifyInstance) {
         first_name?: string;
         username?: string;
         role?: AccessRole;
+        can_view?: boolean;
+        can_add?: boolean;
       };
       const telegramUserId = Number(body.telegram_user_id);
       if (!Number.isSafeInteger(telegramUserId) || telegramUserId <= 0) {
@@ -77,12 +92,14 @@ export async function accessRoutes(app: FastifyInstance) {
       }
 
       const user = await grantAccessUser({
-        ledgerUserId: session.userId,
+        ledgerId: session.userId,
         actorUserId: session.actorUserId,
         telegramUserId,
         firstName: body.first_name,
         username: body.username,
         role: body.role ?? "member",
+        canView: boolOrDefault(body.can_view, true),
+        canAdd: boolOrDefault(body.can_add, true),
       });
       await recordAuditEvent({
         userId: session.userId,
@@ -111,10 +128,12 @@ export async function accessRoutes(app: FastifyInstance) {
         },
         body: {
           type: "object",
-          required: ["role"],
           additionalProperties: false,
+          minProperties: 1,
           properties: {
             role: { type: "string", enum: ["owner", "member"] },
+            can_view: { type: "boolean" },
+            can_add: { type: "boolean" },
           },
         },
       },
@@ -122,18 +141,21 @@ export async function accessRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
-      if (!session.isOwner) {
-        return reply.status(403).send({ error: "Only owners can manage access" });
+      if (!session.canManage) {
+        return reply.status(403).send({ error: "Only ledger owners can manage access" });
       }
 
       const params = request.params as { telegramUserId: string };
-      const body = request.body as { role: AccessRole };
+      const body = request.body as { role?: AccessRole; can_view?: boolean; can_add?: boolean };
       const telegramUserId = Number(params.telegramUserId);
+      const before = (await listAccessUsers(session.userId)).find((user) => user.telegramUserId === telegramUserId) ?? null;
       const user = await updateAccessUserRole({
-        ledgerUserId: session.userId,
+        ledgerId: session.userId,
         actorUserId: session.actorUserId,
         telegramUserId,
         role: body.role,
+        canView: body.can_view,
+        canAdd: body.can_add,
       });
       if (!user) return reply.status(404).send({ error: "Access user not found" });
 
@@ -142,7 +164,7 @@ export async function accessRoutes(app: FastifyInstance) {
         actorUserId: session.actorUserId,
         action: "access.update",
         entityType: "access_user",
-        before: null,
+        before: before ? serializeAccessUser(before) : null,
         after: serializeAccessUser(user),
       });
 
@@ -166,14 +188,15 @@ export async function accessRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
-      if (!session.isOwner) {
-        return reply.status(403).send({ error: "Only owners can manage access" });
+      if (!session.canManage) {
+        return reply.status(403).send({ error: "Only ledger owners can manage access" });
       }
 
       const params = request.params as { telegramUserId: string };
       const telegramUserId = Number(params.telegramUserId);
+      const before = (await listAccessUsers(session.userId)).find((user) => user.telegramUserId === telegramUserId) ?? null;
       const user = await revokeAccessUser({
-        ledgerUserId: session.userId,
+        ledgerId: session.userId,
         actorUserId: session.actorUserId,
         telegramUserId,
       });
@@ -184,7 +207,7 @@ export async function accessRoutes(app: FastifyInstance) {
         actorUserId: session.actorUserId,
         action: "access.revoke",
         entityType: "access_user",
-        before: null,
+        before: before ? serializeAccessUser(before) : null,
         after: serializeAccessUser(user),
       });
 

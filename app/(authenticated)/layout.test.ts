@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import React from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AuthLayout from './layout'
-import { getMe, logout } from '../../lib/api'
+import { getLedgers, getMe, logout } from '../../lib/api'
 
 const replace = vi.fn()
 
@@ -15,8 +15,11 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace }),
 }))
 vi.mock('../../lib/api', () => ({
+  getLedgers: vi.fn(),
   getMe: vi.fn(),
+  getSelectedLedgerId: vi.fn(() => null),
   logout: vi.fn(),
+  setSelectedLedgerId: vi.fn(),
 }))
 
 describe('AuthLayout', () => {
@@ -29,9 +32,29 @@ describe('AuthLayout', () => {
     vi.mocked(getMe).mockResolvedValue({
       telegram_user_id: 42,
       ledger_user_id: 42,
+      personal_ledger_id: 42,
       first_name: 'Ada',
       role: 'owner',
       is_owner: true,
+      selected_ledger_id: 42,
+      selected_ledger_name: 'Personal',
+      selected_ledger_kind: 'personal',
+      can_view: true,
+      can_add: true,
+      can_manage: true,
+    })
+    vi.mocked(getLedgers).mockResolvedValue({
+      selected_ledger_id: 42,
+      ledgers: [{
+        id: 42,
+        name: 'Personal',
+        kind: 'personal',
+        owner_telegram_user_id: 42,
+        role: 'owner',
+        can_view: true,
+        can_add: true,
+        can_manage: true,
+      }],
     })
     vi.mocked(logout).mockResolvedValue()
 

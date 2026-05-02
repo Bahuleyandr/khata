@@ -1,7 +1,11 @@
 import { Bot } from "grammy";
 import { config } from "../config.js";
 import { isAllowedUser } from "../middleware/auth.js";
-import { resolveAccessForTelegramUser } from "../db/access.js";
+import {
+  listLedgersForTelegramUser,
+  resolveAccessForTelegramUser,
+  resolveLedgerForTelegramUser,
+} from "../db/access.js";
 import {
   handleStart,
   handleHelp,
@@ -40,10 +44,29 @@ bot.use(async (ctx, next) => {
       await ctx.reply("Unauthorized. Ask the Khata owner to add your Telegram ID.");
       return;
     }
-    // Existing bot handlers scope all money data to ctx.from.id.  For household
-    // members, point that id at the shared ledger while replies still go to the
-    // original chat.
-    from.id = access.ledgerUserId;
+  }
+
+  const text = ctx.message && "text" in ctx.message ? ctx.message.text : undefined;
+  const sharedMatch = text?.match(/^\s*(?:shared|household)\s+(.+)/i);
+  if (sharedMatch) {
+    const householdLedger = (await listLedgersForTelegramUser(userId)).find(
+      (ledger) => ledger.ledgerKind === "household" && ledger.canAdd,
+    );
+    if (!householdLedger) {
+      await ctx.reply("You do not have write access to a household ledger yet.");
+      return;
+    }
+    const householdAccess = await resolveLedgerForTelegramUser({
+      telegramUserId: userId,
+      requestedLedgerId: householdLedger.ledgerId,
+      requireWrite: true,
+    });
+    if (!householdAccess) {
+      await ctx.reply("You do not have write access to a household ledger yet.");
+      return;
+    }
+    from.id = householdAccess.ledgerId;
+    ctx.message!.text = sharedMatch[1]!.trim();
   }
   await next();
 });

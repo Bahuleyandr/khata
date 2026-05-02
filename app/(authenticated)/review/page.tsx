@@ -6,6 +6,7 @@ import {
   formatCents,
   formatDate,
   getMonthlyReview,
+  withLedgerParam,
   type MonthlyReview,
   type MonthlyReviewTask,
 } from '../../../lib/api'
@@ -81,7 +82,7 @@ export default function ReviewPage() {
             onChange={(e) => setMonthValue(e.target.value)}
           />
           {review ? (
-            <a href={review.tasks.find((task) => task.id === 'export')?.href} download className="button-primary">
+            <a href={withLedgerParam(review.tasks.find((task) => task.id === 'export')?.href ?? '/api/export/xlsx')} download className="button-primary">
               Export
             </a>
           ) : null}

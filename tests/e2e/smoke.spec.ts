@@ -21,9 +21,45 @@ async function mockApi(page: Page) {
       json: {
         telegram_user_id: 42,
         ledger_user_id: 42,
+        personal_ledger_id: 42,
         first_name: 'Ada',
         role: 'owner',
         is_owner: true,
+        selected_ledger_id: 42,
+        selected_ledger_name: 'Personal',
+        selected_ledger_kind: 'personal',
+        can_view: true,
+        can_add: true,
+        can_manage: true,
+      },
+    }),
+  )
+  await page.route('**/api/ledgers', (route) =>
+    route.fulfill({
+      json: {
+        selected_ledger_id: 42,
+        ledgers: [
+          {
+            id: 42,
+            name: 'Personal',
+            kind: 'personal',
+            owner_telegram_user_id: 42,
+            role: 'owner',
+            can_view: true,
+            can_add: true,
+            can_manage: true,
+          },
+          {
+            id: -42,
+            name: 'Household',
+            kind: 'household',
+            owner_telegram_user_id: 42,
+            role: 'owner',
+            can_view: true,
+            can_add: true,
+            can_manage: true,
+          },
+        ],
       },
     }),
   )
@@ -34,8 +70,14 @@ async function mockApi(page: Page) {
       username: 'grace',
       role: 'member',
       status: 'active',
+      ledger_id: 42,
+      ledger_name: 'Personal',
+      ledger_kind: 'personal',
       ledger_user_id: 42,
       invited_by: 42,
+      can_view: true,
+      can_add: true,
+      can_manage: false,
       created_at: '2026-04-28T10:00:00.000Z',
       updated_at: '2026-04-28T10:00:00.000Z',
       last_login_at: null,
@@ -50,8 +92,14 @@ async function mockApi(page: Page) {
             username: 'ada',
             role: 'owner',
             status: 'active',
+            ledger_id: 42,
+            ledger_name: 'Personal',
+            ledger_kind: 'personal',
             ledger_user_id: 42,
             invited_by: null,
+            can_view: true,
+            can_add: true,
+            can_manage: true,
             created_at: '2026-04-28T10:00:00.000Z',
             updated_at: '2026-04-28T10:00:00.000Z',
             last_login_at: '2026-04-28T10:00:00.000Z',
@@ -383,7 +431,7 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await page.goto('/manage')
   await expect(page.getByRole('heading', { name: 'Manage' })).toBeVisible()
   await expect(page.getByText('Categories')).toBeVisible()
-  await expect(page.getByText('Household Access')).toBeVisible()
+  await expect(page.getByText('Ledger Access')).toBeVisible()
   await expect(page.getByLabel('Telegram user ID')).toBeVisible()
   await expect(page.getByText(/99 · @grace/)).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()

@@ -1,10 +1,38 @@
 // Empty = same-origin (production: nginx proxies /api/* to the backend).
 // For local dev, set NEXT_PUBLIC_API_URL=http://localhost:3001 in .env.local.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ''
+const LEDGER_STORAGE_KEY = 'khata.selectedLedgerId'
+
+export function getSelectedLedgerId(): number | null {
+  if (typeof window === 'undefined') return null
+  const raw = window.localStorage.getItem(LEDGER_STORAGE_KEY)
+  if (!raw || !/^-?\d+$/.test(raw)) return null
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) && parsed !== 0 ? parsed : null
+}
+
+export function setSelectedLedgerId(ledgerId: number | null): void {
+  if (typeof window === 'undefined') return
+  if (ledgerId === null) window.localStorage.removeItem(LEDGER_STORAGE_KEY)
+  else window.localStorage.setItem(LEDGER_STORAGE_KEY, String(ledgerId))
+}
+
+export function withLedgerParam(path: string): string {
+  const ledgerId = getSelectedLedgerId()
+  if (!ledgerId || /(?:\?|&)ledger_id=/.test(path)) return path
+  const joiner = path.includes('?') ? '&' : '?'
+  return `${path}${joiner}ledger_id=${encodeURIComponent(String(ledgerId))}`
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers)
+  const selectedLedgerId = getSelectedLedgerId()
+  if (selectedLedgerId !== null && !headers.has('X-Khata-Ledger-Id')) {
+    headers.set('X-Khata-Ledger-Id', String(selectedLedgerId))
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
+    headers,
     credentials: 'include',
   })
   if (!res.ok) {
@@ -27,13 +55,32 @@ export function apiAssetUrl(path: string): string {
 export interface Me {
   telegram_user_id: number
   ledger_user_id: number
+  personal_ledger_id: number
   first_name: string
   role: AccessRole
   is_owner: boolean
+  selected_ledger_id: number
+  selected_ledger_name: string
+  selected_ledger_kind: LedgerKind
+  can_view: boolean
+  can_add: boolean
+  can_manage: boolean
 }
 
 export type AccessRole = 'owner' | 'member'
 export type AccessStatus = 'active' | 'pending' | 'revoked'
+export type LedgerKind = 'personal' | 'household'
+
+export interface Ledger {
+  id: number
+  name: string
+  kind: LedgerKind
+  owner_telegram_user_id: number
+  role: AccessRole
+  can_view: boolean
+  can_add: boolean
+  can_manage: boolean
+}
 
 export interface AccessUser {
   telegram_user_id: number
@@ -41,8 +88,14 @@ export interface AccessUser {
   username: string | null
   role: AccessRole
   status: AccessStatus
+  ledger_id: number
+  ledger_name: string
+  ledger_kind: LedgerKind
   ledger_user_id: number | null
   invited_by: number | null
+  can_view: boolean
+  can_add: boolean
+  can_manage: boolean
   created_at: string
   updated_at: string
   last_login_at: string | null
@@ -313,6 +366,10 @@ export function getMe(): Promise<Me> {
   return apiFetch<Me>('/api/me')
 }
 
+export function getLedgers(): Promise<{ selected_ledger_id: number; ledgers: Ledger[] }> {
+  return apiFetch<{ selected_ledger_id: number; ledgers: Ledger[] }>('/api/ledgers')
+}
+
 export function getAccessUsers(): Promise<{ users: AccessUser[] }> {
   return apiFetch<{ users: AccessUser[] }>('/api/access/users')
 }
@@ -322,6 +379,8 @@ export function grantAccessUser(data: {
   first_name?: string | null
   username?: string | null
   role?: AccessRole
+  can_view?: boolean
+  can_add?: boolean
 }): Promise<AccessUser> {
   return apiFetch<AccessUser>('/api/access/users', {
     method: 'POST',
@@ -330,11 +389,14 @@ export function grantAccessUser(data: {
   })
 }
 
-export function updateAccessUserRole(telegramUserId: number, role: AccessRole): Promise<AccessUser> {
+export function updateAccessUserRole(
+  telegramUserId: number,
+  data: { role?: AccessRole; can_view?: boolean; can_add?: boolean },
+): Promise<AccessUser> {
   return apiFetch<AccessUser>(`/api/access/users/${telegramUserId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role }),
+    body: JSON.stringify(data),
   })
 }
 

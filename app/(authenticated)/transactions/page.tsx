@@ -16,6 +16,7 @@ import {
   mergeExpense,
   removeExpenseTag,
   updateExpense,
+  withLedgerParam,
   type Category,
   type Expense,
   type Tag,
@@ -419,7 +420,7 @@ export default function TransactionsPage() {
           <a
             href={(() => {
               const now = new Date()
-              return `/api/export/xlsx?year=${now.getFullYear()}&month=${now.getMonth() + 1}`
+              return withLedgerParam(`/api/export/xlsx?year=${now.getFullYear()}&month=${now.getMonth() + 1}`)
             })()}
             download
             className="button-primary"
