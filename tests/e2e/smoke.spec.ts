@@ -303,6 +303,15 @@ test('login and dashboard shell render', async ({ page }) => {
   await expect(page.getByText('Capture Mix')).toBeVisible()
   await expect(page.getByText('Budget Pace')).toBeVisible()
   await expect(page.getByText('Subscription Watch')).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Theme' })).toBeVisible()
+  await page.getByRole('button', { name: 'Dark' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'dark')
+  await page.reload()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(page.getByRole('button', { name: 'Dark' })).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Light' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 })
 
 test('monthly review checklist renders action links', async ({ page }) => {

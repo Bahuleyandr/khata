@@ -26,6 +26,21 @@ import {
 } from './chartData'
 
 const CATEGORY_COLORS = ['#0f766e', '#2563eb', '#d97706', '#7c3aed', '#be123c', '#4b5563', '#0891b2', '#65a30d']
+const CHART_GRID = 'var(--chart-grid)'
+const CHART_TEXT = 'var(--text-muted)'
+const CHART_ACCENT = 'var(--accent)'
+const CHART_PRIMARY = 'var(--primary)'
+const CHART_MUTED = 'var(--chart-muted)'
+const CHART_DANGER = '#be123c'
+const CHART_WARNING = '#d97706'
+const TICK_STYLE = { fill: CHART_TEXT, fontSize: 11 }
+const TOOLTIP_STYLE = {
+  background: 'var(--surface)',
+  border: '1px solid var(--border)',
+  borderRadius: 8,
+  color: 'var(--text)',
+}
+const TOOLTIP_LABEL_STYLE = { color: 'var(--text-strong)' }
 
 function formatRupees(value: unknown): string {
   const number = typeof value === 'number' ? value : Number(value)
@@ -127,19 +142,21 @@ function DailyTrendCard({
           <AreaChart data={data} margin={{ top: 12, right: 12, left: 0, bottom: 0 }} onClick={onOpen}>
             <defs>
               <linearGradient id="dailySpend" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#0f766e" stopOpacity={0.32} />
-                <stop offset="100%" stopColor="#0f766e" stopOpacity={0.02} />
+                <stop offset="0%" stopColor={CHART_ACCENT} stopOpacity={0.32} />
+                <stop offset="100%" stopColor={CHART_ACCENT} stopOpacity={0.02} />
               </linearGradient>
             </defs>
-            <CartesianGrid stroke="#e5e7eb" vertical={false} />
-            <XAxis dataKey="day" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-            <YAxis tickFormatter={axisRupees} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={42} />
+            <CartesianGrid stroke={CHART_GRID} vertical={false} />
+            <XAxis dataKey="day" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+            <YAxis tickFormatter={axisRupees} tick={TICK_STYLE} tickLine={false} axisLine={false} width={42} />
             <Tooltip
+              contentStyle={TOOLTIP_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
               formatter={(value, name) => [formatRupees(value), name === 'cumulative' ? 'Cumulative' : 'Spend']}
               labelFormatter={(label) => `Day ${label}`}
             />
-            <Area type="monotone" dataKey="value" stroke="#0f766e" fill="url(#dailySpend)" strokeWidth={2} name="Spend" />
-            <Line type="monotone" dataKey="cumulative" stroke="#2563eb" strokeWidth={2} dot={false} name="Cumulative" />
+            <Area type="monotone" dataKey="value" stroke={CHART_ACCENT} fill="url(#dailySpend)" strokeWidth={2} name="Spend" />
+            <Line type="monotone" dataKey="cumulative" stroke={CHART_PRIMARY} strokeWidth={2} dot={false} name="Cumulative" />
           </AreaChart>
         </ResponsiveContainer>
       )}
@@ -168,17 +185,17 @@ function CategoryChartCard({
         <>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
-              <CartesianGrid stroke="#e5e7eb" horizontal={false} />
-              <XAxis type="number" tickFormatter={axisRupees} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+              <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+              <XAxis type="number" tickFormatter={axisRupees} tick={TICK_STYLE} tickLine={false} axisLine={false} />
               <YAxis
                 type="category"
                 dataKey="name"
                 width={92}
-                tick={{ fontSize: 11 }}
+                tick={TICK_STYLE}
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip formatter={(value) => [formatRupees(value), 'Spend']} />
+              <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} formatter={(value) => [formatRupees(value), 'Spend']} />
               <Bar dataKey="value" radius={[0, 5, 5, 0]} onClick={onOpen}>
                 {data.map((point, index) => (
                   <Cell key={point.name} fill={CATEGORY_COLORS[index % CATEGORY_COLORS.length]} cursor="pointer" />
@@ -214,18 +231,18 @@ function MerchantChartCard({
         <>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
-              <CartesianGrid stroke="#e5e7eb" horizontal={false} />
-              <XAxis type="number" tickFormatter={axisRupees} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+              <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+              <XAxis type="number" tickFormatter={axisRupees} tick={TICK_STYLE} tickLine={false} axisLine={false} />
               <YAxis
                 type="category"
                 dataKey="name"
                 width={92}
-                tick={{ fontSize: 11 }}
+                tick={TICK_STYLE}
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip formatter={(value) => [formatRupees(value), 'Spend']} />
-              <Bar dataKey="value" fill="#2563eb" radius={[0, 5, 5, 0]} onClick={onOpen} cursor="pointer" />
+              <Tooltip contentStyle={TOOLTIP_STYLE} labelStyle={TOOLTIP_LABEL_STYLE} formatter={(value) => [formatRupees(value), 'Spend']} />
+              <Bar dataKey="value" fill={CHART_PRIMARY} radius={[0, 5, 5, 0]} onClick={onOpen} cursor="pointer" />
             </BarChart>
           </ResponsiveContainer>
           <ChartLinks points={data} />
@@ -258,28 +275,32 @@ function BudgetChartCard({
         <>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data} layout="vertical" margin={{ top: 8, right: 12, left: 8, bottom: 0 }}>
-              <CartesianGrid stroke="#e5e7eb" horizontal={false} />
-              <XAxis type="number" tickFormatter={axisRupees} tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+              <CartesianGrid stroke={CHART_GRID} horizontal={false} />
+              <XAxis type="number" tickFormatter={axisRupees} tick={TICK_STYLE} tickLine={false} axisLine={false} />
               <YAxis
                 type="category"
                 dataKey="name"
                 width={92}
-                tick={{ fontSize: 11 }}
+                tick={TICK_STYLE}
                 tickLine={false}
                 axisLine={false}
               />
-              <Tooltip formatter={(value, name) => [formatRupees(value), name === 'remaining' ? 'Remaining' : 'Spent']} />
+              <Tooltip
+                contentStyle={TOOLTIP_STYLE}
+                labelStyle={TOOLTIP_LABEL_STYLE}
+                formatter={(value, name) => [formatRupees(value), name === 'remaining' ? 'Remaining' : 'Spent']}
+              />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="spent" stackId="budget" name="Spent" radius={[0, 0, 0, 0]} onClick={onOpen}>
                 {data.map((budget) => (
                   <Cell
                     key={budget.name}
-                    fill={budget.status === 'over' ? '#be123c' : budget.status === 'tight' ? '#d97706' : '#0f766e'}
+                    fill={budget.status === 'over' ? CHART_DANGER : budget.status === 'tight' ? CHART_WARNING : CHART_ACCENT}
                     cursor="pointer"
                   />
                 ))}
               </Bar>
-              <Bar dataKey="remaining" stackId="budget" name="Remaining" fill="#e5e7eb" radius={[0, 5, 5, 0]} onClick={onOpen} cursor="pointer" />
+              <Bar dataKey="remaining" stackId="budget" name="Remaining" fill={CHART_GRID} radius={[0, 5, 5, 0]} onClick={onOpen} cursor="pointer" />
             </BarChart>
           </ResponsiveContainer>
           <div className="budget-chip-row">
@@ -317,14 +338,18 @@ function CaptureChartCard({
         <>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="#e5e7eb" vertical={false} />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
-              <Tooltip formatter={(value, name) => [value, name === 'needsReview' ? 'Needs review' : name === 'reviewed' ? 'Reviewed' : 'Ignored']} />
+              <CartesianGrid stroke={CHART_GRID} vertical={false} />
+              <XAxis dataKey="name" tick={TICK_STYLE} tickLine={false} axisLine={false} />
+              <YAxis tick={TICK_STYLE} tickLine={false} axisLine={false} width={30} allowDecimals={false} />
+              <Tooltip
+                contentStyle={TOOLTIP_STYLE}
+                labelStyle={TOOLTIP_LABEL_STYLE}
+                formatter={(value, name) => [value, name === 'needsReview' ? 'Needs review' : name === 'reviewed' ? 'Reviewed' : 'Ignored']}
+              />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="reviewed" stackId="capture" name="Reviewed" fill="#0f766e" radius={[0, 0, 0, 0]} onClick={onOpen} cursor="pointer" />
-              <Bar dataKey="needsReview" stackId="capture" name="Needs review" fill="#d97706" radius={[5, 5, 0, 0]} onClick={onOpen} cursor="pointer" />
-              <Bar dataKey="ignored" stackId="capture" name="Ignored" fill="#94a3b8" radius={[5, 5, 0, 0]} onClick={onOpen} cursor="pointer" />
+              <Bar dataKey="reviewed" stackId="capture" name="Reviewed" fill={CHART_ACCENT} radius={[0, 0, 0, 0]} onClick={onOpen} cursor="pointer" />
+              <Bar dataKey="needsReview" stackId="capture" name="Needs review" fill={CHART_WARNING} radius={[5, 5, 0, 0]} onClick={onOpen} cursor="pointer" />
+              <Bar dataKey="ignored" stackId="capture" name="Ignored" fill={CHART_MUTED} radius={[5, 5, 0, 0]} onClick={onOpen} cursor="pointer" />
             </BarChart>
           </ResponsiveContainer>
           <div className="capture-list">

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { getMe, logout, type Me } from '../../lib/api'
+import { ThemeToggle } from './ThemeToggle'
 
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -47,7 +48,8 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <Link href="/transactions" className={pathname === '/transactions' ? 'active' : ''}>Transactions</Link>
         <Link href="/receipts" className={pathname === '/receipts' ? 'active' : ''}>Receipts</Link>
         <Link href="/manage" className={pathname === '/manage' ? 'active' : ''}>Manage</Link>
-        <span style={{ fontSize: '0.85rem', color: '#9ca3af' }}>Hi, {me?.first_name}</span>
+        <span className="nav-greeting">Hi, {me?.first_name}</span>
+        <ThemeToggle />
         <button
           type="button"
           onClick={handleLogout}

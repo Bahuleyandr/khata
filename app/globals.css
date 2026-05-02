@@ -1,9 +1,38 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+:root {
+  color-scheme: light;
+  --page-bg: #f5f6fa;
+  --surface: #fff;
+  --surface-subtle: #f9fafb;
+  --surface-muted: #f3f4f6;
+  --text: #1a1a2e;
+  --text-strong: #111827;
+  --text-muted: #6b7280;
+  --text-subtle: #9ca3af;
+  --border: #e5e7eb;
+  --border-strong: #d1d5db;
+  --primary: #7c3aed;
+  --primary-hover: #6d28d9;
+  --accent: #0f766e;
+  --accent-muted: #eef7f4;
+  --danger: #dc2626;
+  --danger-muted: #fef2f2;
+  --chart-grid: #e5e7eb;
+  --chart-muted: #94a3b8;
+  --shadow-card: 0 1px 3px rgba(0,0,0,.07);
+  --shadow-card-hover: 0 4px 12px rgba(0,0,0,.12);
+  --modal-overlay: rgba(0,0,0,0.55);
+}
+
+html {
+  background: var(--page-bg);
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: #f5f6fa;
-  color: #1a1a2e;
+  background: var(--page-bg);
+  color: var(--text);
 }
 
 a { color: inherit; text-decoration: none; }
@@ -12,14 +41,45 @@ a { color: inherit; text-decoration: none; }
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  background: #fff;
-  border-bottom: 1px solid #e5e7eb;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   padding: 0 1.5rem;
-  height: 56px;
+  min-height: 56px;
 }
 .nav .brand { font-weight: 700; font-size: 1.1rem; margin-right: auto; }
 .nav a { color: #4b5563; font-size: 0.9rem; padding: 0.4rem 0.8rem; border-radius: 6px; transition: background 0.15s; }
 .nav a:hover, .nav a.active { background: #f3f4f6; color: #111; }
+.nav-greeting {
+  color: var(--text-subtle);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.theme-toggle {
+  align-items: center;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 0.15rem;
+  padding: 0.15rem;
+}
+.theme-toggle button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #4b5563;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 650;
+  min-height: 28px;
+  padding: 0.25rem 0.55rem;
+}
+.theme-toggle button.active {
+  background: #fff;
+  color: #111827;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
 .nav-button-danger {
   border: 0;
   background: transparent;
@@ -1185,6 +1245,27 @@ tr:hover td { background: #f9fafb; }
 
 @media (max-width: 720px) {
   .page { padding: 1rem; }
+  .nav {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    padding: 0.65rem 1rem;
+  }
+  .nav .brand {
+    flex: 1 0 100%;
+    margin-right: 0;
+  }
+  .nav a,
+  .nav-button-danger {
+    min-height: 34px;
+  }
+  .nav-greeting {
+    flex: 1 0 100%;
+  }
+  .theme-toggle {
+    max-width: 100%;
+    overflow-x: auto;
+  }
   .page-heading { align-items: stretch; flex-direction: column; }
   .filter-bar { align-items: stretch; }
   .filter-bar > div,
@@ -1366,4 +1447,416 @@ tr:hover td { background: #f9fafb; }
 @media (max-width: 460px) {
   .monthly-summary-grid { grid-template-columns: 1fr; }
   .review-metrics { grid-template-columns: 1fr; }
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --page-bg: #0b1120;
+  --surface: #111827;
+  --surface-subtle: #0f172a;
+  --surface-muted: #1f2937;
+  --text: #dbe4ef;
+  --text-strong: #f8fafc;
+  --text-muted: #a3afc2;
+  --text-subtle: #7f8da3;
+  --border: #253244;
+  --border-strong: #334155;
+  --primary: #a78bfa;
+  --primary-hover: #8b5cf6;
+  --accent: #2dd4bf;
+  --accent-muted: #0f2f32;
+  --danger: #f87171;
+  --danger-muted: #3a151d;
+  --chart-grid: #253244;
+  --chart-muted: #64748b;
+  --shadow-card: 0 1px 2px rgba(0,0,0,.36), 0 14px 30px rgba(0,0,0,.18);
+  --shadow-card-hover: 0 10px 24px rgba(0,0,0,.34);
+  --modal-overlay: rgba(2,6,23,0.78);
+}
+
+html[data-theme="dark"] body {
+  background: var(--page-bg);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .nav,
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .monthly-summary,
+html[data-theme="dark"] .receipt-card,
+html[data-theme="dark"] .modal,
+html[data-theme="dark"] .review-hero,
+html[data-theme="dark"] .review-metrics div,
+html[data-theme="dark"] .login-card {
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
+
+html[data-theme="dark"] .nav {
+  background: rgba(17, 24, 39, 0.96);
+}
+
+html[data-theme="dark"] .nav a,
+html[data-theme="dark"] .check-inline,
+html[data-theme="dark"] .filter-bar label,
+html[data-theme="dark"] .form-grid label,
+html[data-theme="dark"] .merge-select,
+html[data-theme="dark"] .transaction-subtitle,
+html[data-theme="dark"] .table-count,
+html[data-theme="dark"] .monthly-summary p,
+html[data-theme="dark"] .month-progress,
+html[data-theme="dark"] .compact-card p,
+html[data-theme="dark"] .notice-card span,
+html[data-theme="dark"] .chart-link-row span,
+html[data-theme="dark"] .budget-chip-row span,
+html[data-theme="dark"] .capture-list span,
+html[data-theme="dark"] .capture-list em,
+html[data-theme="dark"] .statement-row span,
+html[data-theme="dark"] .statement-row small,
+html[data-theme="dark"] .statement-review-toolbar span,
+html[data-theme="dark"] .subscription-summary-grid small,
+html[data-theme="dark"] .subscription-row small,
+html[data-theme="dark"] .audit-detail-modal p,
+html[data-theme="dark"] .review-progress span,
+html[data-theme="dark"] .review-task-status,
+html[data-theme="dark"] .review-task small,
+html[data-theme="dark"] .review-task em,
+html[data-theme="dark"] .review-panel p,
+html[data-theme="dark"] .variance-list span,
+html[data-theme="dark"] .review-sample-list span,
+html[data-theme="dark"] .review-sample-list small,
+html[data-theme="dark"] .login-card p {
+  color: var(--text-muted);
+}
+
+html[data-theme="dark"] .nav a:hover,
+html[data-theme="dark"] .nav a.active {
+  background: var(--surface-muted);
+  color: var(--text-strong);
+}
+
+html[data-theme="dark"] .nav-greeting {
+  color: var(--text-subtle);
+}
+
+html[data-theme="dark"] .theme-toggle {
+  background: var(--surface-subtle);
+  border-color: var(--border);
+}
+
+html[data-theme="dark"] .theme-toggle button {
+  color: var(--text-muted);
+}
+
+html[data-theme="dark"] .theme-toggle button.active {
+  background: var(--surface-muted);
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px rgba(0,0,0,.36);
+}
+
+html[data-theme="dark"] .nav-button-danger {
+  color: var(--danger);
+}
+
+html[data-theme="dark"] .nav-button-danger:hover,
+html[data-theme="dark"] .row-actions .danger:hover:not(:disabled) {
+  background: var(--danger-muted);
+}
+
+html[data-theme="dark"] .page-heading h2,
+html[data-theme="dark"] .monthly-summary h3,
+html[data-theme="dark"] .monthly-summary-grid dd,
+html[data-theme="dark"] .compact-card h3,
+html[data-theme="dark"] .chart-card-heading h3,
+html[data-theme="dark"] .capture-list strong,
+html[data-theme="dark"] .workspace-card h3,
+html[data-theme="dark"] .subscription-summary-grid strong,
+html[data-theme="dark"] .audit-detail-modal h3,
+html[data-theme="dark"] .review-hero h3,
+html[data-theme="dark"] .review-metrics strong,
+html[data-theme="dark"] .review-checklist h3,
+html[data-theme="dark"] .review-panel h3,
+html[data-theme="dark"] .review-task strong,
+html[data-theme="dark"] .variance-list strong,
+html[data-theme="dark"] .review-sample-list strong,
+html[data-theme="dark"] .receipt-review-status strong {
+  color: var(--text-strong);
+}
+
+html[data-theme="dark"] .monthly-summary .eyebrow,
+html[data-theme="dark"] .month-progress span,
+html[data-theme="dark"] .compact-card .eyebrow,
+html[data-theme="dark"] .chart-card-heading span,
+html[data-theme="dark"] .chart-card-heading a,
+html[data-theme="dark"] .text-link,
+html[data-theme="dark"] .statement-upload-panel span,
+html[data-theme="dark"] .review-hero .eyebrow,
+html[data-theme="dark"] .review-progress strong {
+  color: var(--accent);
+}
+
+html[data-theme="dark"] .month-progress div,
+html[data-theme="dark"] .review-progress div {
+  background: var(--surface-muted);
+}
+
+html[data-theme="dark"] .month-progress i,
+html[data-theme="dark"] .review-progress i {
+  background: var(--accent);
+}
+
+html[data-theme="dark"] .button-primary,
+html[data-theme="dark"] .modal-actions .button-primary {
+  background: var(--primary);
+  color: #0b1120;
+}
+
+html[data-theme="dark"] .button-primary:hover:not(:disabled),
+html[data-theme="dark"] .modal-actions .button-primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+html[data-theme="dark"] .toolbar-inline input,
+html[data-theme="dark"] .inline-form input,
+html[data-theme="dark"] .inline-form select,
+html[data-theme="dark"] .list-row input,
+html[data-theme="dark"] .statement-correction-bar input,
+html[data-theme="dark"] .statement-correction-bar select,
+html[data-theme="dark"] .statement-row-correction input,
+html[data-theme="dark"] .statement-row-correction select,
+html[data-theme="dark"] .bulk-bar input,
+html[data-theme="dark"] .bulk-bar select,
+html[data-theme="dark"] .filter-bar input,
+html[data-theme="dark"] .filter-bar select,
+html[data-theme="dark"] .form-grid input,
+html[data-theme="dark"] .form-grid select,
+html[data-theme="dark"] .form-grid textarea,
+html[data-theme="dark"] .merge-select select,
+html[data-theme="dark"] .audit-filter-bar select {
+  background: var(--surface-subtle);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+html[data-theme="dark"] th {
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+html[data-theme="dark"] td {
+  border-color: var(--border);
+}
+
+html[data-theme="dark"] tr:hover td,
+html[data-theme="dark"] .audit-row:hover,
+html[data-theme="dark"] .review-task:hover {
+  background: var(--surface-subtle);
+}
+
+html[data-theme="dark"] .row-actions button,
+html[data-theme="dark"] .modal-actions button,
+html[data-theme="dark"] .inline-form button,
+html[data-theme="dark"] .list-row button,
+html[data-theme="dark"] .statement-correction-bar button,
+html[data-theme="dark"] .bulk-bar button,
+html[data-theme="dark"] .statement-row button,
+html[data-theme="dark"] .file-button,
+html[data-theme="dark"] .pagination button,
+html[data-theme="dark"] .receipt-review-toolbar button,
+html[data-theme="dark"] .quick-category-row button,
+html[data-theme="dark"] .segmented-control button {
+  background: var(--surface-subtle);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .row-actions button:hover:not(:disabled),
+html[data-theme="dark"] .modal-actions button:hover:not(:disabled),
+html[data-theme="dark"] .pagination button:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+html[data-theme="dark"] .row-actions .danger {
+  border-color: #7f1d1d;
+  color: var(--danger);
+}
+
+html[data-theme="dark"] .bulk-bar,
+html[data-theme="dark"] .receipt-review-status,
+html[data-theme="dark"] .receipt-preview,
+html[data-theme="dark"] .merge-summary,
+html[data-theme="dark"] .monthly-summary-grid div,
+html[data-theme="dark"] .empty-chart,
+html[data-theme="dark"] .chart-link-row a,
+html[data-theme="dark"] .budget-chip-row a,
+html[data-theme="dark"] .capture-list a,
+html[data-theme="dark"] .signal-list span,
+html[data-theme="dark"] .tag-cloud span,
+html[data-theme="dark"] .statement-upload-panel,
+html[data-theme="dark"] .list-row,
+html[data-theme="dark"] .statement-row,
+html[data-theme="dark"] .statement-correction-bar,
+html[data-theme="dark"] .statement-review-panel,
+html[data-theme="dark"] .subscription-summary-grid span,
+html[data-theme="dark"] .review-task,
+html[data-theme="dark"] .variance-list div,
+html[data-theme="dark"] .review-sample-list a,
+html[data-theme="dark"] .audit-diff table,
+html[data-theme="dark"] .raw-text-panel,
+html[data-theme="dark"] .receipt-review-toolbar {
+  background: var(--surface-subtle);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .notice-card {
+  background: var(--accent-muted);
+  border-color: #155e63;
+  color: #b8fff5;
+}
+
+html[data-theme="dark"] .modal-overlay {
+  background: var(--modal-overlay);
+}
+
+html[data-theme="dark"] .modal .close-btn {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .receipt-card img {
+  background: var(--surface-muted);
+}
+
+html[data-theme="dark"] .receipt-card:hover {
+  box-shadow: var(--shadow-card-hover);
+}
+
+html[data-theme="dark"] .receipt-card .amount {
+  color: var(--primary);
+}
+
+html[data-theme="dark"] .raw-text-panel summary,
+html[data-theme="dark"] .raw-text-panel pre,
+html[data-theme="dark"] .audit-diff h4,
+html[data-theme="dark"] .audit-json-grid h4,
+html[data-theme="dark"] .merge-summary span,
+html[data-theme="dark"] .receipt-summary span,
+html[data-theme="dark"] .receipt-review-status span,
+html[data-theme="dark"] .monthly-summary-grid dt,
+html[data-theme="dark"] .review-metrics span,
+html[data-theme="dark"] .statement-review-table td::before {
+  color: var(--text-muted);
+}
+
+html[data-theme="dark"] .chart-card .recharts-cartesian-axis-tick text,
+html[data-theme="dark"] .chart-card .recharts-legend-item-text,
+html[data-theme="dark"] .chart-card .recharts-tooltip-label {
+  color: var(--text-muted);
+  fill: var(--text-muted);
+}
+
+html[data-theme="dark"] .budget-chip-row a.over {
+  background: #3a151d;
+  border-color: #881337;
+  color: #fda4af;
+}
+
+html[data-theme="dark"] .budget-chip-row a.tight {
+  background: #33250a;
+  border-color: #92400e;
+  color: #fcd34d;
+}
+
+html[data-theme="dark"] .budget-chip-row a.ok {
+  background: #0b3024;
+  border-color: #166534;
+  color: #86efac;
+}
+
+html[data-theme="dark"] .quick-category-row button.active,
+html[data-theme="dark"] .segmented-control button.active {
+  background: #082f49;
+  border-color: #0369a1;
+  color: #bae6fd;
+}
+
+html[data-theme="dark"] .review-task.attention {
+  background: #3a151d;
+  border-color: #7f1d1d;
+}
+
+html[data-theme="dark"] .review-task.ready {
+  background: #1e1b4b;
+  border-color: #3730a3;
+}
+
+html[data-theme="dark"] .review-task.attention .review-task-status {
+  color: #fca5a5;
+}
+
+html[data-theme="dark"] .review-task.ready .review-task-status {
+  color: #c4b5fd;
+}
+
+html[data-theme="dark"] .audit-json-grid pre {
+  background: #020617;
+  border: 1px solid var(--border);
+  color: #dbe4ef;
+}
+
+html[data-theme="dark"] .badge-bot,
+html[data-theme="dark"] .badge-telegram {
+  background: #172554;
+  color: #bfdbfe;
+}
+
+html[data-theme="dark"] .badge-statement,
+html[data-theme="dark"] .badge-confirmed,
+html[data-theme="dark"] .badge-imported {
+  background: #052e1d;
+  color: #bbf7d0;
+}
+
+html[data-theme="dark"] .badge-receipt,
+html[data-theme="dark"] .badge-duplicate {
+  background: #33250a;
+  color: #fde68a;
+}
+
+html[data-theme="dark"] .badge-review {
+  background: #3a151d;
+  color: #fecaca;
+}
+
+html[data-theme="dark"] .badge-muted,
+html[data-theme="dark"] .badge-ignored,
+html[data-theme="dark"] .badge-inactive {
+  background: var(--surface-muted);
+  color: var(--text-muted);
+}
+
+html[data-theme="dark"] .badge-pending {
+  background: #082f49;
+  color: #bae6fd;
+}
+
+html[data-theme="dark"] .skeleton {
+  background: linear-gradient(90deg, #111827 25%, #1f2937 50%, #111827 75%);
+  background-size: 200% 100%;
+}
+
+html[data-theme="dark"] .error-msg {
+  background: var(--danger-muted);
+  color: #fecaca;
+}
+
+html[data-theme="dark"] .login-page {
+  background: radial-gradient(circle at top, #2f2b68 0%, #17152e 42%, #0b1120 100%);
+}
+
+html[data-theme="dark"] .statement-review-table tr,
+html[data-theme="dark"] .statement-review-table td,
+html[data-theme="dark"] .audit-diff tr {
+  border-color: var(--border);
 }
