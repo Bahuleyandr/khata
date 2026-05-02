@@ -26,7 +26,13 @@ describe('AuthLayout', () => {
 
   it('renders the protected shell and clears the session on logout', async () => {
     const user = userEvent.setup()
-    vi.mocked(getMe).mockResolvedValue({ telegram_user_id: 42, first_name: 'Ada' })
+    vi.mocked(getMe).mockResolvedValue({
+      telegram_user_id: 42,
+      ledger_user_id: 42,
+      first_name: 'Ada',
+      role: 'owner',
+      is_owner: true,
+    })
     vi.mocked(logout).mockResolvedValue()
 
     render(React.createElement(AuthLayout, null, React.createElement('main', null, 'Secure area')))

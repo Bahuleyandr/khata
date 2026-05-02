@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.js";
 import { verifyWebAppInitData } from "../auth/telegram-webapp.js";
+import {
+  resolveAccessForTelegramUser,
+  resolveSessionAccessForTelegramUser,
+  type AccessRole,
+} from "../db/access.js";
 
 // ─── Session helpers ─────────────────────────────────────────────────────────
 
@@ -9,6 +14,21 @@ export function signSession(userId: number, firstName: string, iat: number): str
   const payload = `${userId}:${Buffer.from(firstName).toString("base64url")}:${iat}`;
   const hmac = crypto.createHmac("sha256", config.sessionSecret).update(payload).digest("hex");
   return `${payload}.${hmac}`;
+}
+
+export interface VerifiedSession {
+  userId: number;
+  firstName: string;
+}
+
+export interface AuthenticatedSession {
+  userId: number;
+  ledgerUserId: number;
+  telegramUserId: number;
+  actorUserId: number;
+  firstName: string;
+  role: AccessRole;
+  isOwner: boolean;
 }
 
 const SESSION_MAX_AGE_S = 604800;
@@ -19,7 +39,7 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-function isAllowedUser(userId: number): boolean {
+function isConfigAllowedUser(userId: number): boolean {
   return config.allowedTelegramUserIds.includes(userId);
 }
 
@@ -45,7 +65,7 @@ function clearSessionCookie(reply: FastifyReply): void {
   });
 }
 
-export function verifySession(token: string): { userId: number; firstName: string } | null {
+function verifySessionToken(token: string): VerifiedSession | null {
   const dot = token.lastIndexOf(".");
   if (dot === -1) return null;
   const payload = token.substring(0, dot);
@@ -66,7 +86,6 @@ export function verifySession(token: string): { userId: number; firstName: strin
   const userId = parseInt(parts[0]!, 10);
   const firstName = Buffer.from(parts[1]!, "base64url").toString("utf8");
   if (isNaN(userId)) return null;
-  if (!isAllowedUser(userId)) return null;
   const iat = parseInt(parts[2]!, 10);
   const now = nowSeconds();
   if (isNaN(iat) || iat > now + AUTH_FUTURE_SKEW_S || now - iat > SESSION_MAX_AGE_S) {
@@ -75,21 +94,63 @@ export function verifySession(token: string): { userId: number; firstName: strin
   return { userId, firstName };
 }
 
+export function verifySession(token: string): VerifiedSession | null {
+  const session = verifySessionToken(token);
+  if (!session || !isConfigAllowedUser(session.userId)) return null;
+  return session;
+}
+
 export async function getSession(
   request: FastifyRequest,
   reply: FastifyReply,
-): Promise<{ userId: number; firstName: string } | null> {
+): Promise<AuthenticatedSession | null> {
   const token = request.cookies["session"];
   if (!token) {
     reply.status(401).send({ error: "Unauthorized" });
     return null;
   }
-  const session = verifySession(token);
+  const session = verifySessionToken(token);
   if (!session) {
     reply.status(401).send({ error: "Unauthorized" });
     return null;
   }
-  return session;
+  const access = await resolveSessionAccessForTelegramUser(session.userId, {
+    firstName: session.firstName,
+  });
+  if (!access || access.status !== "active" || access.ledgerUserId === null) {
+    reply.status(403).send({ error: "Access not approved yet" });
+    return null;
+  }
+  return {
+    userId: access.ledgerUserId,
+    ledgerUserId: access.ledgerUserId,
+    telegramUserId: session.userId,
+    actorUserId: session.userId,
+    firstName: session.firstName,
+    role: access.role,
+    isOwner: access.role === "owner",
+  };
+}
+
+async function authenticateTelegramUser(
+  userId: number,
+  firstName: string,
+  username?: string,
+): Promise<AuthenticatedSession | null> {
+  const access = await resolveAccessForTelegramUser(userId, {
+    firstName,
+    username,
+  });
+  if (!access || access.status !== "active" || access.ledgerUserId === null) return null;
+  return {
+    userId: access.ledgerUserId,
+    ledgerUserId: access.ledgerUserId,
+    telegramUserId: userId,
+    actorUserId: userId,
+    firstName,
+    role: access.role,
+    isOwner: access.role === "owner",
+  };
 }
 
 // ─── Telegram auth helpers ────────────────────────────────────────────────────
@@ -154,11 +215,14 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const userId = parseInt(data["id"] ?? "", 10);
-    if (!isAllowedUser(userId)) {
-      return reply.status(403).send({ error: "User not allowed" });
-    }
-
     const firstName = data["first_name"] ?? "";
+    const session = await authenticateTelegramUser(userId, firstName, data["username"]);
+    if (!session) {
+      return reply.status(403).send({
+        error: "Access not approved yet",
+        telegram_user_id: userId,
+      });
+    }
     setSessionCookie(reply, userId, firstName);
 
     return { ok: true };
@@ -169,9 +233,15 @@ export async function authRoutes(app: FastifyInstance) {
   app.get("/api/me", async (request, reply) => {
     const token = request.cookies["session"];
     if (!token) return reply.status(401).send({ error: "Unauthorized" });
-    const session = verifySession(token);
-    if (!session) return reply.status(401).send({ error: "Unauthorized" });
-    return { telegram_user_id: session.userId, first_name: session.firstName };
+    const session = await getSession(request, reply);
+    if (!session) return;
+    return {
+      telegram_user_id: session.telegramUserId,
+      ledger_user_id: session.ledgerUserId,
+      first_name: session.firstName,
+      role: session.role,
+      is_owner: session.isOwner,
+    };
   });
 
   // POST /api/logout
@@ -209,12 +279,19 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(401).send({ error: result.error });
     }
 
-    if (!isAllowedUser(result.user.id)) {
-      return reply.status(403).send({ error: "User not allowed" });
+    const session = await authenticateTelegramUser(
+      result.user.id,
+      result.user.first_name,
+      result.user.username,
+    );
+    if (!session) {
+      return reply.status(403).send({
+        error: "Access not approved yet",
+        telegram_user_id: result.user.id,
+      });
     }
 
     setSessionCookie(reply, result.user.id, result.user.first_name);
-
     return { ok: true };
     },
   );

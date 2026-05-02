@@ -41,6 +41,7 @@ export async function categoriesRoutes(app: FastifyInstance) {
       if (!row) return reply.status(409).send({ error: "Category already exists" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "category.create",
         entityType: "category",
         entityId: row.id,
@@ -68,6 +69,7 @@ export async function categoriesRoutes(app: FastifyInstance) {
       if (!row) return reply.status(404).send({ error: "Category not found" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "category.update",
         entityType: "category",
         entityId: row.id,
@@ -96,6 +98,7 @@ export async function categoriesRoutes(app: FastifyInstance) {
       if (!deleted) return reply.status(404).send({ error: "Category not found or default" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "category.delete",
         entityType: "category",
         entityId: request.params.id,

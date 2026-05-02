@@ -88,6 +88,7 @@ export async function budgetsRoutes(app: FastifyInstance) {
       `;
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "budget.set",
         entityType: "budget",
         entityId: request.body.category_id,
@@ -120,6 +121,7 @@ export async function budgetsRoutes(app: FastifyInstance) {
       if (!deleted) return reply.status(404).send({ error: "Budget not found" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "budget.clear",
         entityType: "budget",
         entityId: request.params.categoryId,

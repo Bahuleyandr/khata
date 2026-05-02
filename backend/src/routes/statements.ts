@@ -486,6 +486,7 @@ export async function statementsRoutes(app: FastifyInstance) {
       const statement = await getStatementById(session.userId, statementId);
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "statement.upload",
         entityType: "statement",
         entityId: statementId,
@@ -547,6 +548,7 @@ export async function statementsRoutes(app: FastifyInstance) {
 
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "statement.import",
         entityType: "statement",
         entityId: request.params.id,
@@ -616,6 +618,7 @@ export async function statementsRoutes(app: FastifyInstance) {
 
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "statement.row_update",
         entityType: "statement",
         entityId: request.params.id,
@@ -662,6 +665,7 @@ export async function statementsRoutes(app: FastifyInstance) {
         );
         await recordAuditEvent({
           userId: session.userId,
+          actorUserId: session.actorUserId,
           action: "statement.retry",
           entityType: "statement",
           entityId: statement.id,

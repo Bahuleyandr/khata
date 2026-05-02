@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { config } from "../config.js";
 import { isAllowedUser } from "../middleware/auth.js";
+import { resolveAccessForTelegramUser } from "../db/access.js";
 import {
   handleStart,
   handleHelp,
@@ -24,10 +25,25 @@ import {
 export const bot = new Bot(config.telegramBotToken);
 
 bot.use(async (ctx, next) => {
-  const userId = ctx.from?.id;
-  if (userId == null || !isAllowedUser(userId)) {
+  const from = ctx.from;
+  const userId = from?.id;
+  if (!from || userId == null) {
     await ctx.reply("Unauthorized.");
     return;
+  }
+  if (!isAllowedUser(userId)) {
+    const access = await resolveAccessForTelegramUser(userId, {
+      firstName: from.first_name,
+      username: from.username,
+    });
+    if (!access || access.status !== "active" || access.ledgerUserId === null) {
+      await ctx.reply("Unauthorized. Ask the Khata owner to add your Telegram ID.");
+      return;
+    }
+    // Existing bot handlers scope all money data to ctx.from.id.  For household
+    // members, point that id at the shared ledger while replies still go to the
+    // original chat.
+    from.id = access.ledgerUserId;
   }
   await next();
 });

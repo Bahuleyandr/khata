@@ -17,8 +17,51 @@ const expense = {
 
 async function mockApi(page: Page) {
   await page.route('**/api/me', (route) =>
-    route.fulfill({ json: { telegram_user_id: 42, first_name: 'Ada' } }),
+    route.fulfill({
+      json: {
+        telegram_user_id: 42,
+        ledger_user_id: 42,
+        first_name: 'Ada',
+        role: 'owner',
+        is_owner: true,
+      },
+    }),
   )
+  await page.route('**/api/access/users**', (route) => {
+    const member = {
+      telegram_user_id: 99,
+      first_name: 'Grace',
+      username: 'grace',
+      role: 'member',
+      status: 'active',
+      ledger_user_id: 42,
+      invited_by: 42,
+      created_at: '2026-04-28T10:00:00.000Z',
+      updated_at: '2026-04-28T10:00:00.000Z',
+      last_login_at: null,
+      revoked_at: null,
+    }
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        json: {
+          users: [{
+            telegram_user_id: 42,
+            first_name: 'Ada',
+            username: 'ada',
+            role: 'owner',
+            status: 'active',
+            ledger_user_id: 42,
+            invited_by: null,
+            created_at: '2026-04-28T10:00:00.000Z',
+            updated_at: '2026-04-28T10:00:00.000Z',
+            last_login_at: '2026-04-28T10:00:00.000Z',
+            revoked_at: null,
+          }, member],
+        },
+      })
+    }
+    return route.fulfill({ status: route.request().method() === 'POST' ? 201 : 200, json: member })
+  })
   await page.route('**/api/insights', (route) => route.fulfill({ json: { insights: [] } }))
   await page.route('**/api/categories', (route) => {
     if (route.request().method() === 'GET') {
@@ -340,6 +383,9 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await page.goto('/manage')
   await expect(page.getByRole('heading', { name: 'Manage' })).toBeVisible()
   await expect(page.getByText('Categories')).toBeVisible()
+  await expect(page.getByText('Household Access')).toBeVisible()
+  await expect(page.getByLabel('Telegram user ID')).toBeVisible()
+  await expect(page.getByText(/99 · @grace/)).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()
   await expect(page.getByText('#team')).toBeVisible()
   await expect(page.getByText('MiniMax')).toBeVisible()

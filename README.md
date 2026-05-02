@@ -82,6 +82,8 @@ The `/transactions` workspace supports manual transaction entry for expenses mis
 
 Statement imports can be uploaded from `/manage` via `POST /api/statements/upload`. The dashboard accepts PDF or receipt-like statement images, stores the original file in MinIO/S3, parses and deduplicates rows, imports new transactions as `needs_review`, and records the upload in the audit trail.
 
+Household access is owner-managed from `/manage`. The bootstrap owner signs in with a Telegram ID listed in `ALLOWED_TELEGRAM_USER_IDS`, then adds a spouse/household member by numeric Telegram ID in the Household Access panel. Added members log in as themselves, but their dashboard and bot activity writes to the shared household ledger.
+
 Recurring spend is surfaced as Subscription Watch on `/dashboard`. Detection combines charge cadence, interval jitter, amount stability, recency, and occurrence count, so frequent-but-irregular merchants do not look like subscriptions just because they appear often.
 
 ## Stack rationale
@@ -215,13 +217,13 @@ The dashboard also runs as a **Telegram Mini App** — a webview embedded direct
    ```
 3. The bot will register a global chat menu button on startup. Users see a "Dashboard" button next to the message input in the bot's chat.
 
-**Open the Mini App:** tap the menu button next to the bot's chat input, or send `/dashboard` and tap the inline "Open Dashboard" button. The dashboard opens inside Telegram, auto-authenticated as the Telegram user — same allowlist, same session cookie as the OAuth path.
+**Open the Mini App:** tap the menu button next to the bot's chat input, or send `/dashboard` and tap the inline "Open Dashboard" button. The dashboard opens inside Telegram, auto-authenticated as the Telegram user — same owner-managed access table, same session cookie as the OAuth path.
 
-**Auth model:** the WebApp `initData` is HMAC-signed by Telegram with the bot token. `verifyWebAppInitData` ([backend/src/auth/telegram-webapp.ts](backend/src/auth/telegram-webapp.ts)) validates the signature server-side, then enforces the `ALLOWED_TELEGRAM_USER_IDS` allowlist before issuing a session cookie. Only initData younger than 24h is accepted.
+**Auth model:** the WebApp `initData` is HMAC-signed by Telegram with the bot token. `verifyWebAppInitData` ([backend/src/auth/telegram-webapp.ts](backend/src/auth/telegram-webapp.ts)) validates the signature server-side, then resolves the Telegram user through the DB-backed household access table before issuing a session cookie. Only initData younger than 24h is accepted.
 
 ## Security notes
 
-Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-checks `ALLOWED_TELEGRAM_USER_IDS`, so removing a Telegram ID invalidates its next request even before the cookie expires. Logout calls `POST /api/logout` and clears the cookie server-side.
+Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-checks the DB-backed household access table on each request; bootstrap owners listed in `ALLOWED_TELEGRAM_USER_IDS` remain emergency owners of their own ledger. Revoking a member in `/manage` invalidates their next request even before the cookie expires. Logout calls `POST /api/logout` and clears the cookie server-side.
 
 Mutating dashboard APIs (`POST`, `PATCH`, `PUT`, `DELETE`) are protected by an Origin guard before route handlers run. Same-host requests are accepted for the production Tailscale hostname; explicitly configured `ALLOWED_ORIGINS` are accepted for local/dev flows. Other browser origins receive `403 Cross-site request blocked`. The cookie is `sameSite: none` in production to support Telegram webview/Mini App behavior, so keep the Origin guard in place for any new mutating dashboard route.
 

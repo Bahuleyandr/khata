@@ -130,6 +130,7 @@ export async function subscriptionsRoutes(app: FastifyInstance) {
 
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "subscription.preference_set",
         entityType: "subscription",
         before: before ?? null,
@@ -158,6 +159,7 @@ export async function subscriptionsRoutes(app: FastifyInstance) {
 
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "subscription.preference_clear",
         entityType: "subscription",
         before: deleted ?? null,

@@ -8,23 +8,31 @@ import {
   deleteCategory,
   formatCents,
   formatDate,
+  getAccessUsers,
   getAuditLog,
   getBudgets,
   getCategories,
+  getMe,
   getStatementRows,
   getStatements,
   getSubscriptions,
   getTags,
+  grantAccessUser,
   importStatementRows,
   renameCategory,
   retryStatement,
+  revokeAccessUser,
   setBudget,
   setSubscriptionPreference,
+  updateAccessUserRole,
   updateStatementImportRow,
   uploadStatement,
+  type AccessRole,
+  type AccessUser,
   type AuditEvent,
   type BudgetVariance,
   type Category,
+  type Me,
   type StatementImport,
   type StatementImportRow,
   type SubscriptionCandidate,
@@ -108,15 +116,18 @@ const AUDIT_ACTION_OPTIONS = [
   'expense.update',
   'expense.delete',
   'expense.merge',
-  'expenses.bulk_update',
+  'expense.bulk_update',
   'statement.upload',
   'statement.import',
   'statement.row_update',
   'subscription.preference_set',
   'subscription.preference_clear',
+  'access.grant',
+  'access.update',
+  'access.revoke',
 ]
 
-const AUDIT_ENTITY_OPTIONS = ['expense', 'statement', 'statement_row', 'subscription', 'category', 'budget', 'tag']
+const AUDIT_ENTITY_OPTIONS = ['expense', 'statement', 'statement_row', 'subscription', 'category', 'budget', 'tag', 'access_user']
 
 function subscriptionTiming(subscription: SubscriptionCandidate) {
   if (subscription.next_expected_at === null || subscription.days_until_next === null) return 'Timing unknown'
@@ -134,6 +145,12 @@ function subscriptionBadgeClass(status: SubscriptionPreferenceStatus) {
 }
 
 export default function ManagePage() {
+  const [me, setMe] = useState<Me | null>(null)
+  const [accessUsers, setAccessUsers] = useState<AccessUser[]>([])
+  const [newAccessTelegramId, setNewAccessTelegramId] = useState('')
+  const [newAccessName, setNewAccessName] = useState('')
+  const [newAccessUsername, setNewAccessUsername] = useState('')
+  const [newAccessRole, setNewAccessRole] = useState<AccessRole>('member')
   const [categories, setCategories] = useState<Category[]>([])
   const [budgets, setBudgets] = useState<BudgetVariance[]>([])
   const [tags, setTags] = useState<Tag[]>([])
@@ -162,7 +179,8 @@ export default function ManagePage() {
 
   const refresh = useCallback(async () => {
     setError(null)
-    const [cats, budgetRes, tagRes, statementRes, subscriptionRes, auditRes] = await Promise.all([
+    const mePromise = getMe()
+    const dataPromises = [
       getCategories(),
       getBudgets(month),
       getTags(),
@@ -173,7 +191,14 @@ export default function ManagePage() {
         action: auditAction || undefined,
         entityType: auditEntityType || undefined,
       }),
+    ] as const
+    const meRes = await mePromise
+    const [cats, budgetRes, tagRes, statementRes, subscriptionRes, auditRes, accessRes] = await Promise.all([
+      ...dataPromises,
+      meRes.is_owner ? getAccessUsers() : Promise.resolve({ users: [] }),
     ])
+    setMe(meRes)
+    setAccessUsers(accessRes.users)
     setCategories(cats)
     setBudgets(budgetRes.budgets)
     setTags(tagRes.tags)
@@ -302,6 +327,29 @@ export default function ManagePage() {
     await setSubscriptionPreference(subscription.merchant_key, subscription.name, status)
   }
 
+  async function addAccessUser() {
+    const telegramId = newAccessTelegramId.trim()
+    if (!telegramId) return
+    await grantAccessUser({
+      telegram_user_id: telegramId,
+      first_name: newAccessName.trim() || undefined,
+      username: newAccessUsername.trim().replace(/^@/, '') || undefined,
+      role: newAccessRole,
+    })
+    setNewAccessTelegramId('')
+    setNewAccessName('')
+    setNewAccessUsername('')
+    setNewAccessRole('member')
+  }
+
+  async function changeAccessRole(user: AccessUser, role: AccessRole) {
+    await updateAccessUserRole(user.telegram_user_id, role)
+  }
+
+  async function revokeAccess(user: AccessUser) {
+    await revokeAccessUser(user.telegram_user_id)
+  }
+
   async function addCategory() {
     const name = newCategory.trim()
     if (!name) return
@@ -345,6 +393,80 @@ export default function ManagePage() {
       {error ? <div className="error-msg">{error}</div> : null}
 
       <div className="grid-2">
+        <section className="card workspace-card wide-card">
+          <h3>Household Access</h3>
+          <div className="access-summary-grid">
+            <span>
+              <strong>{me?.telegram_user_id ?? '...'}</strong>
+              <small>Your Telegram ID</small>
+            </span>
+            <span>
+              <strong>{me?.ledger_user_id ?? '...'}</strong>
+              <small>Shared ledger</small>
+            </span>
+            <span>
+              <strong>{me?.role ?? '...'}</strong>
+              <small>Your role</small>
+            </span>
+          </div>
+          {me?.is_owner ? (
+            <>
+              <div className="inline-form access-form">
+                <input
+                  inputMode="numeric"
+                  value={newAccessTelegramId}
+                  onChange={(e) => setNewAccessTelegramId(e.target.value)}
+                  placeholder="Telegram user ID"
+                  aria-label="Telegram user ID"
+                />
+                <input
+                  value={newAccessName}
+                  onChange={(e) => setNewAccessName(e.target.value)}
+                  placeholder="Display name"
+                  aria-label="Access display name"
+                />
+                <input
+                  value={newAccessUsername}
+                  onChange={(e) => setNewAccessUsername(e.target.value)}
+                  placeholder="@username"
+                  aria-label="Telegram username"
+                />
+                <select
+                  value={newAccessRole}
+                  onChange={(e) => setNewAccessRole(e.target.value as AccessRole)}
+                  aria-label="Access role"
+                >
+                  <option value="member">Member</option>
+                  <option value="owner">Owner</option>
+                </select>
+                <button type="button" onClick={() => void run(addAccessUser)} disabled={busy || !newAccessTelegramId.trim()}>
+                  Add
+                </button>
+              </div>
+              <div className="statement-list">
+                {accessUsers.length === 0 ? <p>No access users yet.</p> : accessUsers.map((user) => (
+                  <AccessUserRow
+                    key={user.telegram_user_id}
+                    user={user}
+                    me={me}
+                    busy={busy}
+                    onRole={(role) => run(() => changeAccessRole(user, role))}
+                    onRevoke={() => run(() => revokeAccess(user))}
+                    onReactivate={() => run(() => grantAccessUser({
+                      telegram_user_id: user.telegram_user_id,
+                      first_name: user.first_name,
+                      username: user.username,
+                      role: user.role,
+                    }).then(() => undefined))}
+                  />
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="muted-copy">Only owners can add or remove Telegram accounts.</p>
+          )}
+        </section>
+
         <section className="card workspace-card">
           <h3>Categories</h3>
           <div className="inline-form">
@@ -798,6 +920,63 @@ export default function ManagePage() {
           </div>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function AccessUserRow({
+  user,
+  me,
+  busy,
+  onRole,
+  onRevoke,
+  onReactivate,
+}: {
+  user: AccessUser
+  me: Me
+  busy: boolean
+  onRole: (role: AccessRole) => Promise<void>
+  onRevoke: () => Promise<void>
+  onReactivate: () => Promise<void>
+}) {
+  const isSelf = me.telegram_user_id === user.telegram_user_id
+  const name = user.first_name || user.username || `Telegram ${user.telegram_user_id}`
+  const username = user.username ? `@${user.username.replace(/^@/, '')}` : null
+
+  return (
+    <div className="statement-row access-row">
+      <div>
+        <strong>
+          {name}
+          <span className={`badge badge-${user.status}`}>{user.status}</span>
+          {isSelf ? <span className="badge badge-muted">you</span> : null}
+        </strong>
+        <span>
+          {user.telegram_user_id}
+          {username ? ` · ${username}` : ''}
+          {user.last_login_at ? ` · Last login ${formatDate(user.last_login_at)}` : ''}
+        </span>
+      </div>
+      <div className="row-actions">
+        <select
+          value={user.role}
+          onChange={(e) => void onRole(e.target.value as AccessRole)}
+          disabled={busy || isSelf || user.status !== 'active'}
+          aria-label={`Role for ${name}`}
+        >
+          <option value="member">Member</option>
+          <option value="owner">Owner</option>
+        </select>
+        {user.status === 'revoked' ? (
+          <button type="button" onClick={() => void onReactivate()} disabled={busy}>
+            Re-activate
+          </button>
+        ) : (
+          <button type="button" className="danger" onClick={() => void onRevoke()} disabled={busy || isSelf}>
+            Revoke
+          </button>
+        )}
+      </div>
     </div>
   )
 }

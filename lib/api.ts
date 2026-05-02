@@ -11,6 +11,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const err = await res.json().catch(() => ({}))
     throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
       status: res.status,
+      data: err,
     })
   }
   return res.json() as Promise<T>
@@ -25,7 +26,27 @@ export function apiAssetUrl(path: string): string {
 
 export interface Me {
   telegram_user_id: number
+  ledger_user_id: number
   first_name: string
+  role: AccessRole
+  is_owner: boolean
+}
+
+export type AccessRole = 'owner' | 'member'
+export type AccessStatus = 'active' | 'pending' | 'revoked'
+
+export interface AccessUser {
+  telegram_user_id: number
+  first_name: string | null
+  username: string | null
+  role: AccessRole
+  status: AccessStatus
+  ledger_user_id: number | null
+  invited_by: number | null
+  created_at: string
+  updated_at: string
+  last_login_at: string | null
+  revoked_at: string | null
 }
 
 export interface CategoryTotal {
@@ -290,6 +311,35 @@ export interface AuditEvent {
 
 export function getMe(): Promise<Me> {
   return apiFetch<Me>('/api/me')
+}
+
+export function getAccessUsers(): Promise<{ users: AccessUser[] }> {
+  return apiFetch<{ users: AccessUser[] }>('/api/access/users')
+}
+
+export function grantAccessUser(data: {
+  telegram_user_id: number | string
+  first_name?: string | null
+  username?: string | null
+  role?: AccessRole
+}): Promise<AccessUser> {
+  return apiFetch<AccessUser>('/api/access/users', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateAccessUserRole(telegramUserId: number, role: AccessRole): Promise<AccessUser> {
+  return apiFetch<AccessUser>(`/api/access/users/${telegramUserId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  })
+}
+
+export async function revokeAccessUser(telegramUserId: number): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/access/users/${telegramUserId}`, { method: 'DELETE' })
 }
 
 export async function logout(): Promise<void> {

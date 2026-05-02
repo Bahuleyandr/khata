@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { postTelegramAuth } from '../../lib/api'
 import { MiniAppAutoAuth } from './MiniAppAutoAuth'
@@ -16,14 +16,20 @@ const BOT_USERNAME = process.env.NEXT_PUBLIC_BOT_USERNAME ?? 'RaaReeRumBot'
 export default function LoginPage() {
   const router = useRouter()
   const widgetRef = useRef<HTMLDivElement>(null)
+  const [loginError, setLoginError] = useState<{ message: string; telegramUserId?: number } | null>(null)
 
   useEffect(() => {
     window.onTelegramAuth = async (user) => {
       try {
+        setLoginError(null)
         await postTelegramAuth(user)
         router.replace('/dashboard')
-      } catch {
-        alert('Login failed. You may not be an authorized user.')
+      } catch (e) {
+        const error = e as Error & { data?: { telegram_user_id?: number } }
+        setLoginError({
+          message: error.message || 'Login failed.',
+          telegramUserId: error.data?.telegram_user_id,
+        })
       }
     }
 
@@ -51,6 +57,16 @@ export default function LoginPage() {
         <h1>Khata</h1>
         <p>Sign in with your Telegram account to view your expenses.</p>
         <MiniAppAutoAuth />
+        {loginError ? (
+          <div className="login-error" role="alert">
+            <strong>{loginError.message}</strong>
+            {loginError.telegramUserId ? (
+              <span>Share this Telegram ID with the Khata owner: {loginError.telegramUserId}</span>
+            ) : (
+              <span>Ask the Khata owner to add your Telegram account from Manage.</span>
+            )}
+          </div>
+        ) : null}
         <div ref={widgetRef} />
       </div>
     </div>

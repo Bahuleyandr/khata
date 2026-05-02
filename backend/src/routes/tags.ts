@@ -62,6 +62,7 @@ export async function tagsRoutes(app: FastifyInstance) {
       await attachTagToExpense(request.params.id, tagId);
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.tag_add",
         entityType: "expense",
         entityId: request.params.id,
@@ -86,6 +87,7 @@ export async function tagsRoutes(app: FastifyInstance) {
       if (!removed) return reply.status(404).send({ error: "Tag not attached" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.tag_remove",
         entityType: "expense",
         entityId: request.params.id,

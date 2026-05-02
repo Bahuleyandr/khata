@@ -486,6 +486,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       const [createdWithTags] = await withTags([created]);
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.create",
         entityType: "expense",
         entityId: created.id,
@@ -532,6 +533,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       await addTagsToExpenses(session.userId, updated.map((row) => row.id), body.tag_names);
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.bulk_update",
         entityType: "expense",
         metadata: {
@@ -710,6 +712,7 @@ export async function expensesRoutes(app: FastifyInstance) {
 
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.update",
         entityType: "expense",
         entityId: updated.id,
@@ -762,6 +765,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       const [updatedWithTags] = await withTags([updated]);
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.receipt_attach",
         entityType: "expense",
         entityId: updated.id,
@@ -803,6 +807,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (!result[0]) return reply.status(404).send({ error: "Transaction not found" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.delete",
         entityType: "expense",
         entityId: result[0].id,
@@ -890,6 +895,7 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (!mergeResult?.merged) return reply.status(404).send({ error: "Transaction not found" });
       await recordAuditEvent({
         userId: session.userId,
+        actorUserId: session.actorUserId,
         action: "expense.merge",
         entityType: "expense",
         entityId: mergeResult.merged.id,

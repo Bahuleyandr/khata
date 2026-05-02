@@ -12,6 +12,7 @@ import { statementsRoutes } from "./statements.js";
 import { subscriptionsRoutes } from "./subscriptions.js";
 import { monthlyReviewRoutes } from "./monthly-review.js";
 import { auditRoutes } from "./audit.js";
+import { accessRoutes } from "./access.js";
 import { installCsrfOriginGuard } from "./csrf.js";
 
 export async function dashboardRoutes(app: FastifyInstance) {
@@ -29,4 +30,5 @@ export async function dashboardRoutes(app: FastifyInstance) {
   await app.register(subscriptionsRoutes);
   await app.register(monthlyReviewRoutes);
   await app.register(auditRoutes);
+  await app.register(accessRoutes);
 }
