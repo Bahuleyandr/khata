@@ -11,6 +11,7 @@ const SUBTOTAL_LABEL = /\b(?:subtotal|sub\s*total)\b/i;
 
 const AMOUNT_RE =
   /(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)|([\d,]+(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹)/gi;
+const BARE_AMOUNT_RE = /\b(\d{1,6}(?:,\d{3})*(?:\.\d{1,2}))\b/g;
 
 const MONTHS = new Map<string, number>([
   ["jan", 1],
@@ -104,19 +105,40 @@ function parseCurrencyAmounts(line: string): number[] {
     .filter((amount) => Number.isFinite(amount) && amount > 0 && amount < 10_000_000);
 }
 
-function highestAmount(lines: string[], label: RegExp): number | null {
-  const values = lines
-    .filter((line) => label.test(line))
-    .flatMap(parseCurrencyAmounts);
+function parseBareAmounts(line: string): number[] {
+  BARE_AMOUNT_RE.lastIndex = 0;
+  return Array.from(line.matchAll(BARE_AMOUNT_RE))
+    .map((match) => Number(match[1]!.replace(/,/g, "")))
+    .filter((amount) => Number.isFinite(amount) && amount > 0 && amount < 10_000_000);
+}
+
+function parseLabeledAmounts(lines: string[], label: RegExp): number[] {
+  const values: number[] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    if (!label.test(line)) continue;
+    values.push(...parseCurrencyAmounts(line), ...parseBareAmounts(line));
+
+    // OCR often splits "Payment Due" and "INR160.00" onto separate lines.
+    const next = lines[i + 1];
+    if (next) {
+      values.push(...parseCurrencyAmounts(next), ...parseBareAmounts(next));
+    }
+  }
+  return values;
+}
+
+function highestLabeledAmount(lines: string[], label: RegExp): number | null {
+  const values = parseLabeledAmounts(lines, label);
   return values.length > 0 ? Math.max(...values) : null;
 }
 
 function parseTotalAmount(lines: string[]): number | null {
   return (
-    highestAmount(lines, STRONG_TOTAL_LABEL) ??
-    highestAmount(lines, TOTAL_LABEL) ??
-    highestAmount(lines, PAYMENT_LABEL) ??
-    highestAmount(lines, SUBTOTAL_LABEL)
+    highestLabeledAmount(lines, STRONG_TOTAL_LABEL) ??
+    highestLabeledAmount(lines, TOTAL_LABEL) ??
+    highestLabeledAmount(lines, PAYMENT_LABEL) ??
+    highestLabeledAmount(lines, SUBTOTAL_LABEL)
   );
 }
 

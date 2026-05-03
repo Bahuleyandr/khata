@@ -36,6 +36,37 @@ describe("tryParseReceiptText", () => {
     });
   });
 
+  it("parses fragmented OCR where payment and bare amount land on separate lines", () => {
+    const text = [
+      "HMSHost Services India Pvt Ltd",
+      "Kempegowda International Airport",
+      "THIS IS A TAX INVOICE",
+      "30 Apr '26 19:41",
+      "Take-Out",
+      "Evian BTL 0.5",
+      "152.40",
+      "Credit Card",
+      "160.00",
+      "Subtotal",
+      "152.40",
+      "CGST 2.5%",
+      "3.81",
+      "SGST 2.5%",
+      "3.81",
+      "Rounding",
+      "0.02",
+      "Payment",
+      "160.00",
+      "Change Due",
+      "0.00",
+    ].join("\n");
+
+    const parsed = tryParseReceiptText(text, categories, "2026-05-03");
+    expect(parsed?.amount).toBe(160);
+    expect(parsed?.merchant).toBe("HMSHost Services India Pvt Ltd");
+    expect(parsed?.occurred_at).toBe("2026-04-30");
+  });
+
   it("parses simple retail receipts with currency-prefixed totals", () => {
     const text = [
       "STARBUCKS",
