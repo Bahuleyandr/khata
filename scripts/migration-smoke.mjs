@@ -12,13 +12,17 @@ let dockerCommand = { cmd: "docker", prefixArgs: [] };
 
 async function detectDocker() {
   try {
-    await execFileAsync("docker", ["--version"], { windowsHide: true });
+    await execFileAsync("docker", ["info", "--format", "{{.ServerVersion}}"], {
+      windowsHide: true,
+    });
     dockerCommand = { cmd: "docker", prefixArgs: [] };
     return;
   } catch {
     // Windows developer machines may keep Docker inside WSL2 only.
   }
-  await execFileAsync("wsl", ["docker", "--version"], { windowsHide: true });
+  await execFileAsync("wsl", ["docker", "info", "--format", "{{.ServerVersion}}"], {
+    windowsHide: true,
+  });
   dockerCommand = { cmd: "wsl", prefixArgs: ["docker"] };
 }
 

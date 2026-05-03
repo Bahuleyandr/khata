@@ -92,12 +92,43 @@ vi.mock("../db/categories.js", () => ({
 
 vi.mock("../db/expenses.js", () => ({
   insertExpense: vi.fn().mockResolvedValue("expense-uuid-1"),
+  getExpenseForEdit: vi.fn().mockResolvedValue({
+    id: "exp-1",
+    amount_cents: 4500,
+    currency: "INR",
+    description: "lunch",
+    category: "Food",
+    occurred_at: new Date("2026-04-27T12:00:00Z"),
+  }),
   updateExpenseAmount: vi.fn().mockResolvedValue(true),
   updateExpenseCategory: vi.fn().mockResolvedValue(true),
   updateExpenseDate: vi.fn().mockResolvedValue(true),
+  deleteExpense: vi.fn().mockResolvedValue({
+    id: "exp-1",
+    amount_cents: "4500",
+    currency: "INR",
+    description: "lunch",
+    merchant: null,
+    merchant_canonical_id: null,
+    category_id: "cat-food",
+    source: "telegram",
+    occurred_at: new Date("2026-04-27T12:00:00Z"),
+    image_key: null,
+    review_status: "reviewed",
+  }),
   findExpenseByContentHash: vi.fn().mockResolvedValue(null),
   findExpenseByUpiRef: vi.fn().mockResolvedValue(null),
   attachReceiptToExpense: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("../db/audit.js", () => ({
+  recordAuditEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("../db/access.js", () => ({
+  resolveLedgerForTelegramUser: vi.fn(({ requestedLedgerId }: { requestedLedgerId?: number }) =>
+    Promise.resolve({ ledgerId: requestedLedgerId ?? 111111 }),
+  ),
 }));
 
 vi.mock("../receipt/ocr.js", () => ({
@@ -202,6 +233,7 @@ import * as mockQuery from "../db/query.js";
 import * as mockExpenses from "../db/expenses.js";
 import * as mockOcr from "../receipt/ocr.js";
 import * as mockBudgets from "../db/budgets.js";
+import * as mockAudit from "../db/audit.js";
 
 function makeCtx(overrides: Partial<Context> = {}): Context {
   return {
@@ -221,6 +253,27 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   // Restore default mocks after clearAllMocks wipes mockReturnValueOnce queues
+  vi.mocked(mockExpenses.getExpenseForEdit).mockResolvedValue({
+    id: "exp-1",
+    amount_cents: 4500,
+    currency: "INR",
+    description: "lunch",
+    category: "Food",
+    occurred_at: new Date("2026-04-27T12:00:00Z"),
+  });
+  vi.mocked(mockExpenses.deleteExpense).mockResolvedValue({
+    id: "exp-1",
+    amount_cents: "4500",
+    currency: "INR",
+    description: "lunch",
+    merchant: null,
+    merchant_canonical_id: null,
+    category_id: "cat-food",
+    source: "telegram",
+    occurred_at: new Date("2026-04-27T12:00:00Z"),
+    image_key: null,
+    review_status: "reviewed",
+  });
   vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValue(null);
   vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValue(
     "STARBUCKS\nDate: 27 Apr 2026\nCaffe Latte ₹250\nTotal: ₹250",
@@ -352,6 +405,11 @@ describe("handleTextMessage", () => {
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("Logged");
     expect(text).toContain("Food");
+    const [, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(JSON.stringify(options.reply_markup)).toContain("Delete Entry");
     expect(editStore.has(111111)).toBe(true);
   });
 
@@ -653,6 +711,11 @@ describe("handleCallbackQuery", () => {
     await handleCallbackQuery(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("amount");
+    const [, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(JSON.stringify(options.reply_markup)).toContain("Back");
     expect((editStore.get(111111) as { waitingFor?: string } | undefined)?.waitingFor).toBe("amount");
   });
 
@@ -670,6 +733,87 @@ describe("handleCallbackQuery", () => {
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("date");
     expect((editStore.get(111111) as { waitingFor?: string } | undefined)?.waitingFor).toBe("date");
+  });
+
+  it("adds a back option to the category picker", async () => {
+    editStore.set(111111, {
+      expenseId: "exp-1",
+      amount_cents: 4500,
+      currency: "INR",
+      category: "Food",
+      description: "lunch",
+      occurred_at: new Date(),
+    });
+    const ctx = makeCtx({ callbackQuery: { data: "editcat:exp-1" } } as Partial<Context>);
+    await handleCallbackQuery(ctx);
+    const [text, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(text).toContain("Select new category");
+    expect(JSON.stringify(options.reply_markup)).toContain("Back");
+  });
+
+  it("goes back to edit options without changing the pending edit", async () => {
+    editStore.set(111111, {
+      expenseId: "exp-1",
+      amount_cents: 4500,
+      currency: "INR",
+      category: "Food",
+      description: "lunch",
+      occurred_at: new Date(),
+      waitingFor: "amount",
+    });
+    const ctx = makeCtx({ callbackQuery: { data: "backedit:exp-1" } } as Partial<Context>);
+    await handleCallbackQuery(ctx);
+    const [text, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(text).toContain("No changes made");
+    expect(JSON.stringify(options.reply_markup)).toContain("Change Category");
+    expect(JSON.stringify(options.reply_markup)).toContain("Delete Entry");
+    expect((editStore.get(111111) as { waitingFor?: string } | undefined)?.waitingFor).toBeUndefined();
+  });
+
+  it("asks for confirmation before deleting an expense", async () => {
+    const ctx = makeCtx({ callbackQuery: { data: "delexp:exp-1" } } as Partial<Context>);
+    await handleCallbackQuery(ctx);
+    const [text, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(text).toContain("Delete this entry");
+    expect(JSON.stringify(options.reply_markup)).toContain("Delete Entry");
+    expect(JSON.stringify(options.reply_markup)).toContain("Back");
+    expect(vi.mocked(mockExpenses.deleteExpense)).not.toHaveBeenCalled();
+  });
+
+  it("deletes an expense after confirmation and records audit history", async () => {
+    editStore.set(111111, {
+      expenseId: "exp-1",
+      amount_cents: 4500,
+      currency: "INR",
+      category: "Food",
+      description: "lunch",
+      occurred_at: new Date(),
+    });
+    const ctx = makeCtx({ callbackQuery: { data: "confirmdel:exp-1" } } as Partial<Context>);
+    await handleCallbackQuery(ctx);
+    expect(vi.mocked(mockExpenses.deleteExpense)).toHaveBeenCalledWith("exp-1", 111111);
+    expect(vi.mocked(mockAudit.recordAuditEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 111111,
+        actorUserId: 111111,
+        action: "expense.delete",
+        entityType: "expense",
+        entityId: "exp-1",
+        metadata: { source: "telegram" },
+      }),
+    );
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Entry deleted");
+    expect(editStore.has(111111)).toBe(false);
   });
 });
 

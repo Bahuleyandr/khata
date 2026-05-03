@@ -17,6 +17,29 @@ export interface InsertExpenseData {
   review_status?: "needs_review" | "reviewed" | "ignored";
 }
 
+export interface ExpenseForEdit {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  description: string | null;
+  category: string;
+  occurred_at: Date;
+}
+
+export interface DeletedExpenseData {
+  id: string;
+  amount_cents: string;
+  currency: string;
+  description: string | null;
+  merchant: string | null;
+  merchant_canonical_id: string | null;
+  category_id: string | null;
+  source: string;
+  occurred_at: Date;
+  image_key: string | null;
+  review_status: string;
+}
+
 export async function insertExpense(data: InsertExpenseData): Promise<string> {
   // Resolve a canonical merchant ID for cross-row aggregation ("how much at
   // Zomato?" works even when the raw `merchant` text is "ZOMATO IN" /
@@ -38,6 +61,34 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
     RETURNING id
   `;
   return row.id;
+}
+
+export async function getExpenseForEdit(id: string, userId: number): Promise<ExpenseForEdit | null> {
+  const [row] = await sql<Array<{
+    id: string;
+    amount_cents: string;
+    currency: string;
+    description: string | null;
+    category: string;
+    occurred_at: Date;
+  }>>`
+    SELECT e.id,
+           e.amount_cents::text AS amount_cents,
+           e.currency,
+           e.description,
+           COALESCE(c.name, 'Uncategorized') AS category,
+           e.occurred_at
+    FROM expenses e
+    LEFT JOIN categories c ON c.id = e.category_id
+    WHERE e.id = ${id}
+      AND e.user_id = ${userId}
+    LIMIT 1
+  `;
+  if (!row) return null;
+  return {
+    ...row,
+    amount_cents: Number(row.amount_cents),
+  };
 }
 
 /**
@@ -151,4 +202,16 @@ export async function updateExpenseDate(
     RETURNING id
   `;
   return result.length > 0;
+}
+
+export async function deleteExpense(id: string, userId: number): Promise<DeletedExpenseData | null> {
+  const [row] = await sql<DeletedExpenseData[]>`
+    DELETE FROM expenses
+    WHERE id = ${id}
+      AND user_id = ${userId}
+    RETURNING id, amount_cents::text AS amount_cents, currency, description, merchant,
+              merchant_canonical_id, category_id, source, occurred_at, image_key,
+              review_status
+  `;
+  return row ?? null;
 }

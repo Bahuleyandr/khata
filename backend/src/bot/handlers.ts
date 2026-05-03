@@ -36,7 +36,11 @@ import {
   findExpenseByContentHash,
   findExpenseByUpiRef,
   attachReceiptToExpense,
+  deleteExpense,
+  getExpenseForEdit,
 } from "../db/expenses.js";
+import { recordAuditEvent } from "../db/audit.js";
+import { resolveLedgerForTelegramUser } from "../db/access.js";
 import { getOverrides, upsertOverride } from "../db/overrides.js";
 import {
   getLearnedCategoryForMerchant,
@@ -57,7 +61,7 @@ import { transcribeVoice } from "../voice/transcribe.js";
 import { tryParseUpi, type UpiParse } from "../upi/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
-import { getPendingEdit, setPendingEdit } from "./session.js";
+import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } from "./session.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -112,11 +116,83 @@ function formatAmount(amount_cents: number, currency: string): string {
   return `${symbol}${amount.toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }
 
-function editKeyboard(expenseId: string): InlineKeyboard {
+function editActionData(action: string, ledgerUserId: number, expenseId: string): string {
+  return `${action}:${ledgerUserId}:${expenseId}`;
+}
+
+function editKeyboard(expenseId: string, ledgerUserId: number): InlineKeyboard {
   return new InlineKeyboard()
-    .text("Change Category", `editcat:${expenseId}`)
-    .text("Edit Amount", `editamt:${expenseId}`)
-    .text("Edit Date", `editdt:${expenseId}`);
+    .text("Change Category", editActionData("editcat", ledgerUserId, expenseId))
+    .text("Edit Amount", editActionData("editamt", ledgerUserId, expenseId))
+    .text("Edit Date", editActionData("editdt", ledgerUserId, expenseId))
+    .row()
+    .text("Delete Entry", editActionData("delexp", ledgerUserId, expenseId));
+}
+
+function backKeyboard(expenseId: string, ledgerUserId: number): InlineKeyboard {
+  return new InlineKeyboard().text("Back", editActionData("backedit", ledgerUserId, expenseId));
+}
+
+function deleteConfirmKeyboard(expenseId: string, ledgerUserId: number): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("Delete Entry", editActionData("confirmdel", ledgerUserId, expenseId))
+    .row()
+    .text("Back", editActionData("backedit", ledgerUserId, expenseId));
+}
+
+function pendingLedgerUserId(userId: number, pending?: PendingEdit): number {
+  return pending?.ledgerUserId ?? userId;
+}
+
+interface EditCallbackPayload {
+  ledgerUserId: number;
+  expenseId: string;
+}
+
+function parseEditCallbackPayload(data: string, action: string, fallbackLedgerUserId: number): EditCallbackPayload | null {
+  const prefix = `${action}:`;
+  if (!data.startsWith(prefix)) return null;
+  const body = data.slice(prefix.length);
+  const match = body.match(/^(-?\d+):(.+)$/);
+  if (match) {
+    const ledgerUserId = Number(match[1]);
+    if (!Number.isSafeInteger(ledgerUserId) || ledgerUserId === 0) return null;
+    return { ledgerUserId, expenseId: match[2]! };
+  }
+  return { ledgerUserId: fallbackLedgerUserId, expenseId: body };
+}
+
+async function resolveWritableCallbackLedger(
+  actorUserId: number,
+  ledgerUserId: number,
+): Promise<number | null> {
+  const access = await resolveLedgerForTelegramUser({
+    telegramUserId: actorUserId,
+    requestedLedgerId: ledgerUserId,
+    requireWrite: true,
+  });
+  return access?.ledgerId ?? null;
+}
+
+async function loadPendingEditForCallback(
+  ledgerUserId: number,
+  expenseId: string,
+  existing?: PendingEdit,
+): Promise<PendingEdit | null> {
+  if (existing?.expenseId === expenseId) {
+    return { ...existing, ledgerUserId, waitingFor: undefined };
+  }
+  const expense = await getExpenseForEdit(expenseId, ledgerUserId);
+  if (!expense) return null;
+  return {
+    expenseId,
+    ledgerUserId,
+    amount_cents: expense.amount_cents,
+    currency: expense.currency,
+    category: expense.category,
+    description: expense.description ?? "expense",
+    occurred_at: expense.occurred_at,
+  };
 }
 
 function paymentMethodLabel(app: UpiParse["app"]): string {
@@ -457,7 +533,7 @@ async function processUpiPayment(
   await ctx.reply(
     `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${methodLabel}_\n` +
       `Reply \`category: <name>\` or use the buttons.`,
-    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
+    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
 }
 
@@ -711,6 +787,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   const chatId = ctx.chat?.id;
   const pendingEdit = await getPendingEdit(userId);
+  const editLedgerUserId = pendingLedgerUserId(userId, pendingEdit);
 
   // "edit" shortcut — re-show edit keyboard for last logged expense
   if (text.toLowerCase() === "edit") {
@@ -720,7 +797,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     }
     await ctx.reply(
       `Editing: ${formatAmount(pendingEdit.amount_cents, pendingEdit.currency)} ${pendingEdit.description} — ${pendingEdit.category}`,
-      { reply_markup: editKeyboard(pendingEdit.expenseId) },
+      { reply_markup: editKeyboard(pendingEdit.expenseId, pendingLedgerUserId(userId, pendingEdit)) },
     );
     return;
   }
@@ -734,7 +811,12 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     }
     const amount_cents = Math.round(parseFloat(match[1]!) * 100);
     const currency = match[2]?.toUpperCase() ?? pendingEdit.currency;
-    const ok = await updateExpenseAmount(pendingEdit.expenseId, userId, amount_cents, currency);
+    const ok = await updateExpenseAmount(
+      pendingEdit.expenseId,
+      editLedgerUserId,
+      amount_cents,
+      currency,
+    );
     if (ok) {
       await setPendingEdit(userId, { ...pendingEdit, amount_cents, currency, waitingFor: undefined });
     }
@@ -750,7 +832,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       return;
     }
     const occurred_at = new Date(text + "T12:00:00Z");
-    const ok = await updateExpenseDate(pendingEdit.expenseId, userId, occurred_at);
+    const ok = await updateExpenseDate(pendingEdit.expenseId, editLedgerUserId, occurred_at);
     if (ok) {
       await setPendingEdit(userId, { ...pendingEdit, occurred_at, waitingFor: undefined });
     }
@@ -822,7 +904,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     }
     const attached: string[] = [];
     for (const name of names) {
-      const tagId = await getOrCreateTag(userId, name);
+      const tagId = await getOrCreateTag(editLedgerUserId, name);
       if (!tagId) continue;
       await attachTagToExpense(pendingEdit.expenseId, tagId);
       attached.push(name.toLowerCase().trim().replace(/\s+/g, " "));
@@ -846,7 +928,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       await ctx.reply("Usage: `untag: <name>`", { parse_mode: "Markdown" });
       return;
     }
-    const tag = await findTagByName(userId, name);
+    const tag = await findTagByName(editLedgerUserId, name);
     if (!tag) {
       await ctx.reply(`⚠️ Tag "${name}" not found.`);
       return;
@@ -863,20 +945,20 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       await ctx.reply("No recent expense to recategorize. Log one first.");
       return;
     }
-    const cat = await getCategoryByName(userId, catName);
+    const cat = await getCategoryByName(editLedgerUserId, catName);
     if (!cat) {
-      const allCats = await getUserCategories(userId);
+      const allCats = await getUserCategories(editLedgerUserId);
       await ctx.reply(
         `⚠️ "${catName}" not found. Your categories: ${allCats.map((c) => c.name).join(", ")}`,
       );
       return;
     }
-    const ok = await updateExpenseCategory(pendingEdit.expenseId, userId, cat.id);
+    const ok = await updateExpenseCategory(pendingEdit.expenseId, editLedgerUserId, cat.id);
     if (ok) {
-      await upsertOverride(userId, pendingEdit.description.toLowerCase(), cat.name).catch(
+      await upsertOverride(editLedgerUserId, pendingEdit.description.toLowerCase(), cat.name).catch(
         console.error,
       );
-      await rememberMerchantCategory(userId, pendingEdit.expenseId, cat.id);
+      await rememberMerchantCategory(editLedgerUserId, pendingEdit.expenseId, cat.id);
       await setPendingEdit(userId, { ...pendingEdit, category: cat.name });
     }
     await ctx.reply(ok ? `✅ Category updated to "${cat.name}"` : "⚠️ Failed to update category");
@@ -954,7 +1036,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   await ctx.reply(
     `Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${cat?.name ?? "Other"}. Reply edit to change.`,
-    { reply_markup: editKeyboard(expenseId) },
+    { reply_markup: editKeyboard(expenseId, userId) },
   );
 }
 
@@ -971,38 +1053,61 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   const pending = await getPendingEdit(userId);
 
   if (data.startsWith("editcat:")) {
-    const expenseId = data.slice(8);
-    if (pending) await setPendingEdit(userId, { ...pending, expenseId });
-    const cats = await getUserCategories(userId);
+    const payload = parseEditCallbackPayload(data, "editcat", userId);
+    if (!payload) {
+      await ctx.answerCallbackQuery("Invalid edit action");
+      return;
+    }
+    const ledgerUserId = await resolveWritableCallbackLedger(userId, payload.ledgerUserId);
+    if (!ledgerUserId) {
+      await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
+      return;
+    }
+    const nextPending = await loadPendingEditForCallback(
+      ledgerUserId,
+      payload.expenseId,
+      pending,
+    );
+    if (!nextPending) {
+      await ctx.answerCallbackQuery("Transaction not found");
+      return;
+    }
+    await setPendingEdit(userId, nextPending);
+    const cats = await getUserCategories(ledgerUserId);
     const keyboard = new InlineKeyboard();
     cats.forEach((c, i) => {
-      keyboard.text(c.name, `sc:${c.name}`);
+      keyboard.text(c.name, `sc:${c.id}`);
       if ((i + 1) % 3 === 0) keyboard.row();
     });
+    keyboard.row().text("Back", editActionData("backedit", ledgerUserId, payload.expenseId));
     await ctx.answerCallbackQuery();
     await ctx.reply("Select new category:", { reply_markup: keyboard });
     return;
   }
 
   if (data.startsWith("sc:")) {
-    const catName = data.slice(3);
     if (!pending) {
       await ctx.answerCallbackQuery("Session expired — log an expense first");
       return;
     }
-    const cat = await getCategoryByName(userId, catName);
+    const ledgerUserId = pendingLedgerUserId(userId, pending);
+    const catSelector = data.slice(3);
+    const cats = await getUserCategories(ledgerUserId);
+    const cat =
+      cats.find((candidate) => candidate.id === catSelector) ??
+      (await getCategoryByName(ledgerUserId, catSelector));
     if (!cat) {
       await ctx.answerCallbackQuery("Category not found");
       return;
     }
-    const ok = await updateExpenseCategory(pending.expenseId, userId, cat.id);
+    const ok = await updateExpenseCategory(pending.expenseId, ledgerUserId, cat.id);
     if (ok) {
       if (pending.description && cat.name !== pending.category) {
-        await upsertOverride(userId, pending.description.toLowerCase(), cat.name).catch(
+        await upsertOverride(ledgerUserId, pending.description.toLowerCase(), cat.name).catch(
           console.error,
         );
       }
-      await rememberMerchantCategory(userId, pending.expenseId, cat.id);
+      await rememberMerchantCategory(ledgerUserId, pending.expenseId, cat.id);
       await setPendingEdit(userId, { ...pending, category: cat.name });
     }
     await ctx.answerCallbackQuery();
@@ -1011,16 +1116,135 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   }
 
   if (data.startsWith("editamt:")) {
-    if (pending) await setPendingEdit(userId, { ...pending, waitingFor: "amount" });
+    const payload = parseEditCallbackPayload(data, "editamt", userId);
+    if (!payload) {
+      await ctx.answerCallbackQuery("Invalid edit action");
+      return;
+    }
+    const ledgerUserId = await resolveWritableCallbackLedger(userId, payload.ledgerUserId);
+    if (!ledgerUserId) {
+      await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
+      return;
+    }
+    const nextPending = await loadPendingEditForCallback(
+      ledgerUserId,
+      payload.expenseId,
+      pending,
+    );
+    if (!nextPending) {
+      await ctx.answerCallbackQuery("Transaction not found");
+      return;
+    }
+    await setPendingEdit(userId, { ...nextPending, waitingFor: "amount" });
     await ctx.answerCallbackQuery();
-    await ctx.reply("Enter new amount (e.g. `200` or `200 USD`):");
+    await ctx.reply("Enter new amount (e.g. `200` or `200 USD`):", {
+      reply_markup: backKeyboard(payload.expenseId, ledgerUserId),
+    });
     return;
   }
 
   if (data.startsWith("editdt:")) {
-    if (pending) await setPendingEdit(userId, { ...pending, waitingFor: "date" });
+    const payload = parseEditCallbackPayload(data, "editdt", userId);
+    if (!payload) {
+      await ctx.answerCallbackQuery("Invalid edit action");
+      return;
+    }
+    const ledgerUserId = await resolveWritableCallbackLedger(userId, payload.ledgerUserId);
+    if (!ledgerUserId) {
+      await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
+      return;
+    }
+    const nextPending = await loadPendingEditForCallback(
+      ledgerUserId,
+      payload.expenseId,
+      pending,
+    );
+    if (!nextPending) {
+      await ctx.answerCallbackQuery("Transaction not found");
+      return;
+    }
+    await setPendingEdit(userId, { ...nextPending, waitingFor: "date" });
     await ctx.answerCallbackQuery();
-    await ctx.reply("Enter new date (YYYY-MM-DD, e.g. `2026-04-26`):");
+    await ctx.reply("Enter new date (YYYY-MM-DD, e.g. `2026-04-26`):", {
+      reply_markup: backKeyboard(payload.expenseId, ledgerUserId),
+    });
+    return;
+  }
+
+  if (data.startsWith("delexp:")) {
+    const payload = parseEditCallbackPayload(data, "delexp", userId);
+    if (!payload) {
+      await ctx.answerCallbackQuery("Invalid delete action");
+      return;
+    }
+    const ledgerUserId = await resolveWritableCallbackLedger(userId, payload.ledgerUserId);
+    if (!ledgerUserId) {
+      await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    await ctx.reply("Delete this entry? This cannot be undone from Telegram.", {
+      reply_markup: deleteConfirmKeyboard(payload.expenseId, ledgerUserId),
+    });
+    return;
+  }
+
+  if (data.startsWith("confirmdel:")) {
+    const payload = parseEditCallbackPayload(data, "confirmdel", userId);
+    if (!payload) {
+      await ctx.answerCallbackQuery("Invalid delete action");
+      return;
+    }
+    const ledgerUserId = await resolveWritableCallbackLedger(userId, payload.ledgerUserId);
+    if (!ledgerUserId) {
+      await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
+      return;
+    }
+    const deleted = await deleteExpense(payload.expenseId, ledgerUserId);
+    if (!deleted) {
+      await ctx.answerCallbackQuery("Transaction not found");
+      return;
+    }
+    await recordAuditEvent({
+      userId: ledgerUserId,
+      actorUserId: userId,
+      action: "expense.delete",
+      entityType: "expense",
+      entityId: deleted.id,
+      before: deleted,
+      metadata: { source: "telegram" },
+    });
+    if (pending?.expenseId === payload.expenseId) {
+      await clearPendingEdit(userId);
+    }
+    if (ledgerUserId !== userId) {
+      await clearPendingEdit(ledgerUserId).catch(console.error);
+    }
+    await ctx.answerCallbackQuery("Deleted");
+    await ctx.reply("🗑️ Entry deleted.");
+    return;
+  }
+
+  if (data.startsWith("backedit:")) {
+    const payload = parseEditCallbackPayload(data, "backedit", userId);
+    if (!payload) {
+      await ctx.answerCallbackQuery("Invalid edit action");
+      return;
+    }
+    const ledgerUserId = await resolveWritableCallbackLedger(userId, payload.ledgerUserId);
+    if (!ledgerUserId) {
+      await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
+      return;
+    }
+    const nextPending =
+      (await loadPendingEditForCallback(ledgerUserId, payload.expenseId, pending)) ?? pending;
+    if (nextPending) {
+      await setPendingEdit(userId, { ...nextPending, ledgerUserId, waitingFor: undefined });
+    }
+    await ctx.answerCallbackQuery("No changes made");
+    await ctx.reply("No changes made. Choose another action:", {
+      reply_markup: editKeyboard(payload.expenseId, ledgerUserId),
+    });
     return;
   }
 
@@ -1164,7 +1388,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     `✅ Receipt logged: ${formatAmount(amount_cents, parsed.currency)}${merchantPart} — ${cat?.name ?? "Other"}\n` +
       `Date: ${parsed.occurred_at}\n\n` +
       `Reply \`category: <name>\` to change category, or use the buttons below.`,
-    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
+    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
 }
 
@@ -1305,7 +1529,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
 
   await ctx.reply(
     `✅ Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${cat?.name ?? "Other"}. Reply \`edit\` to change.`,
-    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId) },
+    { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
 }
 

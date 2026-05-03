@@ -2,6 +2,7 @@ import { sql } from "../db/index.js";
 
 export interface PendingEdit {
   expenseId: string;
+  ledgerUserId?: number;
   amount_cents: number;
   currency: string;
   category: string;
