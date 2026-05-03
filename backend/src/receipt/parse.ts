@@ -1,7 +1,7 @@
 import type { ParsedExpense } from "../ai/parse.js";
 
 const RECEIPT_SIGNAL =
-  /\b(?:receipt|tax\s+invoice|invoice|gstin|cgst|sgst|subtotal|sub\s*total|grand\s+total|payment\s+due|amount\s+due|check\s+closed|credit\s+card|cash|take[-\s]?out)\b/i;
+  /\b(?:receipt|tax\s+invoice|invoice|gstin|cgst|sgst|subtotal|sub\s*total|grand\s+total|payment\s+due|amount\s+due|check\s+closed|credit\s+card|cash|take[-\s]?out|hms\s*host|change\s+due|chk)\b/i;
 
 const STRONG_TOTAL_LABEL =
   /\b(?:payment\s+due|amount\s+due|grand\s+total|net\s+amount|total\s+amount|total\s+payable|balance\s+due|change\s+due)\b/i;
@@ -138,8 +138,17 @@ function parseTotalAmount(lines: string[]): number | null {
     highestLabeledAmount(lines, STRONG_TOTAL_LABEL) ??
     highestLabeledAmount(lines, TOTAL_LABEL) ??
     highestLabeledAmount(lines, PAYMENT_LABEL) ??
-    highestLabeledAmount(lines, SUBTOTAL_LABEL)
+    highestLabeledAmount(lines, SUBTOTAL_LABEL) ??
+    highestReceiptAmount(lines)
   );
+}
+
+function highestReceiptAmount(lines: string[]): number | null {
+  const values = lines.flatMap((line) => [
+    ...parseCurrencyAmounts(line),
+    ...parseBareAmounts(line),
+  ]);
+  return values.length > 0 ? Math.max(...values) : null;
 }
 
 function extractMerchant(lines: string[]): string | null {

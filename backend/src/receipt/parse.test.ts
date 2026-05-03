@@ -67,6 +67,32 @@ describe("tryParseReceiptText", () => {
     expect(parsed?.occurred_at).toBe("2026-04-30");
   });
 
+  it("falls back to the largest receipt amount when total labels are mangled", () => {
+    const text = [
+      "HMSHost Services India Pvt Ltd",
+      "Kempegowda International Airport",
+      "THIS IS A TAX INVOICE",
+      "30 Apr '26 19:41",
+      "Take-Out",
+      "Evian BTL 0.5",
+      "152.40",
+      "Card",
+      "160.00",
+      "CGST 2.5%",
+      "3.81",
+      "SGST 2.5%",
+      "3.81",
+      "Rounding",
+      "0.02",
+      "Change",
+      "0.00",
+    ].join("\n");
+
+    const parsed = tryParseReceiptText(text, categories, "2026-05-03");
+    expect(parsed?.amount).toBe(160);
+    expect(parsed?.merchant).toBe("HMSHost Services India Pvt Ltd");
+  });
+
   it("parses simple retail receipts with currency-prefixed totals", () => {
     const text = [
       "STARBUCKS",
