@@ -936,6 +936,61 @@ describe("handlePhoto — receipt pipeline", () => {
     expect(lastReply).toContain("GEE GEE MINAR");
   });
 
+  it("logs airport POS tax invoice photos through the receipt text fallback", async () => {
+    stubFetch();
+    const ocrText = [
+      "HMSHost Services India Pvt Ltd",
+      "Cones The Groove Dom T1",
+      "Kempegowda International Airport,",
+      "Devanahalli, Karnataka, Bengaluru",
+      "THIS IS A TAX INVOICE",
+      "910040871 Vivek",
+      "M/S#: 100012",
+      "CHK 674817",
+      "30 Apr'26 19:41 PM",
+      "Take-Out",
+      "1 Evian BTL 0.5 INR152.40",
+      "Credit Card INR160.00",
+      "Subtotal INR152.40",
+      "CGST 2.5% INR3.81",
+      "SGST 2.5% INR3.81",
+      "Rounding INR0.02",
+      "Payment Due INR160.00",
+      "Change Due INR0.00",
+    ].join("\n");
+    vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValueOnce(ocrText);
+    vi.mocked(mockAI.parseExpense).mockResolvedValueOnce(null);
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "photo-id-1", width: 1280, height: 960, file_size: 98304 }],
+      } as Context["message"],
+    });
+
+    await handlePhoto(ctx);
+
+    expect(vi.mocked(mockAI.parseExpense)).not.toHaveBeenCalled();
+    expect(vi.mocked(mockExpenses.insertExpense)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount_cents: 16000,
+        currency: "INR",
+        description: "HMSHost Services India Pvt Ltd receipt",
+        merchant: "HMSHost Services India Pvt Ltd",
+        source: "receipt",
+        raw_text: ocrText,
+        review_status: "needs_review",
+        image_key: expect.stringMatching(/^receipts\/111111\//),
+        content_hash: expect.any(String),
+      }),
+    );
+    const payload = vi.mocked(mockExpenses.insertExpense).mock.calls[0]![0] as {
+      occurred_at: Date;
+    };
+    expect(payload.occurred_at.toISOString().slice(0, 10)).toBe("2026-04-30");
+    const lastReply = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as string;
+    expect(lastReply).toContain("Receipt logged");
+    expect(lastReply).toContain("HMSHost Services");
+  });
+
   it("skips duplicate image and does not insert an expense", async () => {
     vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValueOnce("existing-expense-id");
     stubFetch();
@@ -966,6 +1021,9 @@ describe("handlePhoto — receipt pipeline", () => {
 
   it("replies gracefully when image is not a receipt", async () => {
     stubFetch();
+    vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValueOnce(
+      "A blurry photo of luggage with no printed bill or payment details.",
+    );
     vi.mocked(mockAI.parseExpense).mockResolvedValueOnce(null);
     const ctx = makeCtx({
       message: {

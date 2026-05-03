@@ -61,6 +61,7 @@ import { transcribeVoice } from "../voice/transcribe.js";
 import { tryParseUpi, type UpiParse } from "../upi/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
+import { tryParseReceiptText } from "../receipt/parse.js";
 import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } from "./session.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1320,20 +1321,26 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
-  // Otherwise: traditional retail receipts go through the LLM (better at
-  // category inference and free-form merchant strings).
+  // Otherwise: traditional retail receipts first get a deterministic POS
+  // receipt pass. If that misses, fall back to the LLM for messier layouts.
   await seedDefaultCategories(userId).catch(console.error);
   const [cats, overrides] = await Promise.all([getUserCategories(userId), getOverrides(userId)]);
 
-  let parsed;
-  try {
-    parsed = await parseExpense(ocrText, cats.map((c) => c.name), overrides, todayString());
-  } catch (err) {
-    console.error("Receipt parse error:", err);
-    await ctx.reply(
-      "⚠️ Could not extract expense details from this image. Is this a receipt or bill? Try a clearer photo.",
-    );
-    return;
+  let parsed = tryParseReceiptText(
+    ocrText,
+    cats.map((c) => c.name),
+    todayString(),
+  );
+  if (!parsed) {
+    try {
+      parsed = await parseExpense(ocrText, cats.map((c) => c.name), overrides, todayString());
+    } catch (err) {
+      console.error("Receipt parse error:", err);
+      await ctx.reply(
+        "⚠️ Could not extract expense details from this image. Is this a receipt or bill? Try a clearer photo.",
+      );
+      return;
+    }
   }
 
   if (!parsed) {
