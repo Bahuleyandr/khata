@@ -71,7 +71,7 @@ export async function understandImage(input: UnderstandImageInput): Promise<stri
     result = await client.callTool({
       name: "understand_image",
       arguments: {
-        image_url: input.imagePath,
+        image_source: input.imagePath,
         prompt: input.prompt,
       },
     });
@@ -91,7 +91,12 @@ export async function understandImage(input: UnderstandImageInput): Promise<stri
   if (textParts.length === 0) {
     throw new Error("understand_image returned no text content");
   }
-  return textParts.join("\n");
+  const text = textParts.join("\n");
+  if (/^Error executing tool understand_image:/i.test(text.trim())) {
+    await shutdownMcp();
+    throw new Error(text.trim());
+  }
+  return text;
 }
 
 /** Cleanly shut down the MCP subprocess. Idempotent. */
