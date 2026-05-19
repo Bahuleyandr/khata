@@ -1,4 +1,4 @@
-FROM node:22.22.2-bookworm-slim AS builder
+FROM node:22.22.3-bookworm-slim AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -6,7 +6,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
-FROM node:22.22.2-bookworm-slim AS runner
+FROM node:22.22.3-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ARG MINIMAX_MCP_VERSION=0.0.4
