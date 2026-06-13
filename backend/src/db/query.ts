@@ -23,6 +23,15 @@ export interface TopExpense {
   category: string | null;
 }
 
+export interface TopMerchant {
+  merchant: string;
+  total_cents: string;
+  currency: string;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
 export async function totalSpendInCategory(
   userId: number,
   category: string | undefined,
@@ -87,6 +96,31 @@ export async function spendByCategory(
       AND e.occurred_at < (${end}::date + INTERVAL '1 day')
     GROUP BY c.name, e.currency
     ORDER BY SUM(e.amount_cents) DESC
+  `;
+}
+
+export async function topMerchants(
+  userId: number,
+  start: string,
+  end: string,
+  limit: number,
+): Promise<TopMerchant[]> {
+  return sql<TopMerchant[]>`
+    SELECT
+      COALESCE(NULLIF(mc.name, ''), NULLIF(e.merchant, ''), NULLIF(e.description, ''), 'Unknown') AS merchant,
+      SUM(e.amount_cents)::text AS total_cents,
+      e.currency,
+      COUNT(*)::int AS count,
+      MIN(e.occurred_at)::date::text AS first_seen,
+      MAX(e.occurred_at)::date::text AS last_seen
+    FROM expenses e
+    LEFT JOIN merchants_canonical mc ON e.merchant_canonical_id = mc.id
+    WHERE e.user_id = ${userId}
+      AND e.occurred_at >= ${start}::date
+      AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+    GROUP BY merchant, e.currency
+    ORDER BY SUM(e.amount_cents) DESC, COUNT(*) DESC
+    LIMIT ${limit}
   `;
 }
 

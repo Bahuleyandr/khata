@@ -15,6 +15,8 @@ import {
   handleDeleteCategory,
   handleListExpenses,
   handleMonthSummary,
+  handleTopExpenses,
+  handleTopMerchants,
   handleNeedsReview,
   handleSubscriptions,
   handleListTags,
@@ -84,6 +86,8 @@ bot.command("delete", handleDeleteCategory);
 bot.command("expenses", handleListExpenses);
 bot.command("month", handleMonthSummary);
 bot.command("summary", handleMonthSummary);
+bot.command("top", handleTopExpenses);
+bot.command("merchants", handleTopMerchants);
 bot.command("review", handleNeedsReview);
 bot.command("needs_review", handleNeedsReview);
 bot.command("subscriptions", handleSubscriptions);

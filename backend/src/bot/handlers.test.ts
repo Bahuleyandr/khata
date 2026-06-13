@@ -32,6 +32,41 @@ vi.mock("../db/index.js", () => ({
   sql: Object.assign(vi.fn().mockResolvedValue([{ id: "stmt-id-1" }]), { unsafe: vi.fn() }),
 }));
 
+vi.mock("../export/xlsx.js", () => ({
+  currentMonthBounds: (year: number, month: number) => {
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const start = `${year}-${String(month).padStart(2, "0")}-01`;
+    const end = `${year}-${String(month).padStart(2, "0")}-${lastDay}`;
+    const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+    return { start, end, label, rangeKey: `${year}-${String(month).padStart(2, "0")}` };
+  },
+  previousMonthBounds: (now: Date = new Date()) => {
+    const firstOfThis = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const lastOfPrev = new Date(firstOfThis.getTime() - 24 * 60 * 60 * 1000);
+    const year = lastOfPrev.getUTCFullYear();
+    const month = lastOfPrev.getUTCMonth() + 1;
+    const start = `${year}-${String(month).padStart(2, "0")}-01`;
+    const end = `${year}-${String(month).padStart(2, "0")}-${lastOfPrev.getUTCDate()}`;
+    const label = lastOfPrev.toLocaleString("en-US", {
+      month: "long",
+      year: "numeric",
+      timeZone: "UTC",
+    });
+    return { start, end, label, rangeKey: `${year}-${String(month).padStart(2, "0")}` };
+  },
+  buildMonthlyXlsx: vi.fn().mockResolvedValue({
+    buffer: Buffer.from("xlsx"),
+    filename: "khata-2026-04.xlsx",
+    rowCount: 2,
+    totalCents: 30100,
+    currency: "INR",
+  }),
+}));
+
 vi.mock("../statement/parser.js", () => ({
   parseStatementBuffer: vi.fn().mockResolvedValue([
     {
@@ -276,6 +311,24 @@ vi.mock("../db/query.js", () => ({
     { category: "Food", total_cents: "452300", currency: "INR", count: 12 },
     { category: "Transport", total_cents: "210000", currency: "INR", count: 5 },
   ]),
+  topMerchants: vi.fn().mockResolvedValue([
+    {
+      merchant: "Swiggy",
+      total_cents: "240000",
+      currency: "INR",
+      count: 3,
+      first_seen: "2026-04-01",
+      last_seen: "2026-04-29",
+    },
+    {
+      merchant: "AmEx",
+      total_cents: "1990000",
+      currency: "INR",
+      count: 1,
+      first_seen: "2026-04-28",
+      last_seen: "2026-04-28",
+    },
+  ]),
   findSubscriptionCandidates: vi.fn().mockResolvedValue([
     {
       merchant_key: "github",
@@ -311,12 +364,19 @@ import {
   handleDeleteCategory,
   handleBudget,
   handleSubscriptions,
+  handleListExpenses,
+  handleMonthSummary,
+  handleTopExpenses,
+  handleTopMerchants,
+  handleExport,
   handleTextMessage,
   handleCallbackQuery,
   handleDocument,
   handlePhoto,
 } from "./handlers.js";
 import { clearPendingImport } from "../statement/session.js";
+import { sql as mockSql } from "../db/index.js";
+import * as mockXlsx from "../export/xlsx.js";
 import * as mockAI from "../ai/parse.js";
 import * as mockQuery from "../db/query.js";
 import * as mockExpenses from "../db/expenses.js";
@@ -324,10 +384,13 @@ import * as mockOcr from "../receipt/ocr.js";
 import * as mockBudgets from "../db/budgets.js";
 import * as mockAudit from "../db/audit.js";
 
+const sqlMock = mockSql as unknown as ReturnType<typeof vi.fn>;
+
 function makeCtx(overrides: Partial<Context> = {}): Context {
   return {
     reply: vi.fn().mockResolvedValue(undefined),
     answerCallbackQuery: vi.fn().mockResolvedValue(undefined),
+    replyWithDocument: vi.fn().mockResolvedValue(undefined),
     message: undefined,
     from: { id: 111111 },
     chat: { id: 111111 },
@@ -341,6 +404,14 @@ beforeEach(() => {
   importStore.clear();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  sqlMock.mockResolvedValue([{ id: "stmt-id-1" }]);
+  vi.mocked(mockXlsx.buildMonthlyXlsx).mockResolvedValue({
+    buffer: Buffer.from("xlsx"),
+    filename: "khata-2026-04.xlsx",
+    rowCount: 2,
+    totalCents: 30100,
+    currency: "INR",
+  });
   // Restore default mocks after clearAllMocks wipes mockReturnValueOnce queues
   vi.mocked(mockExpenses.getExpenseForEdit).mockResolvedValue({
     id: "exp-1",
@@ -426,6 +497,24 @@ beforeEach(() => {
   vi.mocked(mockQuery.spendByCategory).mockResolvedValue([
     { category: "Food", total_cents: "452300", currency: "INR", count: 12 },
     { category: "Transport", total_cents: "210000", currency: "INR", count: 5 },
+  ]);
+  vi.mocked(mockQuery.topMerchants).mockResolvedValue([
+    {
+      merchant: "Swiggy",
+      total_cents: "240000",
+      currency: "INR",
+      count: 3,
+      first_seen: "2026-04-01",
+      last_seen: "2026-04-29",
+    },
+    {
+      merchant: "AmEx",
+      total_cents: "1990000",
+      currency: "INR",
+      count: 1,
+      first_seen: "2026-04-28",
+      last_seen: "2026-04-28",
+    },
   ]);
 });
 
@@ -1168,6 +1257,131 @@ describe("handleTextMessage — category: shortcut", () => {
     await handleTextMessage(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text.toLowerCase()).toContain("no recent expense");
+  });
+});
+
+describe("Telegram power commands", () => {
+  it("summarizes a requested month with merchants, largest spends, and export button", async () => {
+    sqlMock.mockResolvedValueOnce([
+      {
+        total_cents: "662300",
+        transaction_count: 17,
+        needs_review_count: 2,
+        uncategorized_count: 1,
+      },
+    ]);
+    const ctx = makeCtx({ match: "2026-04" } as Partial<Context>);
+
+    await handleMonthSummary(ctx);
+
+    expect(vi.mocked(mockQuery.spendByCategory)).toHaveBeenCalledWith(
+      111111,
+      "2026-04-01",
+      "2026-04-30",
+    );
+    expect(vi.mocked(mockQuery.topMerchants)).toHaveBeenCalledWith(
+      111111,
+      "2026-04-01",
+      "2026-04-30",
+      3,
+    );
+    const [text, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(text).toContain("April 2026");
+    expect(text).toContain("Top merchants");
+    expect(text).toContain("Largest spends");
+    expect(JSON.stringify(options.reply_markup)).toContain("xprt:111111:2026-04");
+  });
+
+  it("lists expenses for an explicit month and includes an export action", async () => {
+    sqlMock
+      .mockResolvedValueOnce([
+        {
+          id: "exp-1",
+          occurred_at: new Date("2026-04-29T12:00:00Z"),
+          amount_cents: "30100",
+          currency: "INR",
+          description: "PAYU SWIGGY",
+          merchant: "PAYU SWIGGY",
+          category: "Food",
+        },
+      ])
+      .mockResolvedValueOnce([]);
+    const ctx = makeCtx({ match: "2026-04" } as Partial<Context>);
+
+    await handleListExpenses(ctx);
+
+    const [text, options] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      { reply_markup?: unknown },
+    ];
+    expect(text).toContain("April 2026");
+    expect(text).toContain("PAYU SWIGGY");
+    expect(JSON.stringify(options.reply_markup)).toContain("Download Excel");
+  });
+
+  it("returns deterministic top expenses without using the LLM", async () => {
+    const ctx = makeCtx({ match: "2 2026-04" } as Partial<Context>);
+
+    await handleTopExpenses(ctx);
+
+    expect(vi.mocked(mockQuery.topExpenses)).toHaveBeenCalledWith(
+      111111,
+      "2026-04-01",
+      "2026-04-30",
+      2,
+    );
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Top 2 expenses");
+    expect(text).toContain("Swiggy");
+    expect(vi.mocked(mockAI.classifyMessage)).not.toHaveBeenCalled();
+  });
+
+  it("returns deterministic top merchants", async () => {
+    const ctx = makeCtx({ match: "10 2026-04" } as Partial<Context>);
+
+    await handleTopMerchants(ctx);
+
+    expect(vi.mocked(mockQuery.topMerchants)).toHaveBeenCalledWith(
+      111111,
+      "2026-04-01",
+      "2026-04-30",
+      10,
+    );
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Top 2 merchants");
+    expect(text).toContain("Swiggy");
+  });
+
+  it("sends an Excel document for /export YYYY-MM", async () => {
+    const ctx = makeCtx({ match: "2026-04" } as Partial<Context>);
+
+    await handleExport(ctx);
+
+    expect(vi.mocked(mockXlsx.buildMonthlyXlsx)).toHaveBeenCalledWith(
+      111111,
+      "2026-04-01",
+      "2026-04-30",
+      "2026-04",
+    );
+    expect(ctx.replyWithDocument).toHaveBeenCalledOnce();
+  });
+
+  it("handles inline export callbacks with ledger permission checks", async () => {
+    const ctx = makeCtx({ callbackQuery: { data: "xprt:111111:2026-04" } } as Partial<Context>);
+
+    await handleCallbackQuery(ctx);
+
+    expect(ctx.answerCallbackQuery).toHaveBeenCalledWith("Generating export");
+    expect(vi.mocked(mockXlsx.buildMonthlyXlsx)).toHaveBeenCalledWith(
+      111111,
+      "2026-04-01",
+      "2026-04-30",
+      "2026-04",
+    );
+    expect(ctx.replyWithDocument).toHaveBeenCalledOnce();
   });
 });
 

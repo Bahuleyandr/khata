@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { InlineKeyboard, InputFile } from "grammy";
 import type { Context } from "grammy";
 import { uploadStatement } from "../storage/index.js";
-import { buildMonthlyXlsx, currentMonthBounds } from "../export/xlsx.js";
+import { buildMonthlyXlsx, currentMonthBounds, previousMonthBounds } from "../export/xlsx.js";
 import { sql } from "../db/index.js";
 import { parseStatementBuffer } from "../statement/parser.js";
 import { dedupeTransactions } from "../statement/dedup.js";
@@ -68,7 +68,13 @@ import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js"
 import { chatWithData } from "../ai/chat.js";
 import { transcribeVoice } from "../voice/transcribe.js";
 import { tryParseUpi, type UpiParse } from "../upi/parse.js";
-import { totalSpendInCategory, topExpenses, spendByCategory, findSubscriptionCandidates } from "../db/query.js";
+import {
+  totalSpendInCategory,
+  topExpenses,
+  topMerchants,
+  spendByCategory,
+  findSubscriptionCandidates,
+} from "../db/query.js";
 import { listSubscriptionRecords, summarizeSubscriptionRecords } from "../db/subscription-records.js";
 import { convertCents, getFxRatesForCurrencies } from "../fx/rates.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
@@ -79,6 +85,95 @@ import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } fr
 
 function todayString(): string {
   return new Date().toISOString().split("T")[0]!;
+}
+
+interface CommandPeriod {
+  start: string;
+  end: string;
+  label: string;
+  rangeKey: string;
+  isCurrentMonth: boolean;
+}
+
+function toCommandPeriod(bounds: ReturnType<typeof currentMonthBounds>, isCurrentMonth: boolean): CommandPeriod {
+  return {
+    start: bounds.start,
+    end: bounds.end,
+    label: bounds.label,
+    rangeKey: bounds.rangeKey,
+    isCurrentMonth,
+  };
+}
+
+function isValidDateOnly(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  if (year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
+    return false;
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+function parseCommandPeriod(args: string, now: Date = new Date()): CommandPeriod | null {
+  const trimmed = args.trim().toLowerCase();
+  const current = currentMonthBounds(now.getFullYear(), now.getMonth() + 1);
+  if (!trimmed || trimmed === "this" || trimmed === "this month" || trimmed === "current") {
+    return toCommandPeriod(current, true);
+  }
+  if (
+    trimmed === "last" ||
+    trimmed === "last month" ||
+    trimmed === "previous" ||
+    trimmed === "prev"
+  ) {
+    return toCommandPeriod(previousMonthBounds(now), false);
+  }
+
+  const monthMatch = trimmed.match(/^(\d{4})-(\d{2})$/);
+  if (monthMatch) {
+    const year = Number(monthMatch[1]);
+    const month = Number(monthMatch[2]);
+    if (year < 2000 || year > 2100 || month < 1 || month > 12) return null;
+    return toCommandPeriod(currentMonthBounds(year, month), current.rangeKey === trimmed);
+  }
+
+  const rangeMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})$/);
+  if (rangeMatch) {
+    const start = rangeMatch[1]!;
+    const end = rangeMatch[2]!;
+    if (!isValidDateOnly(start) || !isValidDateOnly(end) || start > end) return null;
+    return {
+      start,
+      end,
+      label: `${start} -> ${end}`,
+      rangeKey: `${start}_${end}`,
+      isCurrentMonth: false,
+    };
+  }
+
+  return null;
+}
+
+function parseCommandPeriodKey(rangeKey: string, now: Date = new Date()): CommandPeriod | null {
+  return parseCommandPeriod(rangeKey.replace("_", " "), now);
+}
+
+function parseLimitAndPeriod(
+  args: string,
+  defaultLimit: number,
+  maxLimit: number,
+): { limit: number; period: CommandPeriod | null; invalidPeriod: boolean } {
+  const trimmed = args.trim();
+  const match = trimmed.match(/^(\d{1,2})(?:\s+(.+))?$/);
+  const limit = match ? Math.min(Math.max(Number(match[1]), 1), maxLimit) : defaultLimit;
+  const periodText = match ? (match[2] ?? "") : trimmed;
+  const period = parseCommandPeriod(periodText);
+  return { limit, period, invalidPeriod: Boolean(periodText.trim()) && !period };
 }
 
 function actorUserId(ctx: Context): number {
@@ -146,6 +241,21 @@ function formatAmount(amount_cents: number, currency: string): string {
 
 function editActionData(action: string, ledgerUserId: number, expenseId: string): string {
   return `${action}:${ledgerUserId}:${expenseId}`;
+}
+
+function exportActionData(ledgerUserId: number, rangeKey: string): string {
+  return `xprt:${ledgerUserId}:${rangeKey}`;
+}
+
+function commandKeyboard(ledgerUserId: number, period: CommandPeriod): InlineKeyboard {
+  const keyboard = new InlineKeyboard().text(
+    "Download Excel",
+    exportActionData(ledgerUserId, period.rangeKey),
+  );
+  if (config.miniAppUrl) {
+    keyboard.row().webApp("Open Dashboard", config.miniAppUrl);
+  }
+  return keyboard;
 }
 
 function editKeyboard(expenseId: string, ledgerUserId: number): InlineKeyboard {
@@ -373,7 +483,9 @@ export async function handleStart(ctx: Context): Promise<void> {
       '• "paid 1200 inr for uber yesterday"\n\n' +
       "Or upload a bank statement PDF/photo and I'll parse it automatically.\n\n" +
       "Commands:\n" +
-      "/month — this month's spend so far\n" +
+      "/month — this month's spend so far (`/month last` or `/month 2026-04`)\n" +
+      "/top — biggest spends for a month\n" +
+      "/merchants — top merchants for a month\n" +
       "/review — transactions that need cleanup\n" +
       "/subscriptions — recurring payments\n" +
       "/export — download this month as Excel\n" +
@@ -399,11 +511,13 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "Untag with `untag: <name>`.\n\n" +
       "*Commands:*\n" +
       "/ask <question> — ask anything about your spending\n" +
-      "/month or /summary — this month's spend so far\n" +
+      "/month or /summary — spend summary (`/month last`, `/month 2026-04`)\n" +
+      "/top [n] [period] — biggest spends (`/top 5 last`)\n" +
+      "/merchants [n] [period] — top merchants (`/merchants 10 2026-04`)\n" +
       "/review or /needs_review — cleanup queue\n" +
       "/subscriptions — recurring payments and renewal watch\n" +
-      "/expenses — list expenses from the 1st of the month till today\n" +
-      "/export — download this month as Excel (or `/export YYYY-MM`)\n" +
+      "/expenses [period] — list expenses (`/expenses last`, `/expenses 2026-04`)\n" +
+      "/export [period] — download Excel (`/export last`, `/export YYYY-MM`)\n" +
       "/dashboard — open the dashboard Mini App\n" +
       "/tags — list your tags with counts\n" +
       "/categories — list your categories\n" +
@@ -691,12 +805,13 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
 
-  const now = new Date();
-  const monthStartStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const endStr = tomorrow.toISOString().substring(0, 10);
-  const monthLabel = now.toLocaleString("en-US", { month: "long", year: "numeric" });
+  const period = parseCommandPeriod((ctx.match?.toString() ?? "").trim());
+  if (!period) {
+    await ctx.reply("Usage: `/expenses`, `/expenses last`, or `/expenses 2026-04`", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
 
   const rows = await sql<ExpenseListRow[]>`
     SELECT e.id,
@@ -709,13 +824,13 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     FROM expenses e
     LEFT JOIN categories c ON e.category_id = c.id
     WHERE e.user_id = ${userId}
-      AND e.occurred_at >= ${monthStartStr}::date
-      AND e.occurred_at < ${endStr}::date
+      AND e.occurred_at >= ${period.start}::date
+      AND e.occurred_at < (${period.end}::date + INTERVAL '1 day')
     ORDER BY e.occurred_at DESC, e.created_at DESC
   `;
 
   if (rows.length === 0) {
-    await ctx.reply(`No expenses logged in ${monthLabel} yet.`);
+    await ctx.reply(`No expenses logged in ${period.label}${period.isCurrentMonth ? " yet" : ""}.`);
     return;
   }
 
@@ -756,7 +871,7 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
   });
 
   const noun = rows.length === 1 ? "expense" : "expenses";
-  const header = `📊 *${monthLabel} — ${rows.length} ${noun}, ${totalStr}*\n\n`;
+  const header = `📊 *${period.label} — ${rows.length} ${noun}, ${totalStr}*\n\n`;
   const categorySection = `*By category:*\n${categoryLines}\n\n`;
 
   // Telegram caps a single message at 4096 chars; leave a safety margin.
@@ -779,17 +894,25 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     }
     individualBody =
       acc.trimEnd() +
-      `\n\n_…showing ${kept} of ${rows.length} entries. Use /export for full CSV._`;
+      `\n\n_...showing ${kept} of ${rows.length} entries. Use /export ${period.rangeKey} for full Excel._`;
   }
 
-  await ctx.reply(header + categorySection + individualBody, { parse_mode: "Markdown" });
+  await ctx.reply(header + categorySection + individualBody, {
+    parse_mode: "Markdown",
+    reply_markup: commandKeyboard(userId, period),
+  });
 }
 
 export async function handleMonthSummary(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  const now = new Date();
-  const bounds = currentMonthBounds(now.getFullYear(), now.getMonth() + 1);
+  const period = parseCommandPeriod((ctx.match?.toString() ?? "").trim());
+  if (!period) {
+    await ctx.reply("Usage: `/month`, `/month last`, or `/month 2026-04`", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
   const [overview] = await sql<Array<{
     total_cents: string;
     transaction_count: number;
@@ -802,22 +925,88 @@ export async function handleMonthSummary(ctx: Context): Promise<void> {
            COUNT(*) FILTER (WHERE category_id IS NULL)::int AS uncategorized_count
     FROM expenses
     WHERE user_id = ${userId}
-      AND occurred_at >= ${bounds.start}::date
-      AND occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+      AND occurred_at >= ${period.start}::date
+      AND occurred_at < (${period.end}::date + INTERVAL '1 day')
   `;
-  const categories = await spendByCategory(userId, bounds.start, bounds.end);
+  const [categories, merchants, largest] = await Promise.all([
+    spendByCategory(userId, period.start, period.end),
+    topMerchants(userId, period.start, period.end, 3),
+    topExpenses(userId, period.start, period.end, 3),
+  ]);
   const topLines = categories.slice(0, 5).map(
     (row) => `• ${row.category}: ${formatAmount(Number(row.total_cents), row.currency)}`,
   );
+  const merchantLines = merchants.map(
+    (row) => `• ${row.merchant}: ${formatAmount(Number(row.total_cents), row.currency)} (${row.count})`,
+  );
+  const largestLines = largest.map((row, index) => {
+    const name = row.merchant ?? row.description ?? "expense";
+    return `${index + 1}. ${name}: ${formatAmount(Number(row.amount_cents), row.currency)}`;
+  });
   const total = Number(overview?.total_cents ?? 0);
   await ctx.reply(
-    `📊 *${bounds.label} so far*\n` +
+    `📊 *${period.label}${period.isCurrentMonth ? " so far" : ""}*\n` +
       `Total: *${formatAmount(total, "INR")}* across ${overview?.transaction_count ?? 0} transaction${overview?.transaction_count === 1 ? "" : "s"}.\n` +
       `${topLines.length ? `\n*Top categories:*\n${topLines.join("\n")}\n` : ""}` +
+      `${merchantLines.length ? `\n*Top merchants:*\n${merchantLines.join("\n")}\n` : ""}` +
+      `${largestLines.length ? `\n*Largest spends:*\n${largestLines.join("\n")}\n` : ""}` +
       `\nNeeds review: ${overview?.needs_review_count ?? 0} · Uncategorized: ${overview?.uncategorized_count ?? 0}\n\n` +
-      "Use /export for Excel or /review for cleanup.",
-    { parse_mode: "Markdown" },
+      `Use /export ${period.rangeKey} for Excel or /review for cleanup.`,
+    { parse_mode: "Markdown", reply_markup: commandKeyboard(userId, period) },
   );
+}
+
+export async function handleTopExpenses(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const parsed = parseLimitAndPeriod((ctx.match?.toString() ?? "").trim(), 5, 15);
+  if (parsed.invalidPeriod || !parsed.period) {
+    await ctx.reply("Usage: `/top`, `/top 5 last`, or `/top 10 2026-04`", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const rows = await topExpenses(userId, parsed.period.start, parsed.period.end, parsed.limit);
+  if (rows.length === 0) {
+    await ctx.reply(`No expenses found for ${parsed.period.label}.`);
+    return;
+  }
+
+  const lines = rows.map((row, index) => {
+    const date = new Date(row.occurred_at).toISOString().slice(0, 10);
+    const name = row.merchant ?? row.description ?? "expense";
+    return `${index + 1}. ${formatAmount(Number(row.amount_cents), row.currency)} - ${name} (${date}, ${row.category ?? "Uncategorized"})`;
+  });
+  await ctx.reply(`Top ${rows.length} expenses - ${parsed.period.label}\n${lines.join("\n")}`, {
+    reply_markup: commandKeyboard(userId, parsed.period),
+  });
+}
+
+export async function handleTopMerchants(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const parsed = parseLimitAndPeriod((ctx.match?.toString() ?? "").trim(), 8, 20);
+  if (parsed.invalidPeriod || !parsed.period) {
+    await ctx.reply("Usage: `/merchants`, `/merchants 10 last`, or `/merchants 10 2026-04`", {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const rows = await topMerchants(userId, parsed.period.start, parsed.period.end, parsed.limit);
+  if (rows.length === 0) {
+    await ctx.reply(`No merchant spend found for ${parsed.period.label}.`);
+    return;
+  }
+
+  const lines = rows.map(
+    (row, index) =>
+      `${index + 1}. ${formatAmount(Number(row.total_cents), row.currency)} - ${row.merchant} (${row.count} txn, ${row.first_seen} to ${row.last_seen})`,
+  );
+  await ctx.reply(`Top ${rows.length} merchants - ${parsed.period.label}\n${lines.join("\n")}`, {
+    reply_markup: commandKeyboard(userId, parsed.period),
+  });
 }
 
 export async function handleNeedsReview(ctx: Context): Promise<void> {
@@ -1326,6 +1515,31 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   }
 
   const pending = await getPendingEdit(userId);
+
+  if (data.startsWith("xprt:")) {
+    const match = data.match(/^xprt:(-?\d+):(.+)$/);
+    if (!match) {
+      await ctx.answerCallbackQuery("Invalid export action");
+      return;
+    }
+    const ledgerUserId = Number(match[1]);
+    const period = parseCommandPeriodKey(match[2]!);
+    if (!Number.isSafeInteger(ledgerUserId) || !period) {
+      await ctx.answerCallbackQuery("Invalid export range");
+      return;
+    }
+    const access = await resolveLedgerForTelegramUser({
+      telegramUserId: userId,
+      requestedLedgerId: ledgerUserId,
+    });
+    if (!access) {
+      await ctx.answerCallbackQuery("You do not have permission to view this ledger");
+      return;
+    }
+    await ctx.answerCallbackQuery("Generating export");
+    await sendPeriodExport(ctx, access.ledgerId, period);
+    return;
+  }
 
   if (data.startsWith("editcat:")) {
     const payload = parseEditCallbackPayload(data, "editcat", userId);
@@ -1988,52 +2202,44 @@ export async function handleBudget(ctx: Context): Promise<void> {
  *   /export 2026-04            → that calendar month
  *   /export 2026-04-01 2026-04-30 → arbitrary date range
  */
-export async function handleExport(ctx: Context): Promise<void> {
-  const userId = ctx.from!.id;
-  const args = (ctx.match?.toString() ?? "").trim();
-
-  let start: string;
-  let end: string;
-  let rangeKey: string;
-  const rangeMatch = args.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{4}-\d{2}-\d{2})$/);
-  const monthMatch = args.match(/^(\d{4}-\d{2})$/);
-
-  if (rangeMatch) {
-    start = rangeMatch[1]!;
-    end = rangeMatch[2]!;
-    rangeKey = `${start}_${end}`;
-  } else if (monthMatch) {
-    const [y, m] = monthMatch[1]!.split("-").map(Number) as [number, number];
-    const b = currentMonthBounds(y, m);
-    start = b.start;
-    end = b.end;
-    rangeKey = b.rangeKey;
-  } else {
-    const now = new Date();
-    const b = currentMonthBounds(now.getFullYear(), now.getMonth() + 1);
-    start = b.start;
-    end = b.end;
-    rangeKey = b.rangeKey;
-  }
-
+async function sendPeriodExport(
+  ctx: Context,
+  userId: number,
+  period: CommandPeriod,
+): Promise<void> {
   await ctx.reply("📊 Generating export…");
 
   const { buffer, filename, rowCount, totalCents, currency } = await buildMonthlyXlsx(
     userId,
-    start,
-    end,
-    rangeKey,
+    period.start,
+    period.end,
+    period.rangeKey,
   );
 
   if (rowCount === 0) {
-    await ctx.reply(`No expenses found for ${start} → ${end}.`);
+    await ctx.reply(`No expenses found for ${period.label}.`);
     return;
   }
 
   await ctx.replyWithDocument(new InputFile(buffer, filename), {
     caption:
-      `📊 ${start} → ${end}\n` +
+      `📊 ${period.label}\n` +
       `${rowCount} expense${rowCount !== 1 ? "s" : ""}, ` +
       `${formatAmount(totalCents, currency)}`,
   });
+}
+
+export async function handleExport(ctx: Context): Promise<void> {
+  const userId = ctx.from!.id;
+  const args = (ctx.match?.toString() ?? "").trim();
+  const period = parseCommandPeriod(args);
+  if (!period) {
+    await ctx.reply(
+      "Usage: `/export`, `/export last`, `/export 2026-04`, or `/export 2026-04-01 2026-04-30`",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+
+  await sendPeriodExport(ctx, userId, period);
 }
