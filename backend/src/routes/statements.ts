@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
+import { accountBelongsToUser, guessAccountFromText } from "../db/accounts.js";
 import { sql } from "../db/index.js";
 import { recordAuditEvent } from "../db/audit.js";
+import { applySmartRules } from "../db/smart-rules.js";
 import { getObjectStream, uploadStatement } from "../storage/index.js";
 import { parseStatementBuffer } from "../statement/parser.js";
 import { dedupeTransactions } from "../statement/dedup.js";
@@ -52,11 +54,20 @@ const updateStatementRowSchema = {
   properties: {
     status: { type: "string", enum: ["pending", "ignored"] },
     category_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
+    account_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
     tag_names: {
       type: "array",
       maxItems: 20,
       items: { type: "string", minLength: 1, maxLength: 80 },
     },
+  },
+} as const;
+
+const statementUploadQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    account_id: { type: "string", pattern: uuidPattern },
   },
 } as const;
 
@@ -69,6 +80,8 @@ type StatementRow = {
   imported_count: number;
   duplicate_count: number;
   error_reason: string | null;
+  account_id: string | null;
+  account: string | null;
   created_at: Date;
   updated_at: Date;
 };
@@ -84,6 +97,8 @@ type StatementImportRow = {
   suggested_category: string | null;
   category_id: string | null;
   category: string | null;
+  account_id: string | null;
+  account: string | null;
   tag_names: string[];
   already_logged: boolean;
   matched_expense_id: string | null;
@@ -96,6 +111,7 @@ type StatementImportRow = {
 type StatementRowUpdateBody = {
   status?: "pending" | "ignored";
   category_id?: string | null;
+  account_id?: string | null;
   tag_names?: string[];
 };
 
@@ -148,11 +164,13 @@ async function categoryBelongsToUser(userId: number, categoryId: string): Promis
 
 async function getStatementById(userId: number, statementId: string): Promise<StatementRow | null> {
   const [statement] = await sql<StatementRow[]>`
-    SELECT id, file_key, mime_type, status, parsed_count, imported_count,
-           duplicate_count, error_reason, created_at, updated_at
-    FROM statements
-    WHERE id = ${statementId}
-      AND user_id = ${userId}
+    SELECT s.id, s.file_key, s.mime_type, s.status, s.parsed_count, s.imported_count,
+           s.duplicate_count, s.error_reason, s.account_id::text AS account_id,
+           a.name AS account, s.created_at, s.updated_at
+    FROM statements s
+    LEFT JOIN accounts a ON a.id = s.account_id AND a.user_id = s.user_id
+    WHERE s.id = ${statementId}
+      AND s.user_id = ${userId}
     LIMIT 1
   `;
   return statement ?? null;
@@ -170,6 +188,8 @@ async function listStatementRows(userId: number, statementId: string): Promise<S
            r.suggested_category,
            r.category_id::text AS category_id,
            c.name AS category,
+           r.account_id::text AS account_id,
+           a.name AS account,
            r.tag_names,
            r.already_logged,
            r.matched_expense_id::text AS matched_expense_id,
@@ -179,6 +199,7 @@ async function listStatementRows(userId: number, statementId: string): Promise<S
            r.updated_at
     FROM statement_import_rows r
     LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = ${userId}
+    LEFT JOIN accounts a ON a.id = r.account_id AND a.user_id = ${userId}
     WHERE r.user_id = ${userId}
       AND r.statement_id = ${statementId}
     ORDER BY r.row_index ASC
@@ -189,6 +210,7 @@ async function replaceStatementRows(
   userId: number,
   statementId: string,
   results: DedupeResult[],
+  accountId: string | null,
 ): Promise<void> {
   await sql`
     DELETE FROM statement_import_rows
@@ -198,18 +220,27 @@ async function replaceStatementRows(
 
   if (results.length === 0) return;
 
-  const payload = results.map((result, index) => ({
-    row_index: index,
-    occurred_at: result.transaction.date,
-    description: result.transaction.description.trim() || "Statement transaction",
-    amount_cents: result.transaction.amountCents,
-    currency: result.transaction.currency,
-    suggested_category: result.transaction.suggestedCategory || null,
-    tag_names: [],
-    already_logged: result.alreadyLogged,
-    matched_expense_id: result.matchedExpenseId ?? null,
-    status: result.alreadyLogged ? "duplicate" : "pending",
-  }));
+  const payload = [];
+  for (const [index, result] of results.entries()) {
+    const description = result.transaction.description.trim() || "Statement transaction";
+    const rule = await applySmartRules(userId, {
+      description,
+      rawText: description,
+    });
+    payload.push({
+      row_index: index,
+      occurred_at: result.transaction.date,
+      description,
+      amount_cents: result.transaction.amountCents,
+      currency: result.transaction.currency,
+      suggested_category: result.transaction.suggestedCategory || null,
+      account_id: accountId ?? rule.account_id ?? (await guessAccountFromText(userId, description)),
+      tag_names: rule.tag_names,
+      already_logged: result.alreadyLogged,
+      matched_expense_id: result.matchedExpenseId ?? null,
+      status: result.alreadyLogged ? "duplicate" : "pending",
+    });
+  }
 
   await sql`
     INSERT INTO statement_import_rows (
@@ -222,6 +253,7 @@ async function replaceStatementRows(
       currency,
       suggested_category,
       category_id,
+      account_id,
       tag_names,
       already_logged,
       matched_expense_id,
@@ -237,6 +269,7 @@ async function replaceStatementRows(
       v.currency,
       v.suggested_category,
       category_match.id,
+      v.account_id,
       v.tag_names,
       v.already_logged,
       v.matched_expense_id,
@@ -248,6 +281,7 @@ async function replaceStatementRows(
       amount_cents BIGINT,
       currency CHAR(3),
       suggested_category TEXT,
+      account_id UUID,
       tag_names TEXT[],
       already_logged BOOLEAN,
       matched_expense_id UUID,
@@ -269,6 +303,7 @@ async function parseStatementIntoReviewRows(
   statementId: string,
   buffer: Buffer,
   mimeType: string,
+  accountId: string | null,
 ): Promise<{ parsedCount: number; duplicateCount: number; rows: StatementImportRow[] }> {
   const transactions = await parseStatementBuffer(buffer, mimeType);
   if (transactions.length === 0) {
@@ -278,7 +313,7 @@ async function parseStatementIntoReviewRows(
 
   const results = await dedupeTransactions(userId, transactions);
   const duplicateCount = results.filter((result) => result.alreadyLogged).length;
-  await replaceStatementRows(userId, statementId, results);
+  await replaceStatementRows(userId, statementId, results, accountId);
   await updateStatementStatus(statementId, "parsed", results.length, null, 0, duplicateCount);
 
   return {
@@ -307,6 +342,8 @@ async function importPendingStatementRows(
                    suggested_category,
                    category_id::text AS category_id,
                    NULL::text AS category,
+                   account_id::text AS account_id,
+                   NULL::text AS account,
                    tag_names,
                    already_logged,
                    matched_expense_id::text AS matched_expense_id,
@@ -333,6 +370,8 @@ async function importPendingStatementRows(
                    suggested_category,
                    category_id::text AS category_id,
                    NULL::text AS category,
+                   account_id::text AS account_id,
+                   NULL::text AS account,
                    tag_names,
                    already_logged,
                    matched_expense_id::text AS matched_expense_id,
@@ -360,6 +399,7 @@ async function importPendingStatementRows(
           source,
           statement_id,
           category_id,
+          account_id,
           review_status
         )
         VALUES (
@@ -371,6 +411,7 @@ async function importPendingStatementRows(
           'statement',
           ${statementId},
           ${row.category_id},
+          ${row.account_id},
           'needs_review'
         )
         RETURNING id
@@ -436,19 +477,28 @@ export async function statementsRoutes(app: FastifyInstance) {
     if (!session) return;
 
     const rows = await sql<StatementRow[]>`
-      SELECT id, file_key, mime_type, status, parsed_count, imported_count,
-             duplicate_count, error_reason, created_at, updated_at
-      FROM statements
-      WHERE user_id = ${session.userId}
-      ORDER BY created_at DESC
+      SELECT s.id, s.file_key, s.mime_type, s.status, s.parsed_count, s.imported_count,
+             s.duplicate_count, s.error_reason, s.account_id::text AS account_id,
+             a.name AS account, s.created_at, s.updated_at
+      FROM statements s
+      LEFT JOIN accounts a ON a.id = s.account_id AND a.user_id = s.user_id
+      WHERE s.user_id = ${session.userId}
+      ORDER BY s.created_at DESC
       LIMIT 50
     `;
     return { statements: rows };
   });
 
-  app.post("/api/statements/upload", async (request, reply) => {
+  app.post<{ Querystring: { account_id?: string } }>(
+    "/api/statements/upload",
+    { schema: { querystring: statementUploadQuerySchema } },
+    async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
+    const accountId = request.query.account_id ?? null;
+    if (accountId && !(await accountBelongsToUser(session.userId, accountId))) {
+      return reply.status(400).send({ error: "Account not found" });
+    }
 
     let file: Awaited<ReturnType<typeof request.file>>;
     try {
@@ -477,12 +527,19 @@ export async function statementsRoutes(app: FastifyInstance) {
         UPDATE statements
         SET file_key = ${s3Key},
             mime_type = ${mimeType},
+            account_id = ${accountId},
             updated_at = NOW()
         WHERE id = ${statementId}
           AND user_id = ${session.userId}
       `;
 
-      const review = await parseStatementIntoReviewRows(session.userId, statementId, buffer, mimeType);
+      const review = await parseStatementIntoReviewRows(
+        session.userId,
+        statementId,
+        buffer,
+        mimeType,
+        accountId,
+      );
       const statement = await getStatementById(session.userId, statementId);
       await recordAuditEvent({
         userId: session.userId,
@@ -497,6 +554,7 @@ export async function statementsRoutes(app: FastifyInstance) {
           parsed_count: review.parsedCount,
           imported_count: 0,
           duplicate_count: review.duplicateCount,
+          account_id: accountId,
         },
       });
 
@@ -572,21 +630,59 @@ export async function statementsRoutes(app: FastifyInstance) {
       if (!session) return;
 
       const hasCategory = Object.prototype.hasOwnProperty.call(request.body, "category_id");
+      const hasAccount = Object.prototype.hasOwnProperty.call(request.body, "account_id");
       if (
         request.body.category_id &&
         !(await categoryBelongsToUser(session.userId, request.body.category_id))
       ) {
         return reply.status(400).send({ error: "Category not found" });
       }
+      if (
+        request.body.account_id &&
+        !(await accountBelongsToUser(session.userId, request.body.account_id))
+      ) {
+        return reply.status(400).send({ error: "Account not found" });
+      }
       const hasTags = request.body.tag_names !== undefined;
       const tagNames = hasTags ? normalizeTagNames(request.body.tag_names ?? []) : [];
       const categoryId = request.body.category_id ?? null;
+      const accountId = request.body.account_id ?? null;
       const status = request.body.status ?? "pending";
+
+      const [before] = await sql<StatementImportRow[]>`
+        SELECT r.id,
+               r.statement_id::text AS statement_id,
+               r.row_index,
+               r.occurred_at::date::text AS occurred_at,
+               r.description,
+               r.amount_cents::text AS amount_cents,
+               r.currency,
+               r.suggested_category,
+               r.category_id::text AS category_id,
+               c.name AS category,
+               r.account_id::text AS account_id,
+               a.name AS account,
+               r.tag_names,
+               r.already_logged,
+               r.matched_expense_id::text AS matched_expense_id,
+               r.status,
+               r.imported_expense_id::text AS imported_expense_id,
+               r.created_at,
+               r.updated_at
+        FROM statement_import_rows r
+        LEFT JOIN categories c ON c.id = r.category_id AND c.user_id = ${session.userId}
+        LEFT JOIN accounts a ON a.id = r.account_id AND a.user_id = ${session.userId}
+        WHERE r.id = ${request.params.rowId}
+          AND r.statement_id = ${request.params.id}
+          AND r.user_id = ${session.userId}
+        LIMIT 1
+      `;
 
       const [row] = await sql<StatementImportRow[]>`
         UPDATE statement_import_rows AS r
         SET status = CASE WHEN ${request.body.status !== undefined} THEN ${status} ELSE r.status END,
             category_id = CASE WHEN ${hasCategory} THEN ${categoryId}::uuid ELSE r.category_id END,
+            account_id = CASE WHEN ${hasAccount} THEN ${accountId}::uuid ELSE r.account_id END,
             tag_names = CASE WHEN ${hasTags} THEN ${tagNames}::text[] ELSE r.tag_names END,
             updated_at = NOW()
         FROM statements s
@@ -606,6 +702,8 @@ export async function statementsRoutes(app: FastifyInstance) {
                   r.suggested_category,
                   r.category_id::text AS category_id,
                   (SELECT c.name FROM categories c WHERE c.id = r.category_id AND c.user_id = ${session.userId}) AS category,
+                  r.account_id::text AS account_id,
+                  (SELECT a.name FROM accounts a WHERE a.id = r.account_id AND a.user_id = ${session.userId}) AS account,
                   r.tag_names,
                   r.already_logged,
                   r.matched_expense_id::text AS matched_expense_id,
@@ -622,11 +720,13 @@ export async function statementsRoutes(app: FastifyInstance) {
         action: "statement.row_update",
         entityType: "statement",
         entityId: request.params.id,
+        before,
         after: row,
         metadata: {
           row_id: request.params.rowId,
           status: request.body.status ?? null,
           category_id: hasCategory ? categoryId : undefined,
+          account_id: hasAccount ? accountId : undefined,
           tag_names: hasTags ? tagNames : undefined,
         },
       });
@@ -643,11 +743,13 @@ export async function statementsRoutes(app: FastifyInstance) {
       if (!session) return;
 
       const [statement] = await sql<StatementRow[]>`
-        SELECT id, file_key, mime_type, status, parsed_count, imported_count,
-               duplicate_count, error_reason, created_at, updated_at
-        FROM statements
-        WHERE id = ${request.params.id}
-          AND user_id = ${session.userId}
+        SELECT s.id, s.file_key, s.mime_type, s.status, s.parsed_count, s.imported_count,
+               s.duplicate_count, s.error_reason, s.account_id::text AS account_id,
+               a.name AS account, s.created_at, s.updated_at
+        FROM statements s
+        LEFT JOIN accounts a ON a.id = s.account_id AND a.user_id = s.user_id
+        WHERE s.id = ${request.params.id}
+          AND s.user_id = ${session.userId}
         LIMIT 1
       `;
       if (!statement) return reply.status(404).send({ error: "Statement not found" });
@@ -662,6 +764,7 @@ export async function statementsRoutes(app: FastifyInstance) {
           statement.id,
           buffer,
           statement.mime_type ?? contentType ?? "application/pdf",
+          statement.account_id,
         );
         await recordAuditEvent({
           userId: session.userId,

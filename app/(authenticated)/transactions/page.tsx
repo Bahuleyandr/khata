@@ -9,6 +9,7 @@ import {
   addExpenseTag,
   attachReceipt,
   bulkUpdateExpenses,
+  getAccounts,
   getCategories,
   getDuplicateCandidates,
   getExpenses,
@@ -17,6 +18,7 @@ import {
   removeExpenseTag,
   updateExpense,
   withLedgerParam,
+  type Account,
   type Category,
   type Expense,
   type Tag,
@@ -35,6 +37,7 @@ type EditDraft = {
   merchant: string
   description: string
   categoryId: string
+  accountId: string
   reviewStatus: 'needs_review' | 'reviewed' | 'ignored'
   tags: string
 }
@@ -83,6 +86,7 @@ function makeDraft(expense: Expense): EditDraft {
     merchant: expense.merchant ?? '',
     description: expense.description ?? '',
     categoryId: expense.category_id ?? '',
+    accountId: expense.account_id ?? '',
     reviewStatus: expense.review_status,
     tags: expense.tags.join(', '),
   }
@@ -95,6 +99,7 @@ function makeCreateDraft(): EditDraft {
     merchant: '',
     description: '',
     categoryId: '',
+    accountId: '',
     reviewStatus: 'reviewed',
     tags: '',
   }
@@ -103,6 +108,7 @@ function makeCreateDraft(): EditDraft {
 export default function TransactionsPage() {
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [categories, setCategories] = useState<Category[]>([])
+  const [accounts, setAccounts] = useState<Account[]>([])
   const [allTags, setAllTags] = useState<Tag[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -123,9 +129,11 @@ export default function TransactionsPage() {
   const [uncategorized, setUncategorized] = useState(false)
   const [hasReceipt, setHasReceipt] = useState('')
   const [reviewStatus, setReviewStatus] = useState('')
+  const [accountId, setAccountId] = useState('')
   const [duplicates, setDuplicates] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [bulkCategoryId, setBulkCategoryId] = useState('')
+  const [bulkAccountId, setBulkAccountId] = useState('')
   const [bulkTags, setBulkTags] = useState('')
   const [bulkReviewStatus, setBulkReviewStatus] = useState('')
 
@@ -159,6 +167,7 @@ export default function TransactionsPage() {
           hasReceipt: hasReceipt === '' ? undefined : hasReceipt === 'yes',
           reviewStatus,
           duplicates,
+          accountId,
         })
         setExpenses(res.data)
         setTotal(res.total)
@@ -171,7 +180,7 @@ export default function TransactionsPage() {
         setLoading(false)
       }
     },
-    [duplicates, hasReceipt, maxAmount, merchant, minAmount, reviewStatus, tag, uncategorized],
+    [accountId, duplicates, hasReceipt, maxAmount, merchant, minAmount, reviewStatus, tag, uncategorized],
   )
 
   const refreshCurrentPage = useCallback(
@@ -181,6 +190,7 @@ export default function TransactionsPage() {
 
   useEffect(() => {
     getCategories().then(setCategories).catch(() => {})
+    getAccounts().then((res) => setAccounts(res.accounts)).catch(() => {})
     getTags().then((res) => setAllTags(res.tags)).catch(() => {})
   }, [])
 
@@ -201,6 +211,8 @@ export default function TransactionsPage() {
     if (qsTag) setTag(qsTag)
     const qsMerchant = params.get('merchant')
     if (qsMerchant) setMerchant(qsMerchant)
+    const qsAccount = params.get('account_id')
+    if (qsAccount) setAccountId(qsAccount)
   }, [])
 
   useEffect(() => {
@@ -209,7 +221,7 @@ export default function TransactionsPage() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [start, end, category, source, merchant, minAmount, maxAmount, tag, uncategorized, hasReceipt, reviewStatus, duplicates, fetchData])
+  }, [start, end, category, source, merchant, minAmount, maxAmount, tag, uncategorized, hasReceipt, reviewStatus, duplicates, accountId, fetchData])
 
   const mergeOptions = useMemo(
     () => (mergeCandidates.length > 0 ? mergeCandidates : expenses.filter((expense) => expense.id !== mergeTarget?.id)),
@@ -286,6 +298,7 @@ export default function TransactionsPage() {
         description: createDraft.description.trim() || null,
         merchant: createDraft.merchant.trim() || null,
         category_id: createDraft.categoryId || null,
+        account_id: createDraft.accountId || null,
         occurred_at: createDraft.date,
         review_status: createDraft.reviewStatus,
         tag_names: tagNames(createDraft.tags),
@@ -322,6 +335,7 @@ export default function TransactionsPage() {
         description: draft.description.trim() || null,
         merchant: draft.merchant.trim() || null,
         category_id: draft.categoryId || null,
+        account_id: draft.accountId || null,
         occurred_at: draft.date,
         review_status: draft.reviewStatus,
       })
@@ -381,11 +395,13 @@ export default function TransactionsPage() {
       await bulkUpdateExpenses({
         ids: selectedIds,
         category_id: bulkCategoryId === 'null' ? null : bulkCategoryId || undefined,
+        account_id: bulkAccountId === 'null' ? null : bulkAccountId || undefined,
         tag_names: tagNames(bulkTags),
         review_status: bulkReviewStatus ? (bulkReviewStatus as 'needs_review' | 'reviewed' | 'ignored') : undefined,
       })
       setSelectedIds([])
       setBulkTags('')
+      setBulkAccountId('')
       await refreshCurrentPage()
       getTags().then((res) => setAllTags(res.tags)).catch(() => {})
     } catch (e) {
@@ -447,6 +463,15 @@ export default function TransactionsPage() {
               <option value="">All categories</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label>Account</label>
+            <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+              <option value="">All accounts</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
               ))}
             </select>
           </div>
@@ -520,6 +545,13 @@ export default function TransactionsPage() {
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
+            <select value={bulkAccountId} onChange={(e) => setBulkAccountId(e.target.value)}>
+              <option value="">Keep account</option>
+              <option value="null">No account</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
             <input value={bulkTags} onChange={(e) => setBulkTags(e.target.value)} placeholder="Add tags" />
             <select value={bulkReviewStatus} onChange={(e) => setBulkReviewStatus(e.target.value)}>
               <option value="">Keep review</option>
@@ -560,6 +592,7 @@ export default function TransactionsPage() {
                     <th>Date</th>
                     <th>Merchant / Description</th>
                     <th>Category</th>
+                    <th>Account</th>
                     <th>Source</th>
                     <th style={{ textAlign: 'right' }}>Amount</th>
                     <th>Tags</th>
@@ -569,7 +602,7 @@ export default function TransactionsPage() {
                 <tbody>
                   {expenses.length === 0 ? (
                     <tr>
-                      <td colSpan={8} style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem' }}>
+                      <td colSpan={9} style={{ textAlign: 'center', color: '#9ca3af', padding: '2rem' }}>
                         No transactions found.
                       </td>
                     </tr>
@@ -592,6 +625,7 @@ export default function TransactionsPage() {
                           ) : null}
                         </td>
                         <td>{expense.category ?? 'Uncategorized'}</td>
+                        <td>{expense.account ?? '—'}</td>
                         <td>
                           <span className={sourceBadgeClass(expense.source)}>
                             {sourceBadgeLabel(expense.source)}
@@ -691,6 +725,18 @@ export default function TransactionsPage() {
                 </select>
               </label>
               <label>
+                Account
+                <select
+                  value={createDraft.accountId}
+                  onChange={(e) => setCreateDraft({ ...createDraft, accountId: e.target.value })}
+                >
+                  <option value="">No account</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>{account.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
                 Review
                 <select
                   value={createDraft.reviewStatus}
@@ -766,6 +812,18 @@ export default function TransactionsPage() {
                   <option value="">Uncategorized</option>
                   {categories.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Account
+                <select
+                  value={draft.accountId}
+                  onChange={(e) => setDraft({ ...draft, accountId: e.target.value })}
+                >
+                  <option value="">No account</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>{account.name}</option>
                   ))}
                 </select>
               </label>

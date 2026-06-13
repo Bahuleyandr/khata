@@ -4,15 +4,25 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   clearBudget,
   clearSubscriptionPreference,
+  archiveAccount,
   createCategory,
+  createAccount,
+  createSmartRule,
   deleteCategory,
+  deleteSmartRule,
+  dismissAlert,
   formatCents,
   formatDate,
   getAccessUsers,
+  getAccounts,
+  getAlerts,
   getAuditLog,
   getBudgets,
+  getCaptures,
   getCategories,
   getMe,
+  getReconciliation,
+  getSmartRules,
   getStatementRows,
   getStatements,
   getSubscriptions,
@@ -24,25 +34,41 @@ import {
   revokeAccessUser,
   setBudget,
   setSubscriptionPreference,
+  replayCapture,
+  ignoreCapture,
+  undoAuditEvent,
+  updateAccount,
   updateAccessUserRole,
+  updateSmartRule,
   updateStatementImportRow,
   uploadStatement,
+  type Account,
+  type AccountType,
   type AccessRole,
   type AccessUser,
   type AuditEvent,
   type BudgetVariance,
+  type CaptureEvent,
   type Category,
   type Me,
+  type ReconciliationResult,
+  type SmartRule,
   type StatementImport,
   type StatementImportRow,
   type SubscriptionCandidate,
   type SubscriptionPreferenceStatus,
   type Tag,
+  type UserAlert,
 } from '../../../lib/api'
 
 function currentMonthValue() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function splitMonth(value: string) {
+  const [yearRaw, monthRaw] = value.split('-')
+  return { year: Number(yearRaw), month: Number(monthRaw) }
 }
 
 function rupeesToCents(value: string) {
@@ -128,6 +154,11 @@ const AUDIT_ACTION_OPTIONS = [
 ]
 
 const AUDIT_ENTITY_OPTIONS = ['expense', 'statement', 'statement_row', 'subscription', 'category', 'budget', 'tag', 'access_user']
+const UNDOABLE_AUDIT_ACTIONS = new Set(['expense.create', 'expense.update', 'expense.delete', 'statement.row_update'])
+
+function canUndoAudit(event: AuditEvent) {
+  return UNDOABLE_AUDIT_ACTIONS.has(event.action) && !event.undone_at
+}
 
 function subscriptionTiming(subscription: SubscriptionCandidate) {
   if (subscription.next_expected_at === null || subscription.days_until_next === null) return 'Timing unknown'
@@ -152,13 +183,19 @@ export default function ManagePage() {
   const [newAccessUsername, setNewAccessUsername] = useState('')
   const [newAccessRole, setNewAccessRole] = useState<AccessRole>('member')
   const [categories, setCategories] = useState<Category[]>([])
+  const [accounts, setAccounts] = useState<Account[]>([])
   const [budgets, setBudgets] = useState<BudgetVariance[]>([])
   const [tags, setTags] = useState<Tag[]>([])
+  const [alerts, setAlerts] = useState<UserAlert[]>([])
+  const [captures, setCaptures] = useState<CaptureEvent[]>([])
+  const [rules, setRules] = useState<SmartRule[]>([])
+  const [reconciliation, setReconciliation] = useState<ReconciliationResult | null>(null)
   const [statements, setStatements] = useState<StatementImport[]>([])
   const [statementRows, setStatementRows] = useState<StatementImportRow[]>([])
   const [selectedStatementId, setSelectedStatementId] = useState<string | null>(null)
   const [selectedStatementRowIds, setSelectedStatementRowIds] = useState<string[]>([])
   const [bulkStatementCategory, setBulkStatementCategory] = useState('')
+  const [bulkStatementAccount, setBulkStatementAccount] = useState('')
   const [bulkStatementTags, setBulkStatementTags] = useState('')
   const [subscriptions, setSubscriptions] = useState<SubscriptionCandidate[]>([])
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('active')
@@ -171,6 +208,21 @@ export default function ManagePage() {
   const [newCategory, setNewCategory] = useState('')
   const [budgetCategory, setBudgetCategory] = useState('')
   const [budgetAmount, setBudgetAmount] = useState('')
+  const [newAccountName, setNewAccountName] = useState('')
+  const [newAccountType, setNewAccountType] = useState<AccountType>('card')
+  const [newAccountInstitution, setNewAccountInstitution] = useState('')
+  const [newAccountLastFour, setNewAccountLastFour] = useState('')
+  const [newRuleName, setNewRuleName] = useState('')
+  const [newRulePattern, setNewRulePattern] = useState('')
+  const [newRuleCategory, setNewRuleCategory] = useState('')
+  const [newRuleAccount, setNewRuleAccount] = useState('')
+  const [newRuleTags, setNewRuleTags] = useState('')
+  const [newRuleScope, setNewRuleScope] = useState<'merchant' | 'description' | 'raw_text' | 'any'>('any')
+  const [newRuleMatchType, setNewRuleMatchType] = useState<'contains' | 'equals' | 'regex'>('contains')
+  const [newRuleReviewStatus, setNewRuleReviewStatus] = useState('')
+  const [captureStatus, setCaptureStatus] = useState<'pending' | 'processed' | 'failed' | 'ignored'>('failed')
+  const [reconcileAccount, setReconcileAccount] = useState('')
+  const [statementAccount, setStatementAccount] = useState('')
   const [statementFile, setStatementFile] = useState<File | null>(null)
   const [statementInputKey, setStatementInputKey] = useState(0)
   const [statementUploadResult, setStatementUploadResult] = useState<string | null>(null)
@@ -182,8 +234,12 @@ export default function ManagePage() {
     const mePromise = getMe()
     const dataPromises = [
       getCategories(),
+      getAccounts(),
       getBudgets(month),
       getTags(),
+      getAlerts(),
+      getCaptures({ status: captureStatus, limit: 25 }),
+      getSmartRules(),
       getStatements(),
       getSubscriptions({ includeIgnored: true }),
       getAuditLog({
@@ -191,22 +247,44 @@ export default function ManagePage() {
         action: auditAction || undefined,
         entityType: auditEntityType || undefined,
       }),
+      getReconciliation({
+        ...splitMonth(month),
+        accountId: reconcileAccount || undefined,
+      }),
     ] as const
     const meRes = await mePromise
-    const [cats, budgetRes, tagRes, statementRes, subscriptionRes, auditRes, accessRes] = await Promise.all([
+    const [
+      cats,
+      accountRes,
+      budgetRes,
+      tagRes,
+      alertRes,
+      captureRes,
+      ruleRes,
+      statementRes,
+      subscriptionRes,
+      auditRes,
+      reconciliationRes,
+      accessRes,
+    ] = await Promise.all([
       ...dataPromises,
       meRes.can_manage ? getAccessUsers() : Promise.resolve({ users: [] }),
     ])
     setMe(meRes)
     setAccessUsers(accessRes.users)
     setCategories(cats)
+    setAccounts(accountRes.accounts)
     setBudgets(budgetRes.budgets)
     setTags(tagRes.tags)
+    setAlerts(alertRes.alerts)
+    setCaptures(captureRes.captures)
+    setRules(ruleRes.rules)
     setStatements(statementRes.statements)
     setSubscriptions(subscriptionRes.subscriptions)
     setAuditEvents(auditRes.events)
+    setReconciliation(reconciliationRes)
     setBudgetCategory((current) => current || cats[0]?.id || '')
-  }, [auditAction, auditEntityType, auditLimit, month])
+  }, [auditAction, auditEntityType, auditLimit, captureStatus, month, reconcileAccount])
 
   useEffect(() => {
     refresh().catch((e: Error) => setError(e.message))
@@ -290,25 +368,69 @@ export default function ManagePage() {
 
   async function saveStatementRowCorrection(
     rowId: string,
-    data: { category_id: string | null; tag_names: string[] },
+    data: { category_id: string | null; account_id?: string | null; tag_names: string[] },
   ) {
     if (!selectedStatementId) return
     await updateStatementImportRow(selectedStatementId, rowId, data)
     await loadStatementReview(selectedStatementId)
   }
 
+  async function createNewAccount() {
+    if (!newAccountName.trim()) return
+    await createAccount({
+      name: newAccountName,
+      type: newAccountType,
+      institution: newAccountInstitution.trim() || null,
+      last_four: newAccountLastFour.trim() || null,
+      is_default: accounts.length === 0,
+    })
+    setNewAccountName('')
+    setNewAccountInstitution('')
+    setNewAccountLastFour('')
+  }
+
+  async function createNewRule() {
+    if (!newRuleName.trim() || !newRulePattern.trim()) return
+    await createSmartRule({
+      name: newRuleName,
+      pattern: newRulePattern,
+      match_scope: newRuleScope,
+      match_type: newRuleMatchType,
+      category_id: newRuleCategory || null,
+      account_id: newRuleAccount || null,
+      tag_names: parseTagNames(newRuleTags),
+      review_status: newRuleReviewStatus ? (newRuleReviewStatus as 'needs_review' | 'reviewed' | 'ignored') : null,
+    })
+    setNewRuleName('')
+    setNewRulePattern('')
+    setNewRuleTags('')
+  }
+
+  async function replayRawCapture(captureId: string) {
+    await replayCapture(captureId)
+  }
+
+  async function undoAudit(auditId: string) {
+    const event = await undoAuditEvent(auditId)
+    setAuditDetail(event)
+  }
+
   async function applyCorrectionsToSelected() {
     if (!selectedStatementId || selectedPendingRowIds.length === 0) return
-    const body: { category_id?: string | null; tag_names?: string[] } = {}
+    const body: { category_id?: string | null; account_id?: string | null; tag_names?: string[] } = {}
     if (bulkStatementCategory === '__none__') body.category_id = null
     else if (bulkStatementCategory) body.category_id = bulkStatementCategory
+    if (bulkStatementAccount === '__none__') body.account_id = null
+    else if (bulkStatementAccount) body.account_id = bulkStatementAccount
     if (bulkStatementTags.trim()) body.tag_names = parseTagNames(bulkStatementTags)
     if (!Object.keys(body).length) {
-      throw new Error('Choose a category or enter tags to apply.')
+      throw new Error('Choose a category, account, or enter tags to apply.')
     }
     await Promise.all(
       selectedPendingRowIds.map((rowId) => updateStatementImportRow(selectedStatementId, rowId, body)),
     )
+    setBulkStatementCategory('')
+    setBulkStatementAccount('')
     setBulkStatementTags('')
     await loadStatementReview(selectedStatementId)
   }
@@ -377,7 +499,7 @@ export default function ManagePage() {
       setError('Choose a PDF or statement image first.')
       return
     }
-    const result = await uploadStatement(statementFile)
+    const result = await uploadStatement(statementFile, statementAccount || undefined)
     setStatementUploadResult(
       `${result.parsed_count} parsed for review · ${result.duplicate_count} duplicates`,
     )
@@ -475,6 +597,196 @@ export default function ManagePage() {
           ) : (
             <p className="muted-copy">Only ledger owners can add, remove, or change visibility.</p>
           )}
+        </section>
+
+        <section className="card workspace-card">
+          <h3>Alerts</h3>
+          <div className="statement-list">
+            {alerts.length === 0 ? <p>No open alerts.</p> : alerts.map((alert) => (
+              <div key={alert.id} className="statement-row">
+                <div>
+                  <strong>{alert.title} <span className={`badge badge-${alert.severity}`}>{alert.severity}</span></strong>
+                  <span>{alert.detail}</span>
+                </div>
+                <div className="row-actions">
+                  {alert.href ? <a href={alert.href}>Open</a> : null}
+                  <button type="button" onClick={() => void run(() => dismissAlert(alert.id))} disabled={busy}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card workspace-card">
+          <h3>Accounts</h3>
+          <div className="inline-form">
+            <input value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} placeholder="AmEx Platinum" />
+            <select value={newAccountType} onChange={(e) => setNewAccountType(e.target.value as AccountType)}>
+              <option value="card">Card</option>
+              <option value="bank">Bank</option>
+              <option value="upi">UPI</option>
+              <option value="wallet">Wallet</option>
+              <option value="cash">Cash</option>
+              <option value="other">Other</option>
+            </select>
+            <input value={newAccountInstitution} onChange={(e) => setNewAccountInstitution(e.target.value)} placeholder="Institution" />
+            <input value={newAccountLastFour} onChange={(e) => setNewAccountLastFour(e.target.value)} placeholder="Last 4" />
+            <button type="button" onClick={() => void run(createNewAccount)} disabled={busy || !newAccountName.trim()}>Add</button>
+          </div>
+          <div className="statement-list">
+            {accounts.length === 0 ? <p>No accounts yet.</p> : accounts.map((account) => (
+              <div key={account.id} className="statement-row">
+                <div>
+                  <strong>{account.name} {account.is_default ? <span className="badge badge-confirmed">default</span> : null}</strong>
+                  <span>{account.type}{account.institution ? ` · ${account.institution}` : ''}{account.last_four ? ` · **${account.last_four}` : ''}</span>
+                </div>
+                <div className="row-actions">
+                  <button type="button" onClick={() => void run(() => updateAccount(account.id, { is_default: true }).then(() => undefined))} disabled={busy || account.is_default}>
+                    Default
+                  </button>
+                  <button type="button" className="danger" onClick={() => void run(() => archiveAccount(account.id))} disabled={busy}>
+                    Archive
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card workspace-card wide-card">
+          <h3>Monthly Reconciliation</h3>
+          <div className="inline-form">
+            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            <select value={reconcileAccount} onChange={(e) => setReconcileAccount(e.target.value)}>
+              <option value="">All accounts</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
+            <button type="button" onClick={() => void run(async () => undefined)} disabled={busy}>Refresh</button>
+          </div>
+          {reconciliation ? (
+            <>
+              <div className="summary-grid compact-summary">
+                <span><strong>{reconciliation.summary.matched_count}</strong><small>matched</small></span>
+                <span><strong>{reconciliation.summary.missing_in_khata}</strong><small>missing in Khata</small></span>
+                <span><strong>{reconciliation.summary.missing_in_statement}</strong><small>missing in statement</small></span>
+                <span><strong>{reconciliation.summary.amount_mismatch}</strong><small>amount mismatch</small></span>
+              </div>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Date</th>
+                      <th>Description</th>
+                      <th>Account</th>
+                      <th style={{ textAlign: 'right' }}>Khata</th>
+                      <th style={{ textAlign: 'right' }}>Statement</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reconciliation.items.slice(0, 20).map((item) => (
+                      <tr key={`${item.status}-${item.expense_id ?? item.statement_row_id}`}>
+                        <td><span className={`badge badge-${item.status}`}>{item.status.replace(/_/g, ' ')}</span></td>
+                        <td>{formatDate(item.occurred_at)}</td>
+                        <td>{item.description}</td>
+                        <td>{item.account ?? '—'}</td>
+                        <td style={{ textAlign: 'right' }}>{formatCents(item.amount_cents, item.currency)}</td>
+                        <td style={{ textAlign: 'right' }}>{item.statement_amount_cents ? formatCents(item.statement_amount_cents, item.currency) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : <p>No reconciliation loaded.</p>}
+        </section>
+
+        <section className="card workspace-card wide-card">
+          <h3>Smart Rules</h3>
+          <div className="inline-form">
+            <input value={newRuleName} onChange={(e) => setNewRuleName(e.target.value)} placeholder="Rule name" />
+            <select value={newRuleScope} onChange={(e) => setNewRuleScope(e.target.value as typeof newRuleScope)}>
+              <option value="any">Any field</option>
+              <option value="merchant">Merchant</option>
+              <option value="description">Description</option>
+              <option value="raw_text">Raw text</option>
+            </select>
+            <select value={newRuleMatchType} onChange={(e) => setNewRuleMatchType(e.target.value as typeof newRuleMatchType)}>
+              <option value="contains">Contains</option>
+              <option value="equals">Equals</option>
+              <option value="regex">Regex</option>
+            </select>
+            <input value={newRulePattern} onChange={(e) => setNewRulePattern(e.target.value)} placeholder="Pattern" />
+            <select value={newRuleCategory} onChange={(e) => setNewRuleCategory(e.target.value)}>
+              <option value="">Keep category</option>
+              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
+            <select value={newRuleAccount} onChange={(e) => setNewRuleAccount(e.target.value)}>
+              <option value="">Keep account</option>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+            </select>
+            <input value={newRuleTags} onChange={(e) => setNewRuleTags(e.target.value)} placeholder="tags" />
+            <select value={newRuleReviewStatus} onChange={(e) => setNewRuleReviewStatus(e.target.value)}>
+              <option value="">Keep review</option>
+              <option value="reviewed">Reviewed</option>
+              <option value="needs_review">Needs review</option>
+              <option value="ignored">Ignored</option>
+            </select>
+            <button type="button" onClick={() => void run(createNewRule)} disabled={busy || !newRuleName.trim() || !newRulePattern.trim()}>Add</button>
+          </div>
+          <div className="statement-list">
+            {rules.length === 0 ? <p>No rules yet.</p> : rules.map((rule) => (
+              <div key={rule.id} className="statement-row">
+                <div>
+                  <strong>{rule.name} <span className="badge badge-muted">{rule.match_scope}:{rule.match_type}</span></strong>
+                  <span>{rule.pattern} · {rule.category ?? 'category unchanged'} · {rule.account ?? 'account unchanged'} · {rule.tag_names.join(', ') || 'no tags'}</span>
+                </div>
+                <div className="row-actions">
+                  <button type="button" onClick={() => void run(() => updateSmartRule(rule.id, { enabled: !rule.enabled }).then(() => undefined))} disabled={busy}>
+                    {rule.enabled ? 'Disable' : 'Enable'}
+                  </button>
+                  <button type="button" className="danger" onClick={() => void run(() => deleteSmartRule(rule.id))} disabled={busy}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card workspace-card wide-card" id="capture-inbox">
+          <h3>Raw Capture Inbox</h3>
+          <div className="inline-form">
+            <select value={captureStatus} onChange={(e) => setCaptureStatus(e.target.value as typeof captureStatus)}>
+              <option value="failed">Failed</option>
+              <option value="pending">Pending</option>
+              <option value="processed">Processed</option>
+              <option value="ignored">Ignored</option>
+            </select>
+          </div>
+          <div className="statement-list">
+            {captures.length === 0 ? <p>No captures for this filter.</p> : captures.map((capture) => (
+              <div key={capture.id} className="statement-row capture-row">
+                <div>
+                  <strong>{capture.source} <span className={`badge badge-${capture.status}`}>{capture.status}</span></strong>
+                  <span>{capture.error_reason ?? capture.parsed_expense_label ?? 'No detail'}</span>
+                  {capture.raw_text ? <small>{capture.raw_text.slice(0, 240)}</small> : null}
+                </div>
+                <div className="row-actions">
+                  <button type="button" onClick={() => void run(() => replayRawCapture(capture.id))} disabled={busy || !capture.raw_text || capture.status === 'processed'}>
+                    Replay
+                  </button>
+                  <button type="button" onClick={() => void run(() => ignoreCapture(capture.id))} disabled={busy || capture.status === 'ignored' || capture.status === 'processed'}>
+                    Ignore
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
 
         <section className="card workspace-card">
@@ -654,6 +966,16 @@ export default function ManagePage() {
               }}
               aria-label="Statement file"
             />
+            <select
+              value={statementAccount}
+              onChange={(e) => setStatementAccount(e.target.value)}
+              aria-label="Statement account"
+            >
+              <option value="">Detect account</option>
+              {accounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
             <button
               type="button"
               className="button-primary"
@@ -673,6 +995,7 @@ export default function ManagePage() {
                     {statement.parsed_count} parsed · {statement.imported_count} imported · {statement.duplicate_count} duplicates
                   </span>
                   {statement.error_reason ? <small>{statement.error_reason}</small> : null}
+                  {statement.account ? <small>Account: {statement.account}</small> : null}
                 </div>
                 <div className="row-actions">
                   <button
@@ -749,6 +1072,17 @@ export default function ManagePage() {
                   placeholder="Tags: travel, reimbursable"
                   aria-label="Bulk statement tags"
                 />
+                <select
+                  value={bulkStatementAccount}
+                  onChange={(e) => setBulkStatementAccount(e.target.value)}
+                  aria-label="Bulk statement account"
+                >
+                  <option value="">Keep account</option>
+                  <option value="__none__">No account</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>{account.name}</option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   onClick={() => void run(applyCorrectionsToSelected)}
@@ -766,6 +1100,7 @@ export default function ManagePage() {
                       <th>Description</th>
                       <th>Suggested</th>
                       <th>Category</th>
+                      <th>Account</th>
                       <th>Tags</th>
                       <th>Status</th>
                       <th style={{ textAlign: 'right' }}>Amount</th>
@@ -774,7 +1109,7 @@ export default function ManagePage() {
                   </thead>
                   <tbody>
                     {statementRows.length === 0 ? (
-                      <tr><td colSpan={9}>No parsed rows for this statement.</td></tr>
+                      <tr><td colSpan={10}>No parsed rows for this statement.</td></tr>
                     ) : statementRows.map((row) => (
                       <tr key={row.id}>
                         <td data-label="Select">
@@ -790,6 +1125,7 @@ export default function ManagePage() {
                         <td data-label="Description">{row.description}</td>
                         <td data-label="Suggested">{row.suggested_category ?? '—'}</td>
                         <td data-label="Category">{row.category ?? 'Uncategorized'}</td>
+                        <td data-label="Account">{row.account ?? '—'}</td>
                         <td data-label="Tags">{row.tag_names.length ? row.tag_names.map((tag) => `#${tag}`).join(' ') : '—'}</td>
                         <td data-label="Status"><span className={`badge badge-${row.status}`}>{row.status}</span></td>
                         <td data-label="Amount" style={{ textAlign: 'right', fontWeight: 600 }}>{formatCents(row.amount_cents, row.currency)}</td>
@@ -799,6 +1135,7 @@ export default function ManagePage() {
                               <StatementRowCorrection
                                 row={row}
                                 categories={categories}
+                                accounts={accounts}
                                 busy={busy}
                                 onSave={(data) => run(() => saveStatementRowCorrection(row.id, data))}
                               />
@@ -869,8 +1206,9 @@ export default function ManagePage() {
                   <span>
                     {event.entity_type}{event.entity_id ? ` · ${event.entity_id.slice(0, 8)}` : ''} · {formatAuditDate(event.created_at)}
                   </span>
+                  {event.undone_at ? <small>Undone {formatAuditDate(event.undone_at)}</small> : null}
                 </div>
-                <span>Details</span>
+                <span>{canUndoAudit(event) ? 'Undo available' : 'Details'}</span>
               </button>
             ))}
           </div>
@@ -925,6 +1263,16 @@ export default function ManagePage() {
               </section>
             </div>
             <div className="modal-actions">
+              {canUndoAudit(auditDetail) ? (
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => void run(() => undoAudit(auditDetail.id))}
+                  disabled={busy}
+                >
+                  Undo change
+                </button>
+              ) : null}
               <button type="button" onClick={() => setAuditDetail(null)}>Close</button>
             </div>
           </div>
@@ -1042,21 +1390,25 @@ function CategoryRow({
 function StatementRowCorrection({
   row,
   categories,
+  accounts,
   busy,
   onSave,
 }: {
   row: StatementImportRow
   categories: Category[]
+  accounts: Account[]
   busy: boolean
-  onSave: (data: { category_id: string | null; tag_names: string[] }) => Promise<void>
+  onSave: (data: { category_id: string | null; account_id: string | null; tag_names: string[] }) => Promise<void>
 }) {
   const [categoryId, setCategoryId] = useState(row.category_id ?? '')
+  const [accountId, setAccountId] = useState(row.account_id ?? '')
   const [tagText, setTagText] = useState(row.tag_names.join(', '))
 
   useEffect(() => {
     setCategoryId(row.category_id ?? '')
+    setAccountId(row.account_id ?? '')
     setTagText(row.tag_names.join(', '))
-  }, [row.category_id, row.tag_names])
+  }, [row.account_id, row.category_id, row.tag_names])
 
   return (
     <div className="statement-row-correction">
@@ -1071,6 +1423,17 @@ function StatementRowCorrection({
           <option key={category.id} value={category.id}>{category.name}</option>
         ))}
       </select>
+      <select
+        value={accountId}
+        onChange={(e) => setAccountId(e.target.value)}
+        disabled={busy}
+        aria-label={`Account for ${row.description}`}
+      >
+        <option value="">No account</option>
+        {accounts.map((account) => (
+          <option key={account.id} value={account.id}>{account.name}</option>
+        ))}
+      </select>
       <input
         value={tagText}
         onChange={(e) => setTagText(e.target.value)}
@@ -1080,7 +1443,7 @@ function StatementRowCorrection({
       />
       <button
         type="button"
-        onClick={() => void onSave({ category_id: categoryId || null, tag_names: parseTagNames(tagText) })}
+        onClick={() => void onSave({ category_id: categoryId || null, account_id: accountId || null, tag_names: parseTagNames(tagText) })}
         disabled={busy}
       >
         Save

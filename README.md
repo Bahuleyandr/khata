@@ -58,7 +58,8 @@ Open [http://localhost:3000](http://localhost:3000). The current app should show
 | `npm run test:watch` | Run Vitest in watch mode |
 | `npm run migration:smoke` | Apply all SQL migrations to a disposable Postgres container |
 | `npm run e2e` | Run Playwright smoke coverage for desktop and mobile dashboard flows |
-| `npm run premerge` | Run root verify, backend verify, migration smoke, and Playwright smoke |
+| `npm run premerge` | Run root verify, backend verify, parser fixtures, migration smoke, and Playwright smoke |
+| `npm --prefix backend run parser:evaluate` | Run deterministic parser fixtures for SMS/UPI alerts, OCR text, and receipt-like captures |
 
 ## Project structure
 
@@ -76,11 +77,24 @@ Frontend business logic lives in `lib/` where possible. Backend money/data logic
 
 The `/review` workspace is the month-close surface. It calls `/api/review/monthly?year=YYYY&month=M` and returns a deterministic checklist for uncategorized transactions, receipt OCR review, duplicate candidates, unresolved statement imports, budget variance, and the month export link. Checklist links deep-link into `/transactions` and `/receipts` with the same date range and filters, so the review flow stays month-scoped.
 
+## Trustworthy month close
+
+Khata now treats month close as a reconciliation workflow, not just a list of expenses:
+
+- Accounts/cards can be created from `/manage`, marked as default, archived, and assigned to manual expenses, statement rows, smart rules, or bulk corrections.
+- Statement upload supports choosing an account before parsing, then correcting each row's category, account, and tags before import.
+- Monthly reconciliation compares imported statement rows against logged expenses and highlights matched, missing, and amount-mismatch rows per month/account.
+- Raw Capture Inbox keeps Telegram text/photo/voice/document attempts with raw OCR/transcript/classification details, so failed captures can be replayed or ignored instead of disappearing.
+- Smart Rules let recurring merchant/text patterns auto-assign category, account, tags, and review status before a transaction lands in the ledger.
+- High-signal alerts flag uncategorized cleanup, stale capture failures, reconciliation gaps, and budget overruns without requiring a new LLM call.
+
 ## Dashboard corrections and audit
 
 The `/transactions` workspace supports manual transaction entry for expenses missed by Telegram, SMS, receipt OCR, or statement import. Create/edit/delete/merge, receipt attachment, bulk correction, category/budget changes, and tag changes are recorded in the append-only `audit_log` table. The `/manage` workspace shows the latest audit events, backed by `GET /api/audit-log`.
 
 Statement imports can be uploaded from `/manage` via `POST /api/statements/upload`. The dashboard accepts PDF or receipt-like statement images, stores the original file in MinIO/S3, parses and deduplicates rows, imports new transactions as `needs_review`, and records the upload in the audit trail.
+
+Audit details in `/manage` show before/after diffs and can undo safe corrections for manual expense create/update/delete and statement row corrections. Merge and access-control audit events remain append-only only; undoing those still needs deliberate manual action.
 
 Ledger access is owner-managed from `/manage`. Every Telegram user gets a private personal ledger; bootstrap owners listed in `ALLOWED_TELEGRAM_USER_IDS` also get a separate Household ledger. Use the ledger switcher in the top navigation to move between personal and shared views. Owners can add a spouse/household member by numeric Telegram ID and control whether that member can view and/or add to the selected ledger. Bot messages go to the sender's personal ledger by default; prefix a text entry with `shared` or `household` to write to an accessible household ledger.
 
@@ -138,6 +152,7 @@ npm run dev
 | `npm run migrate:dev` | Apply pending SQL migrations from TypeScript during local dev |
 | `npm run lint` | ESLint check |
 | `npm test` | Vitest unit tests |
+| `npm run parser:evaluate` | Run deterministic parser fixtures for capture accuracy regressions |
 
 ### Deploy
 

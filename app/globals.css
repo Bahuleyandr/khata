@@ -835,11 +835,12 @@ tr:hover td { background: #f9fafb; }
   border-radius: 8px;
   display: grid;
   gap: 0.55rem;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, auto) auto;
   margin-bottom: 1rem;
   padding: 0.75rem;
 }
-.statement-upload-panel input {
+.statement-upload-panel input,
+.statement-upload-panel select {
   font: inherit;
   font-size: 0.85rem;
   min-width: 0;
@@ -903,7 +904,7 @@ tr:hover td { background: #f9fafb; }
   border-radius: 8px;
   display: grid;
   gap: 0.55rem;
-  grid-template-columns: minmax(150px, 0.5fr) minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(140px, 0.5fr) minmax(180px, 1fr) minmax(140px, 0.5fr) auto;
   margin-bottom: 0.75rem;
   padding: 0.65rem;
 }
@@ -911,8 +912,8 @@ tr:hover td { background: #f9fafb; }
   align-items: center;
   display: grid;
   gap: 0.35rem;
-  grid-template-columns: minmax(140px, 0.85fr) minmax(130px, 1fr) auto;
-  min-width: 360px;
+  grid-template-columns: minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(120px, 1fr) auto;
+  min-width: 520px;
 }
 .segmented-control {
   display: flex;

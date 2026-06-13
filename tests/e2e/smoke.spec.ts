@@ -138,6 +138,129 @@ async function mockApi(page: Page) {
       },
     }),
   )
+  await page.route('**/api/accounts**', (route) =>
+    route.fulfill({
+      json: {
+        accounts: [{
+          id: '77777777-7777-4777-8777-777777777777',
+          user_id: 42,
+          name: 'AmEx Platinum',
+          type: 'card',
+          institution: 'American Express',
+          last_four: '31009',
+          is_default: true,
+          archived_at: null,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/alerts**', (route) =>
+    route.fulfill({
+      json: {
+        alerts: [{
+          id: 'alert-1',
+          user_id: 42,
+          severity: 'warning',
+          kind: 'reconciliation_gap',
+          title: 'Statement gaps need review',
+          detail: '1 statement row is not reconciled.',
+          href: '/manage',
+          dedupe_key: 'gap-2026-04',
+          dismissed_at: null,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/captures**', (route) =>
+    route.fulfill({
+      json: {
+        captures: [{
+          id: 'capture-1',
+          user_id: 42,
+          source: 'telegram_text',
+          status: 'failed',
+          telegram_message_id: 10,
+          file_key: null,
+          file_unique_id: null,
+          content_hash: null,
+          raw_text: 'Alert: INR 301 at PAYU SWIGGY',
+          parsed_json: null,
+          expense_id: null,
+          failure_reason: 'Needs manual review',
+          ignored_at: null,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/rules**', (route) =>
+    route.fulfill({
+      json: {
+        rules: [{
+          id: 'rule-1',
+          user_id: 42,
+          name: 'Swiggy card alerts',
+          pattern: 'SWIGGY',
+          match_scope: 'raw_text',
+          match_type: 'contains',
+          category_id: '33333333-3333-4333-8333-333333333333',
+          category: 'Food',
+          account_id: '77777777-7777-4777-8777-777777777777',
+          account: 'AmEx Platinum',
+          tag_names: ['food'],
+          review_status: 'reviewed',
+          priority: 100,
+          enabled: true,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/reconciliation**', (route) =>
+    route.fulfill({
+      json: {
+        summary: {
+          period: {
+            year: 2026,
+            month: 4,
+            start: '2026-04-01',
+            end: '2026-04-30',
+            label: 'April 2026',
+          },
+          account_id: null,
+          account: null,
+          expense_count: 1,
+          statement_count: 1,
+          matched_count: 1,
+          missing_in_khata: 0,
+          missing_in_statement: 1,
+          amount_mismatch: 0,
+          total_statement_cents: '7500',
+          total_expense_cents: '125000',
+        },
+        items: [{
+          id: 'recon-1',
+          status: 'missing_in_statement',
+          account_id: '77777777-7777-4777-8777-777777777777',
+          account: 'AmEx Platinum',
+          statement_row_id: null,
+          expense_id: expense.id,
+          amount_delta_cents: '125000',
+          occurred_at: '2026-04-20',
+          description: 'OpenAI Cafe',
+          amount_cents: '125000',
+          statement_amount_cents: null,
+          currency: 'INR',
+        }],
+      },
+    }),
+  )
   await page.route('**/api/tags', (route) => route.fulfill({ json: { tags: [{ id: 'tag-1', name: 'team', count: 1 }] } }))
   await page.route('**/api/statements/*/rows', (route) =>
     route.fulfill({
@@ -153,6 +276,8 @@ async function mockApi(page: Page) {
           suggested_category: 'Food',
           category_id: '33333333-3333-4333-8333-333333333333',
           category: 'Food',
+          account_id: '77777777-7777-4777-8777-777777777777',
+          account: 'AmEx Platinum',
           tag_names: ['commute'],
           already_logged: false,
           matched_expense_id: null,
@@ -176,6 +301,8 @@ async function mockApi(page: Page) {
           imported_count: 0,
           duplicate_count: 0,
           error_reason: null,
+          account_id: '77777777-7777-4777-8777-777777777777',
+          account: 'AmEx Platinum',
           created_at: '2026-04-28T10:00:00.000Z',
           updated_at: '2026-04-28T10:00:00.000Z',
         }],
@@ -222,6 +349,10 @@ async function mockApi(page: Page) {
           after: { id: expense.id },
           metadata: {},
           created_at: '2026-04-28T10:00:00.000Z',
+          undone_at: null,
+          undone_by: null,
+          undo_event_id: null,
+          undo_error: null,
         }],
       },
     }),

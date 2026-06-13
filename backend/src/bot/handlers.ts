@@ -40,6 +40,13 @@ import {
   getExpenseForEdit,
 } from "../db/expenses.js";
 import { recordAuditEvent } from "../db/audit.js";
+import { guessAccountFromText } from "../db/accounts.js";
+import {
+  markCaptureFailed,
+  markCaptureProcessed,
+  recordCaptureEvent,
+  updateCaptureRawText,
+} from "../db/captures.js";
 import { resolveLedgerForTelegramUser } from "../db/access.js";
 import { getOverrides, upsertOverride } from "../db/overrides.js";
 import {
@@ -55,6 +62,7 @@ import {
   getTagsForExpenses,
   listTagsWithCounts,
 } from "../db/tags.js";
+import { applySmartRules } from "../db/smart-rules.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { chatWithData } from "../ai/chat.js";
 import { transcribeVoice } from "../voice/transcribe.js";
@@ -271,9 +279,18 @@ async function runStatementPipeline(
 
   const statementId = await createStatementRecord(userId, "", mimeType);
   const s3Key = `statements/${userId}/${statementId}`;
+  let captureEventId: string | null = null;
   try {
     await uploadStatement(s3Key, buffer, mimeType);
     await sql`UPDATE statements SET file_key = ${s3Key}, mime_type = ${mimeType}, updated_at = NOW() WHERE id = ${statementId}`;
+    captureEventId = await recordCaptureEvent({
+      userId,
+      source: "telegram_document",
+      fileKey: s3Key,
+      contentHash: createHash("sha256").update(buffer).digest("hex"),
+      mimeType,
+      metadata: { file_name: fileName, statement_id: statementId, telegram_file_id: fileId },
+    });
   } catch (err) {
     await updateStatementStatus(statementId, "failed", undefined, redactError(err));
     await ctx.reply(`❌ Upload failed: ${String(err)}`);
@@ -287,12 +304,14 @@ async function runStatementPipeline(
     transactions = await parseStatementBuffer(buffer, mimeType);
   } catch (err) {
     await updateStatementStatus(statementId, "failed", undefined, redactError(err));
+    await markCaptureFailed(userId, captureEventId, redactError(err));
     await ctx.reply(`❌ Parsing failed: ${String(err)}`);
     return;
   }
 
   if (transactions.length === 0) {
     await updateStatementStatus(statementId, "failed", 0, "No transactions found");
+    await markCaptureFailed(userId, captureEventId, "No transactions found");
     await ctx.reply("⚠️ No transactions found in the statement.");
     return;
   }
@@ -430,6 +449,7 @@ interface UpiInsertOpts {
   source: "telegram" | "receipt";
   imageKey?: string;
   contentHash?: string;
+  captureEventId?: string;
 }
 
 async function processUpiPayment(
@@ -458,6 +478,7 @@ async function processUpiPayment(
       const note = attached
         ? `📎 Receipt attached — same UPI txn (\`${upi.reference}\`) was already logged.`
         : `🔁 Already logged (UPI ref \`${upi.reference}\`).`;
+      await markCaptureProcessed(userId, opts.captureEventId, existing.id);
       await ctx.reply(note, { parse_mode: "Markdown" });
       return;
     }
@@ -498,6 +519,16 @@ async function processUpiPayment(
     ? new Date(`${upi.occurredOn}T12:00:00Z`)
     : new Date(); // same-day fallback; user can edit
   const description = upi.merchant ?? `UPI payment (${upi.app})`;
+  const rule = await applySmartRules(userId, {
+    merchant: upi.merchant,
+    description,
+    rawText,
+  });
+  const accountId = rule.account_id ?? (await guessAccountFromText(userId, rawText));
+  const categoryId = rule.category_id ?? cat?.id ?? null;
+  const categoryName =
+    cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
+  const reviewStatus = rule.review_status ?? (opts.source === "receipt" ? "needs_review" : "reviewed");
 
   const expenseId = await insertExpense({
     userId,
@@ -505,21 +536,28 @@ async function processUpiPayment(
     currency: "INR",
     description,
     merchant: upi.merchant,
-    category_id: cat?.id ?? null,
+    category_id: categoryId,
     occurred_at,
     source: opts.source,
     raw_text: rawText,
     image_key: opts.imageKey ?? null,
     content_hash: opts.contentHash ?? null,
     upi_reference_id: upi.reference,
-    review_status: opts.source === "receipt" ? "needs_review" : "reviewed",
+    review_status: reviewStatus,
+    account_id: accountId,
+    capture_event_id: opts.captureEventId ?? null,
   });
+  for (const rawName of rule.tag_names) {
+    const tagId = await getOrCreateTag(userId, rawName);
+    if (tagId) await attachTagToExpense(expenseId, tagId);
+  }
+  await markCaptureProcessed(userId, opts.captureEventId, expenseId);
 
   await setPendingEdit(userId, {
     expenseId,
     amount_cents,
     currency: "INR",
-    category: cat?.name ?? "Other",
+    category: categoryName,
     description,
     occurred_at,
   });
@@ -532,7 +570,7 @@ async function processUpiPayment(
         : "UPI logged";
   const methodLabel = paymentMethodLabel(upi.app);
   await ctx.reply(
-    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${cat?.name ?? "Other"} _via ${methodLabel}_\n` +
+    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${categoryName} _via ${methodLabel}_\n` +
       `Reply \`category: <name>\` or use the buttons.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
@@ -782,7 +820,18 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   // notifications AND pasted SMS bodies.
   const upi = tryParseUpi(text);
   if (upi) {
-    await processUpiPayment(ctx, userId, text, upi, { source: "telegram" });
+    const captureEventId = await recordCaptureEvent({
+      userId,
+      source: "telegram_text",
+      rawText: text,
+      metadata: { parser: "upi_regex", telegram_message_id: ctx.message?.message_id },
+    });
+    try {
+      await processUpiPayment(ctx, userId, text, upi, { source: "telegram", captureEventId });
+    } catch (err) {
+      await markCaptureFailed(userId, captureEventId, (err as Error).message);
+      throw err;
+    }
     return;
   }
 
@@ -967,6 +1016,12 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   }
 
   // Classify the message (expense vs spending query vs unknown)
+  const captureEventId = await recordCaptureEvent({
+    userId,
+    source: "telegram_text",
+    rawText: text,
+    metadata: { parser: "classify_message", telegram_message_id: ctx.message?.message_id },
+  });
   await seedDefaultCategories(userId).catch(console.error);
   const [cats, overrides] = await Promise.all([getUserCategories(userId), getOverrides(userId)]);
 
@@ -980,21 +1035,25 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     );
   } catch (err) {
     console.error("AI classify error:", err);
+    await markCaptureFailed(userId, captureEventId, (err as Error).message);
     await ctx.reply("⚠️ I had trouble parsing that. Try: `$45 lunch` or `paid 1200 for uber`");
     return;
   }
 
   if (classification.type === "query") {
+    await markCaptureProcessed(userId, captureEventId, null);
     await handleQueryIntent(ctx, userId, classification.intent);
     return;
   }
 
   if (classification.type === "clarify") {
+    await markCaptureProcessed(userId, captureEventId, null);
     await ctx.reply(classification.question);
     return;
   }
 
   if (classification.type !== "expense") {
+    await markCaptureFailed(userId, captureEventId, "Message was not classified as an expense");
     await ctx.reply(
       "🤔 That doesn't look like an expense. Try: `$45 lunch` or `paid 1200 for uber`",
     );
@@ -1013,6 +1072,14 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   const amount_cents = Math.round(parsed.amount * 100);
   const occurred_at = new Date(parsed.occurred_at + "T12:00:00Z");
+  const rule = await applySmartRules(userId, {
+    merchant: parsed.merchant,
+    description: parsed.description,
+    rawText: text,
+  });
+  const accountId = rule.account_id ?? (await guessAccountFromText(userId, text));
+  const categoryId = rule.category_id ?? cat?.id ?? null;
+  const categoryName = cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
 
   const expenseId = await insertExpense({
     userId,
@@ -1020,23 +1087,31 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     currency: parsed.currency,
     description: parsed.description,
     merchant: parsed.merchant,
-    category_id: cat?.id ?? null,
+    category_id: categoryId,
     occurred_at,
     source: "telegram",
     raw_text: text,
+    review_status: rule.review_status ?? "reviewed",
+    account_id: accountId,
+    capture_event_id: captureEventId,
   });
+  for (const rawName of rule.tag_names) {
+    const tagId = await getOrCreateTag(userId, rawName);
+    if (tagId) await attachTagToExpense(expenseId, tagId);
+  }
+  await markCaptureProcessed(userId, captureEventId, expenseId);
 
   await setPendingEdit(userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,
-    category: cat?.name ?? "Other",
+    category: categoryName,
     description: parsed.description,
     occurred_at,
   });
 
   await ctx.reply(
-    `Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${cat?.name ?? "Other"}. Reply edit to change.`,
+    `Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${categoryName}. Reply edit to change.`,
     { reply_markup: editKeyboard(expenseId, userId) },
   );
 }
@@ -1287,19 +1362,31 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     return;
   }
 
-  // OCR via Claude vision with a receipt-specific prompt
+  const captureEventId = await recordCaptureEvent({
+    userId,
+    source: "telegram_photo",
+    fileKey: s3Key,
+    contentHash,
+    mimeType,
+    metadata: { telegram_file_id: fileId },
+  });
+
+  // OCR via MiniMax MCP vision with a receipt-specific prompt.
   let ocrText: string;
   try {
     const imageMime = (["image/jpeg", "image/png", "image/gif", "image/webp"].includes(mimeType)
       ? mimeType
       : "image/jpeg") as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
     ocrText = await ocrReceiptImage(buffer, imageMime);
+    await updateCaptureRawText(userId, captureEventId, ocrText);
   } catch (err) {
+    await markCaptureFailed(userId, captureEventId, (err as Error).message);
     await ctx.reply(`❌ OCR failed: ${String(err)}\n\nPlease try a clearer, well-lit photo.`);
     return;
   }
 
   if (ocrText.trim().length < 20) {
+    await markCaptureFailed(userId, captureEventId, "OCR returned too little text");
     await ctx.reply(
       "⚠️ I couldn't read enough text from this image. Please send a clearer photo of the receipt.",
     );
@@ -1317,6 +1404,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
       source: "receipt",
       imageKey: s3Key,
       contentHash: contentHash,
+      captureEventId,
     });
     return;
   }
@@ -1336,6 +1424,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
       parsed = await parseExpense(ocrText, cats.map((c) => c.name), overrides, todayString());
     } catch (err) {
       console.error("Receipt parse error:", err);
+      await markCaptureFailed(userId, captureEventId, (err as Error).message);
       await ctx.reply(
         "⚠️ Could not extract expense details from this image. Is this a receipt or bill? Try a clearer photo.",
       );
@@ -1344,6 +1433,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
   }
 
   if (!parsed) {
+    await markCaptureFailed(userId, captureEventId, "Receipt parser found no expense");
     await ctx.reply(
       "🤔 This doesn't look like a receipt or bill. If it is, try a clearer photo.\n\nFor manual entry, just type the amount and description.",
     );
@@ -1359,6 +1449,14 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     null;
   const amount_cents = Math.round(parsed.amount * 100);
   const occurred_at = new Date(parsed.occurred_at + "T12:00:00Z");
+  const rule = await applySmartRules(userId, {
+    merchant: parsed.merchant,
+    description: parsed.description,
+    rawText: ocrText,
+  });
+  const accountId = rule.account_id ?? (await guessAccountFromText(userId, ocrText));
+  const categoryId = rule.category_id ?? cat?.id ?? null;
+  const categoryName = cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
 
   let expenseId: string;
   try {
@@ -1368,15 +1466,23 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
       currency: parsed.currency,
       description: parsed.description,
       merchant: parsed.merchant,
-      category_id: cat?.id ?? null,
+      category_id: categoryId,
       occurred_at,
       source: "receipt",
       raw_text: ocrText,
       image_key: s3Key,
       content_hash: contentHash,
-      review_status: "needs_review",
+      review_status: rule.review_status ?? "needs_review",
+      account_id: accountId,
+      capture_event_id: captureEventId,
     });
+    for (const rawName of rule.tag_names) {
+      const tagId = await getOrCreateTag(userId, rawName);
+      if (tagId) await attachTagToExpense(expenseId, tagId);
+    }
+    await markCaptureProcessed(userId, captureEventId, expenseId);
   } catch (err) {
+    await markCaptureFailed(userId, captureEventId, (err as Error).message);
     await ctx.reply(`❌ Failed to save expense: ${String(err)}`);
     return;
   }
@@ -1385,14 +1491,14 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     expenseId,
     amount_cents,
     currency: parsed.currency,
-    category: cat?.name ?? "Other",
+    category: categoryName,
     description: parsed.description,
     occurred_at,
   });
 
   const merchantPart = parsed.merchant ? ` at ${parsed.merchant}` : "";
   await ctx.reply(
-    `✅ Receipt logged: ${formatAmount(amount_cents, parsed.currency)}${merchantPart} — ${cat?.name ?? "Other"}\n` +
+    `✅ Receipt logged: ${formatAmount(amount_cents, parsed.currency)}${merchantPart} — ${categoryName}\n` +
       `Date: ${parsed.occurred_at}\n\n` +
       `Reply \`category: <name>\` to change category, or use the buttons below.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
@@ -1464,6 +1570,12 @@ export async function handleVoice(ctx: Context): Promise<void> {
   }
 
   await ctx.reply(`🎙️ _"${text}"_`, { parse_mode: "Markdown" });
+  const captureEventId = await recordCaptureEvent({
+    userId,
+    source: "telegram_voice",
+    rawText: text,
+    metadata: { telegram_file_id: voice.file_id, duration: voice.duration },
+  });
 
   // Feed the transcription through the same classify-and-route flow as text.
   await seedDefaultCategories(userId).catch(console.error);
@@ -1482,21 +1594,25 @@ export async function handleVoice(ctx: Context): Promise<void> {
     );
   } catch (err) {
     console.error("Voice classify error:", err);
+    await markCaptureFailed(userId, captureEventId, (err as Error).message);
     await ctx.reply("⚠️ I had trouble parsing that voice note. Try a text message instead?");
     return;
   }
 
   if (classification.type === "query") {
+    await markCaptureProcessed(userId, captureEventId, null);
     await handleQueryIntent(ctx, userId, classification.intent);
     return;
   }
 
   if (classification.type === "clarify") {
+    await markCaptureProcessed(userId, captureEventId, null);
     await ctx.reply(classification.question);
     return;
   }
 
   if (classification.type !== "expense") {
+    await markCaptureFailed(userId, captureEventId, "Voice note was not classified as an expense");
     await ctx.reply(
       "🤔 That doesn't sound like an expense. Try `\"spent 500 at zomato\"` or `\"paid 1200 for uber yesterday\"`.",
       { parse_mode: "Markdown" },
@@ -1512,6 +1628,14 @@ export async function handleVoice(ctx: Context): Promise<void> {
 
   const amount_cents = Math.round(parsed.amount * 100);
   const occurred_at = new Date(parsed.occurred_at + "T12:00:00Z");
+  const rule = await applySmartRules(userId, {
+    merchant: parsed.merchant,
+    description: parsed.description,
+    rawText: text,
+  });
+  const accountId = rule.account_id ?? (await guessAccountFromText(userId, text));
+  const categoryId = rule.category_id ?? cat?.id ?? null;
+  const categoryName = cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
 
   const expenseId = await insertExpense({
     userId,
@@ -1519,23 +1643,31 @@ export async function handleVoice(ctx: Context): Promise<void> {
     currency: parsed.currency,
     description: parsed.description,
     merchant: parsed.merchant,
-    category_id: cat?.id ?? null,
+    category_id: categoryId,
     occurred_at,
     source: "telegram",
     raw_text: text,
+    review_status: rule.review_status ?? "reviewed",
+    account_id: accountId,
+    capture_event_id: captureEventId,
   });
+  for (const rawName of rule.tag_names) {
+    const tagId = await getOrCreateTag(userId, rawName);
+    if (tagId) await attachTagToExpense(expenseId, tagId);
+  }
+  await markCaptureProcessed(userId, captureEventId, expenseId);
 
   await setPendingEdit(userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,
-    category: cat?.name ?? "Other",
+    category: categoryName,
     description: parsed.description,
     occurred_at,
   });
 
   await ctx.reply(
-    `✅ Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${cat?.name ?? "Other"}. Reply \`edit\` to change.`,
+    `✅ Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${categoryName}. Reply \`edit\` to change.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
 }

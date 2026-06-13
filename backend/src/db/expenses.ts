@@ -15,6 +15,8 @@ export interface InsertExpenseData {
   content_hash?: string | null;
   upi_reference_id?: string | null;
   review_status?: "needs_review" | "reviewed" | "ignored";
+  account_id?: string | null;
+  capture_event_id?: string | null;
 }
 
 export interface ExpenseForEdit {
@@ -38,6 +40,8 @@ export interface DeletedExpenseData {
   occurred_at: Date;
   image_key: string | null;
   review_status: string;
+  account_id: string | null;
+  capture_event_id: string | null;
 }
 
 export async function insertExpense(data: InsertExpenseData): Promise<string> {
@@ -50,14 +54,15 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
     INSERT INTO expenses
       (user_id, amount_cents, currency, description, merchant, merchant_canonical_id,
        category_id, occurred_at, source, raw_text, image_key, content_hash,
-       upi_reference_id, review_status, reviewed_at)
+       upi_reference_id, review_status, reviewed_at, account_id, capture_event_id)
     VALUES
       (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
        ${data.merchant}, ${merchantCanonicalId},
        ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text},
        ${data.image_key ?? null}, ${data.content_hash ?? null},
        ${data.upi_reference_id ?? null}, ${data.review_status ?? "reviewed"},
-       ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null})
+       ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null},
+       ${data.account_id ?? null}, ${data.capture_event_id ?? null})
     RETURNING id
   `;
   return row.id;

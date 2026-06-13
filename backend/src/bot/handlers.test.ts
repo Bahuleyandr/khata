@@ -125,6 +125,28 @@ vi.mock("../db/audit.js", () => ({
   recordAuditEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../db/accounts.js", () => ({
+  guessAccountFromText: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../db/smart-rules.js", () => ({
+  applySmartRules: vi.fn().mockResolvedValue({
+    rule_id: null,
+    rule_name: null,
+    category_id: null,
+    account_id: null,
+    tag_names: [],
+    review_status: null,
+  }),
+}));
+
+vi.mock("../db/captures.js", () => ({
+  recordCaptureEvent: vi.fn().mockResolvedValue("capture-event-1"),
+  markCaptureProcessed: vi.fn().mockResolvedValue(undefined),
+  updateCaptureRawText: vi.fn().mockResolvedValue(undefined),
+  markCaptureFailed: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../db/access.js", () => ({
   resolveLedgerForTelegramUser: vi.fn(({ requestedLedgerId }: { requestedLedgerId?: number }) =>
     Promise.resolve({ ledgerId: requestedLedgerId ?? 111111 }),
@@ -273,6 +295,8 @@ beforeEach(() => {
     occurred_at: new Date("2026-04-27T12:00:00Z"),
     image_key: null,
     review_status: "reviewed",
+    account_id: null,
+    capture_event_id: null,
   });
   vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValue(null);
   vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValue(

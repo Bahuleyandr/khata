@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { listAuditEvents } from "../db/audit.js";
+import { listAuditEvents, undoAuditEvent } from "../db/audit.js";
 import { getSession } from "./auth.js";
 
 const auditQuerySchema = {
@@ -23,6 +23,18 @@ type AuditQuery = {
   entity_id?: string;
 };
 
+const auditParamsSchema = {
+  type: "object",
+  required: ["id"],
+  additionalProperties: false,
+  properties: {
+    id: {
+      type: "string",
+      pattern: "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+    },
+  },
+} as const;
+
 export async function auditRoutes(app: FastifyInstance) {
   app.get<{ Querystring: AuditQuery }>(
     "/api/audit-log",
@@ -39,6 +51,27 @@ export async function auditRoutes(app: FastifyInstance) {
           entityId: request.query.entity_id,
         }),
       };
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    "/api/audit-log/:id/undo",
+    { schema: { params: auditParamsSchema } },
+    async (request, reply) => {
+      const session = await getSession(request, reply);
+      if (!session) return;
+      try {
+        const event = await undoAuditEvent(
+          session.userId,
+          session.actorUserId ?? session.userId,
+          request.params.id,
+        );
+        return { ok: true, event };
+      } catch (err) {
+        const statusCode = (err as { statusCode?: number }).statusCode;
+        if (statusCode) return reply.status(statusCode).send({ error: (err as Error).message });
+        throw err;
+      }
     },
   );
 }

@@ -189,6 +189,8 @@ export interface Expense {
   merchant: string | null
   category_id: string | null
   category: string | null
+  account_id: string | null
+  account: string | null
   source: string
   occurred_at: string
   image_key: string | null
@@ -257,6 +259,20 @@ export interface Category {
   is_default: boolean
 }
 
+export type AccountType = 'bank' | 'card' | 'cash' | 'wallet' | 'upi' | 'other'
+
+export interface Account {
+  id: string
+  name: string
+  type: AccountType
+  institution: string | null
+  last_four: string | null
+  is_default: boolean
+  archived_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Tag {
   id: string
   name: string
@@ -272,6 +288,8 @@ export interface StatementImport {
   imported_count: number
   duplicate_count: number
   error_reason: string | null
+  account_id: string | null
+  account: string | null
   created_at: string
   updated_at: string
 }
@@ -287,6 +305,8 @@ export interface StatementImportRow {
   suggested_category: string | null
   category_id: string | null
   category: string | null
+  account_id: string | null
+  account: string | null
   tag_names: string[]
   already_logged: boolean
   matched_expense_id: string | null
@@ -299,7 +319,90 @@ export interface StatementImportRow {
 export interface StatementRowUpdateInput {
   status?: 'pending' | 'ignored'
   category_id?: string | null
+  account_id?: string | null
   tag_names?: string[]
+}
+
+export type SmartRuleMatchScope = 'merchant' | 'description' | 'raw_text' | 'any'
+export type SmartRuleMatchType = 'contains' | 'equals' | 'regex'
+
+export interface SmartRule {
+  id: string
+  name: string
+  priority: number
+  enabled: boolean
+  match_scope: SmartRuleMatchScope
+  match_type: SmartRuleMatchType
+  pattern: string
+  category_id: string | null
+  category: string | null
+  account_id: string | null
+  account: string | null
+  tag_names: string[]
+  review_status: 'needs_review' | 'reviewed' | 'ignored' | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CaptureEvent {
+  id: string
+  source: string
+  raw_text: string | null
+  file_key: string | null
+  content_hash: string | null
+  mime_type: string | null
+  status: 'pending' | 'processed' | 'failed' | 'ignored'
+  parsed_expense_id: string | null
+  parsed_expense_label: string | null
+  error_reason: string | null
+  metadata: Record<string, unknown>
+  created_at: string
+  updated_at: string
+  processed_at: string | null
+}
+
+export interface UserAlert {
+  id: string
+  kind: string
+  severity: 'info' | 'warning' | 'critical'
+  title: string
+  detail: string
+  href: string | null
+  status: 'open' | 'dismissed' | 'resolved'
+  created_at: string
+  updated_at: string
+  dismissed_at: string | null
+}
+
+export interface ReconciliationItem {
+  status: 'matched' | 'missing_in_khata' | 'missing_in_statement' | 'amount_mismatch'
+  expense_id: string | null
+  statement_row_id: string | null
+  occurred_at: string
+  description: string
+  amount_cents: string
+  statement_amount_cents: string | null
+  currency: string
+  account_id: string | null
+  account: string | null
+  amount_delta_cents: string
+}
+
+export interface ReconciliationResult {
+  summary: {
+    period: { year: number; month: number; start: string; end: string; label: string }
+    account_id: string | null
+    account: string | null
+    expense_count: number
+    statement_count: number
+    matched_count: number
+    missing_in_khata: number
+    missing_in_statement: number
+    amount_mismatch: number
+    total_expense_cents: string
+    total_statement_cents: string
+  }
+  items: ReconciliationItem[]
 }
 
 export interface MonthlyReviewTask {
@@ -360,6 +463,10 @@ export interface AuditEvent {
   after: unknown
   metadata: Record<string, unknown>
   created_at: string
+  undone_at: string | null
+  undone_by: string | null
+  undo_event_id: string | null
+  undo_error: string | null
 }
 
 export function getMe(): Promise<Me> {
@@ -437,6 +544,7 @@ export function getExpenses(params: {
   hasReceipt?: boolean
   reviewStatus?: string
   duplicates?: boolean
+  accountId?: string
 }): Promise<ExpensePage> {
   const q = new URLSearchParams()
   if (params.page) q.set('page', String(params.page))
@@ -453,6 +561,7 @@ export function getExpenses(params: {
   if (params.hasReceipt !== undefined) q.set('has_receipt', String(params.hasReceipt))
   if (params.reviewStatus) q.set('review_status', params.reviewStatus)
   if (params.duplicates !== undefined) q.set('duplicates', String(params.duplicates))
+  if (params.accountId) q.set('account_id', params.accountId)
   return apiFetch<ExpensePage>(`/api/expenses?${q}`)
 }
 
@@ -462,6 +571,7 @@ export interface ExpenseUpdateInput {
   description?: string | null
   merchant?: string | null
   category_id?: string | null
+  account_id?: string | null
   occurred_at?: string
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
 }
@@ -472,6 +582,7 @@ export interface ExpenseCreateInput {
   description?: string | null
   merchant?: string | null
   category_id?: string | null
+  account_id?: string | null
   occurred_at: string
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
   tag_names?: string[]
@@ -513,6 +624,7 @@ export function getDuplicateCandidates(id: string): Promise<{ candidates: Expens
 export async function bulkUpdateExpenses(data: {
   ids: string[]
   category_id?: string | null
+  account_id?: string | null
   tag_names?: string[]
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
 }): Promise<{ ok: boolean; updated: number }> {
@@ -534,6 +646,47 @@ export function attachReceipt(id: string, file: File): Promise<Expense> {
 
 export function getCategories(): Promise<Category[]> {
   return apiFetch<Category[]>('/api/categories')
+}
+
+export function getAccounts(params: { includeArchived?: boolean } = {}): Promise<{ accounts: Account[] }> {
+  const q = new URLSearchParams()
+  if (params.includeArchived !== undefined) q.set('include_archived', String(params.includeArchived))
+  return apiFetch<{ accounts: Account[] }>(`/api/accounts?${q}`)
+}
+
+export function createAccount(data: {
+  name: string
+  type?: AccountType
+  institution?: string | null
+  last_four?: string | null
+  is_default?: boolean
+}): Promise<Account> {
+  return apiFetch<Account>('/api/accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateAccount(
+  id: string,
+  data: Partial<{
+    name: string
+    type: AccountType
+    institution: string | null
+    last_four: string | null
+    is_default: boolean
+  }>,
+): Promise<Account> {
+  return apiFetch<Account>(`/api/accounts/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function archiveAccount(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/accounts/${id}`, { method: 'DELETE' })
 }
 
 export function createCategory(name: string): Promise<Category> {
@@ -594,7 +747,7 @@ export function getStatements(): Promise<{ statements: StatementImport[] }> {
   return apiFetch<{ statements: StatementImport[] }>('/api/statements')
 }
 
-export async function uploadStatement(file: File): Promise<{
+export async function uploadStatement(file: File, accountId?: string): Promise<{
   statement: StatementImport
   rows: StatementImportRow[]
   parsed_count: number
@@ -603,13 +756,15 @@ export async function uploadStatement(file: File): Promise<{
 }> {
   const body = new FormData()
   body.set('statement', file)
+  const q = new URLSearchParams()
+  if (accountId) q.set('account_id', accountId)
   return apiFetch<{
     statement: StatementImport
     rows: StatementImportRow[]
     parsed_count: number
     imported_count: number
     duplicate_count: number
-  }>('/api/statements/upload', {
+  }>(`/api/statements/upload?${q}`, {
     method: 'POST',
     body,
   })
@@ -656,6 +811,106 @@ export function getAuditLog(
   if (normalized.entityType) q.set('entity_type', normalized.entityType)
   if (normalized.entityId) q.set('entity_id', normalized.entityId)
   return apiFetch<{ events: AuditEvent[] }>(`/api/audit-log?${q}`)
+}
+
+export async function undoAuditEvent(id: string): Promise<AuditEvent> {
+  const res = await apiFetch<{ ok: boolean; event: AuditEvent }>(`/api/audit-log/${id}/undo`, {
+    method: 'POST',
+  })
+  return res.event
+}
+
+export function getSmartRules(): Promise<{ rules: SmartRule[] }> {
+  return apiFetch<{ rules: SmartRule[] }>('/api/rules')
+}
+
+export function createSmartRule(data: {
+  name: string
+  priority?: number
+  enabled?: boolean
+  match_scope?: SmartRuleMatchScope
+  match_type?: SmartRuleMatchType
+  pattern: string
+  category_id?: string | null
+  account_id?: string | null
+  tag_names?: string[]
+  review_status?: 'needs_review' | 'reviewed' | 'ignored' | null
+}): Promise<SmartRule> {
+  return apiFetch<SmartRule>('/api/rules', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateSmartRule(
+  id: string,
+  data: Partial<{
+    name: string
+    priority: number
+    enabled: boolean
+    match_scope: SmartRuleMatchScope
+    match_type: SmartRuleMatchType
+    pattern: string
+    category_id: string | null
+    account_id: string | null
+    tag_names: string[]
+    review_status: 'needs_review' | 'reviewed' | 'ignored' | null
+  }>,
+): Promise<SmartRule> {
+  return apiFetch<SmartRule>(`/api/rules/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteSmartRule(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/rules/${id}`, { method: 'DELETE' })
+}
+
+export function getCaptures(params: {
+  status?: 'pending' | 'processed' | 'failed' | 'ignored'
+  source?: string
+  limit?: number
+} = {}): Promise<{ captures: CaptureEvent[] }> {
+  const q = new URLSearchParams()
+  if (params.status) q.set('status', params.status)
+  if (params.source) q.set('source', params.source)
+  if (params.limit) q.set('limit', String(params.limit))
+  return apiFetch<{ captures: CaptureEvent[] }>(`/api/captures?${q}`)
+}
+
+export async function ignoreCapture(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/captures/${id}/ignore`, { method: 'POST' })
+}
+
+export async function replayCapture(id: string): Promise<{ expense_id: string }> {
+  return apiFetch<{ ok: boolean; expense_id: string }>(`/api/captures/${id}/replay`, {
+    method: 'POST',
+  })
+}
+
+export function getAlerts(params: { includeResolved?: boolean } = {}): Promise<{ alerts: UserAlert[] }> {
+  const q = new URLSearchParams()
+  if (params.includeResolved !== undefined) q.set('include_resolved', String(params.includeResolved))
+  return apiFetch<{ alerts: UserAlert[] }>(`/api/alerts?${q}`)
+}
+
+export async function dismissAlert(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/alerts/${id}/dismiss`, { method: 'POST' })
+}
+
+export function getReconciliation(params: {
+  year: number
+  month: number
+  accountId?: string
+}): Promise<ReconciliationResult> {
+  const q = new URLSearchParams()
+  q.set('year', String(params.year))
+  q.set('month', String(params.month))
+  if (params.accountId) q.set('account_id', params.accountId)
+  return apiFetch<ReconciliationResult>(`/api/reconciliation/monthly?${q}`)
 }
 
 export async function retryStatement(id: string): Promise<{

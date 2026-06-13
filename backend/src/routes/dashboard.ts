@@ -13,6 +13,11 @@ import { subscriptionsRoutes } from "./subscriptions.js";
 import { monthlyReviewRoutes } from "./monthly-review.js";
 import { auditRoutes } from "./audit.js";
 import { accessRoutes } from "./access.js";
+import { accountsRoutes } from "./accounts.js";
+import { alertsRoutes } from "./alerts.js";
+import { capturesRoutes } from "./captures.js";
+import { reconciliationRoutes } from "./reconciliation.js";
+import { smartRulesRoutes } from "./smart-rules.js";
 import { installCsrfOriginGuard } from "./csrf.js";
 
 export async function dashboardRoutes(app: FastifyInstance) {
@@ -31,4 +36,9 @@ export async function dashboardRoutes(app: FastifyInstance) {
   await app.register(monthlyReviewRoutes);
   await app.register(auditRoutes);
   await app.register(accessRoutes);
+  await app.register(accountsRoutes);
+  await app.register(alertsRoutes);
+  await app.register(capturesRoutes);
+  await app.register(reconciliationRoutes);
+  await app.register(smartRulesRoutes);
 }

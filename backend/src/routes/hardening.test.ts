@@ -25,6 +25,13 @@ const statementImporterMocks = vi.hoisted(() => ({
   createStatementRecord: vi.fn(),
   updateStatementStatus: vi.fn(),
 }));
+const accountMocks = vi.hoisted(() => ({
+  accountBelongsToUser: vi.fn(),
+  guessAccountFromText: vi.fn(),
+}));
+const smartRuleMocks = vi.hoisted(() => ({
+  applySmartRules: vi.fn(),
+}));
 
 vi.mock("../config.js", () => ({
   config: {
@@ -49,6 +56,8 @@ vi.mock("../storage/index.js", () => storageMocks);
 vi.mock("../statement/parser.js", () => statementParserMocks);
 vi.mock("../statement/dedup.js", () => statementDedupMocks);
 vi.mock("../statement/importer.js", () => statementImporterMocks);
+vi.mock("../db/accounts.js", () => accountMocks);
+vi.mock("../db/smart-rules.js", () => smartRuleMocks);
 
 import { authRoutes, signSession } from "./auth.js";
 import { auditRoutes } from "./audit.js";
@@ -115,6 +124,19 @@ describe("route hardening", () => {
     statementImporterMocks.bulkInsertTransactions.mockReset();
     statementImporterMocks.createStatementRecord.mockReset();
     statementImporterMocks.updateStatementStatus.mockReset();
+    accountMocks.accountBelongsToUser.mockReset();
+    accountMocks.guessAccountFromText.mockReset();
+    smartRuleMocks.applySmartRules.mockReset();
+    accountMocks.accountBelongsToUser.mockResolvedValue(true);
+    accountMocks.guessAccountFromText.mockResolvedValue(null);
+    smartRuleMocks.applySmartRules.mockResolvedValue({
+      rule_id: null,
+      rule_name: null,
+      category_id: null,
+      account_id: null,
+      tag_names: [],
+      review_status: null,
+    });
   });
 
   it("clears the session cookie on logout", async () => {
@@ -577,6 +599,29 @@ describe("route hardening", () => {
           updated_at: new Date("2026-04-28T00:01:00.000Z"),
         },
       ])
+      .mockResolvedValueOnce([
+        {
+          id: STATEMENT_ROW_ID,
+          statement_id: STATEMENT_ID,
+          row_index: 0,
+          occurred_at: "2026-04-28",
+          description: "Metro card",
+          amount_cents: "7500",
+          currency: "INR",
+          suggested_category: "Transport",
+          category_id: CATEGORY_ID,
+          category: "Transport",
+          account_id: null,
+          account: null,
+          tag_names: ["metro", "commute"],
+          already_logged: false,
+          matched_expense_id: null,
+          status: "pending",
+          imported_expense_id: null,
+          created_at: new Date("2026-04-28T00:00:00.000Z"),
+          updated_at: new Date("2026-04-28T00:01:00.000Z"),
+        },
+      ])
       .mockResolvedValueOnce([]);
 
     const app = await buildApp();
@@ -598,7 +643,7 @@ describe("route hardening", () => {
         tag_names: ["metro", "commute"],
         status: "pending",
       });
-      expect(sqlMock).toHaveBeenCalledTimes(3);
+      expect(sqlMock).toHaveBeenCalledTimes(4);
     } finally {
       await app.close();
     }

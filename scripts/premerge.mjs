@@ -4,6 +4,7 @@ const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 const commands = [
   [npmCmd, ["run", "verify"]],
   [npmCmd, ["--prefix", "backend", "run", "verify"]],
+  [npmCmd, ["--prefix", "backend", "run", "parser:evaluate"]],
   [npmCmd, ["run", "migration:smoke"]],
   [npmCmd, ["run", "e2e"]],
 ];

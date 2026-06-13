@@ -11,6 +11,7 @@ import {
   addExpenseTag,
   bulkUpdateExpenses,
   getCategories,
+  getAccounts,
   getDuplicateCandidates,
   getExpenses,
   getTags,
@@ -28,6 +29,7 @@ vi.mock('../../../lib/api', () => ({
   attachReceipt: vi.fn(),
   bulkUpdateExpenses: vi.fn(),
   getCategories: vi.fn(),
+  getAccounts: vi.fn(),
   getDuplicateCandidates: vi.fn(),
   getExpenses: vi.fn(),
   getTags: vi.fn(),
@@ -69,6 +71,7 @@ describe('TransactionsPage', () => {
     Object.defineProperty(window, 'scrollTo', { value: vi.fn(), writable: true })
     Object.defineProperty(window, 'confirm', { value: vi.fn(() => true), writable: true })
     vi.mocked(getCategories).mockResolvedValue([{ id: 'cat-food', name: 'Food', is_default: true }])
+    vi.mocked(getAccounts).mockResolvedValue({ accounts: [] })
     vi.mocked(getTags).mockResolvedValue({ tags: [{ id: 'tag-team', name: 'team', count: 1 }] })
     vi.mocked(getDuplicateCandidates).mockResolvedValue({ candidates: [duplicateExpense] })
     vi.mocked(getExpenses).mockResolvedValue({
