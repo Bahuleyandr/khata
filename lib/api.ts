@@ -205,12 +205,32 @@ export interface ManagedSubscription {
   days_until_next: number | null
   monthly_estimate_cents: string
   yearly_estimate_cents: string
+  converted_monthly_estimate_cents?: string | null
+  converted_yearly_estimate_cents?: string | null
   reminder_days: number[]
   notes: string | null
   logo_url: string | null
   source: 'manual' | 'detected'
   created_at: string
   updated_at: string
+}
+
+export interface FxRate {
+  base_currency: string
+  quote_currency: string
+  rate: number
+  source: 'identity' | 'frankfurter' | 'cached' | 'stale'
+  as_of: string | null
+  fetched_at: string | null
+}
+
+export interface FxConversionSummary {
+  base_currency: string
+  source: 'frankfurter'
+  rates: FxRate[]
+  missing_currencies: string[]
+  stale: boolean
+  fetched_at: string | null
 }
 
 export interface SubscriptionSummary {
@@ -222,6 +242,10 @@ export interface SubscriptionSummary {
   overdue_count: number
   monthly_total_cents: string
   yearly_total_cents: string
+  base_currency?: string
+  converted_monthly_total_cents?: string
+  converted_yearly_total_cents?: string
+  fx?: FxConversionSummary
 }
 
 export interface SubscriptionRecordInput {

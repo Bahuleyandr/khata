@@ -93,6 +93,17 @@ function candidateCadenceLabel(candidate: SubscriptionCandidate) {
   return `${candidate.cadence} · ${formatCents(candidate.monthly_estimate_cents, candidate.currency)} / mo · ${timing}`
 }
 
+function monthlyDisplay(record: ManagedSubscription, baseCurrency: string) {
+  const original = `${formatCents(record.monthly_estimate_cents, record.currency)} / mo`
+  if (
+    record.converted_monthly_estimate_cents &&
+    record.currency !== baseCurrency
+  ) {
+    return `${original} (${formatCents(record.converted_monthly_estimate_cents, baseCurrency)})`
+  }
+  return original
+}
+
 function toInput(record: ManagedSubscription): FormState {
   return {
     id: record.id,
@@ -172,6 +183,16 @@ export default function SubscriptionsPage() {
     [records],
   )
   const reviewCandidates = candidates.filter((candidate) => !managedKeys.has(candidate.merchant_key))
+  const baseCurrency = summary?.base_currency ?? 'INR'
+  const monthlyCommitted = summary?.converted_monthly_total_cents ?? summary?.monthly_total_cents ?? 0
+  const yearlyCommitted = summary?.converted_yearly_total_cents ?? summary?.yearly_total_cents ?? 0
+  const fxNote = summary?.fx?.missing_currencies.length
+    ? `Missing FX for ${summary.fx.missing_currencies.join(', ')}`
+    : summary?.fx?.stale
+      ? 'Using cached FX rates'
+      : summary?.fx?.fetched_at
+        ? `FX updated ${formatDate(summary.fx.fetched_at)}`
+        : `Base ${baseCurrency}`
 
   const filteredRecords = useMemo(() => {
     const filtered = records.filter((record) => {
@@ -181,7 +202,10 @@ export default function SubscriptionsPage() {
       return record.status === filter
     })
     return [...filtered].sort((a, b) => {
-      if (sort === 'amount') return Number(b.monthly_estimate_cents) - Number(a.monthly_estimate_cents)
+      if (sort === 'amount') {
+        return Number(b.converted_monthly_estimate_cents ?? b.monthly_estimate_cents) -
+          Number(a.converted_monthly_estimate_cents ?? a.monthly_estimate_cents)
+      }
       if (sort === 'name') return a.name.localeCompare(b.name)
       if (sort === 'category') return (a.category ?? '').localeCompare(b.category ?? '') || a.name.localeCompare(b.name)
       return (a.days_until_next ?? 99999) - (b.days_until_next ?? 99999) || a.name.localeCompare(b.name)
@@ -239,8 +263,8 @@ export default function SubscriptionsPage() {
       <section className="subscription-hero card">
         <div>
           <span>Monthly committed</span>
-          <strong>{formatCents(summary?.monthly_total_cents ?? 0)}</strong>
-          <small>{formatCents(summary?.yearly_total_cents ?? 0)} per year</small>
+          <strong>{formatCents(monthlyCommitted, baseCurrency)}</strong>
+          <small>{formatCents(yearlyCommitted, baseCurrency)} per year · {fxNote}</small>
         </div>
         <div>
           <span>Active</span>
@@ -414,7 +438,7 @@ export default function SubscriptionsPage() {
                     <td data-label="Category">{record.category ?? 'None'}</td>
                     <td data-label="Account">{record.account ?? record.payment_method ?? 'None'}</td>
                     <td data-label="Monthly" style={{ textAlign: 'right', fontWeight: 700 }}>
-                      {formatCents(record.monthly_estimate_cents, record.currency)}
+                      {monthlyDisplay(record, baseCurrency)}
                     </td>
                     <td data-label="Actions">
                       <div className="row-actions">

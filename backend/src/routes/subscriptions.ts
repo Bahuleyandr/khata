@@ -13,6 +13,7 @@ import {
   type SubscriptionRecordInput,
   type SubscriptionStatus,
 } from "../db/subscription-records.js";
+import { convertCents, getFxRatesForCurrencies } from "../fx/rates.js";
 import { getSession } from "./auth.js";
 
 type SubscriptionQuery = {
@@ -224,10 +225,28 @@ export async function subscriptionsRoutes(app: FastifyInstance) {
         includeIgnored: request.query.include_ignored === true,
       });
       const records = await listSubscriptionRecords(session.userId);
+      const fx = await getFxRatesForCurrencies(records.map((record) => record.currency));
+      const recordsWithFx = records.map((record) => {
+        const convertedMonthly = convertCents(record.monthly_estimate_cents, record.currency, fx);
+        return {
+          ...record,
+          converted_monthly_estimate_cents: convertedMonthly === null ? null : String(convertedMonthly),
+          converted_yearly_estimate_cents: convertedMonthly === null ? null : String(convertedMonthly * 12),
+        };
+      });
+      const convertedMonthlyTotal = recordsWithFx
+        .filter((record) => record.status === "active" || record.status === "trial")
+        .reduce((sum, record) => sum + Number(record.converted_monthly_estimate_cents ?? 0), 0);
       return {
         subscriptions: subscriptions.map(toApiSubscription),
-        records,
-        summary: summarizeSubscriptionRecords(records),
+        records: recordsWithFx,
+        summary: {
+          ...summarizeSubscriptionRecords(records),
+          base_currency: fx.base_currency,
+          converted_monthly_total_cents: String(convertedMonthlyTotal),
+          converted_yearly_total_cents: String(convertedMonthlyTotal * 12),
+          fx,
+        },
       };
     },
   );

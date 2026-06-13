@@ -70,6 +70,7 @@ import { transcribeVoice } from "../voice/transcribe.js";
 import { tryParseUpi, type UpiParse } from "../upi/parse.js";
 import { totalSpendInCategory, topExpenses, spendByCategory, findSubscriptionCandidates } from "../db/query.js";
 import { listSubscriptionRecords, summarizeSubscriptionRecords } from "../db/subscription-records.js";
+import { convertCents, getFxRatesForCurrencies } from "../fx/rates.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { tryParseReceiptText } from "../receipt/parse.js";
 import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } from "./session.js";
@@ -869,14 +870,23 @@ export async function handleSubscriptions(ctx: Context): Promise<void> {
     findSubscriptionCandidates(userId, 6, 2, { includeIgnored: false }),
   ]);
   const summary = summarizeSubscriptionRecords(records);
+  const fx = await getFxRatesForCurrencies(records.map((record) => record.currency));
+  const convertedMonthlyTotal = records
+    .filter((record) => record.status === "active" || record.status === "trial")
+    .reduce((sum, record) => sum + (convertCents(record.monthly_estimate_cents, record.currency, fx) ?? 0), 0);
   const managedKeys = new Set(records.map((record) => record.merchant_key).filter(Boolean));
   const activeRecords = records.filter((record) => record.status === "active" || record.status === "trial");
   const reviewCandidates = candidates.filter((candidate) => !managedKeys.has(candidate.merchant_key)).slice(0, 5);
 
   const lines: string[] = [
     "Subscriptions",
-    `Monthly committed: ${formatAmount(Number(summary.monthly_total_cents), "INR")} (${activeRecords.length} active/trial)`,
+    `Monthly committed: ${formatAmount(convertedMonthlyTotal || Number(summary.monthly_total_cents), fx.base_currency)} (${activeRecords.length} active/trial)`,
   ];
+  if (fx.missing_currencies.length > 0) {
+    lines.push(`FX missing for: ${fx.missing_currencies.join(", ")}`);
+  } else if (fx.stale) {
+    lines.push("FX rates are using cached fallback values.");
+  }
 
   if (summary.due_soon_count > 0 || summary.overdue_count > 0) {
     lines.push(`Renewals: ${summary.due_soon_count} due soon, ${summary.overdue_count} overdue`);
@@ -893,7 +903,12 @@ export async function handleSubscriptions(ctx: Context): Promise<void> {
             : record.days_until_next === 0
               ? "due today"
               : `due in ${record.days_until_next}d`;
-      lines.push(`• ${record.name}: ${formatAmount(Number(record.monthly_estimate_cents), record.currency)}/mo, ${due}`);
+      const converted = convertCents(record.monthly_estimate_cents, record.currency, fx);
+      const amount =
+        converted !== null && record.currency !== fx.base_currency
+          ? `${formatAmount(Number(record.monthly_estimate_cents), record.currency)}/mo (${formatAmount(converted, fx.base_currency)})`
+          : `${formatAmount(Number(record.monthly_estimate_cents), record.currency)}/mo`;
+      lines.push(`• ${record.name}: ${amount}, ${due}`);
     }
   }
 
