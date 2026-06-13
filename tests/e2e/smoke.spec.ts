@@ -12,6 +12,18 @@ const expense = {
   occurred_at: '2026-04-20T10:00:00.000Z',
   image_key: 'receipts/openai.jpg',
   review_status: 'needs_review',
+  confidence: {
+    overall: 78,
+    amount: 100,
+    date: 95,
+    merchant: 95,
+    category: 86,
+    account: 55,
+    source: 74,
+    reasons: ['account_unmatched'],
+  },
+  paid_by_user_id: '42',
+  settlement_scope: 'personal',
   tags: ['team'],
 }
 
@@ -175,8 +187,32 @@ async function mockApi(page: Page) {
       },
     }),
   )
-  await page.route('**/api/captures**', (route) =>
+  await page.route('**/api/captures/summary', (route) =>
     route.fulfill({
+      json: {
+        failures: [{
+          failure_kind: 'not_receipt',
+          count: 2,
+          latest_error: 'Receipt parser found no expense',
+          latest_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/captures**', (route) => {
+    if (route.request().url().includes('/api/captures/summary')) {
+      return route.fulfill({
+        json: {
+          failures: [{
+            failure_kind: 'not_receipt',
+            count: 2,
+            latest_error: 'Receipt parser found no expense',
+            latest_at: '2026-04-28T10:00:00.000Z',
+          }],
+        },
+      })
+    }
+    return route.fulfill({
       json: {
         captures: [{
           id: 'capture-1',
@@ -190,14 +226,20 @@ async function mockApi(page: Page) {
           raw_text: 'Alert: INR 301 at PAYU SWIGGY',
           parsed_json: null,
           expense_id: null,
-          failure_reason: 'Needs manual review',
+          error_reason: 'Needs manual review',
+          failure_kind: 'not_receipt',
+          confidence: { overall: 42 },
+          metadata: {},
+          parsed_expense_id: null,
+          parsed_expense_label: null,
+          processed_at: null,
           ignored_at: null,
           created_at: '2026-04-28T10:00:00.000Z',
           updated_at: '2026-04-28T10:00:00.000Z',
         }],
       },
-    }),
-  )
+    })
+  })
   await page.route('**/api/rules**', (route) =>
     route.fulfill({
       json: {
@@ -218,6 +260,62 @@ async function mockApi(page: Page) {
           enabled: true,
           created_at: '2026-04-28T10:00:00.000Z',
           updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+      },
+    }),
+  )
+  await page.route('**/api/rule-suggestions**', (route) =>
+    route.fulfill({
+      json: {
+        suggestions: [{
+          id: 'suggestion-1',
+          source: 'correction',
+          source_entity_type: 'expense',
+          source_entity_id: expense.id,
+          merchant: 'OpenAI Cafe',
+          pattern: 'OpenAI Cafe',
+          match_scope: 'merchant',
+          match_type: 'contains',
+          category_id: '33333333-3333-4333-8333-333333333333',
+          category: 'Food',
+          account_id: '77777777-7777-4777-8777-777777777777',
+          account: 'AmEx Platinum',
+          tag_names: ['team'],
+          reason: 'Manual transaction correction',
+          status: 'pending',
+          smart_rule_id: null,
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+          decided_at: null,
+        }],
+      },
+    })
+  )
+  await page.route('**/api/settlement/monthly**', (route) =>
+    route.fulfill({
+      json: {
+        settlement: {
+          period: { year: 2026, month: 4, start: '2026-04-01', end: '2026-04-30', label: 'April 2026' },
+          total_cents: '0',
+          member_count: 1,
+          payers: [],
+          transfers: [],
+        },
+      },
+    }),
+  )
+  await page.route('**/api/ops/restore-drills', (route) =>
+    route.fulfill({
+      json: {
+        drills: [{
+          id: 'drill-1',
+          status: 'passed',
+          backup_key: '/backups/khata-postgres-20260428.dump',
+          checked_at: '2026-04-28T10:00:00.000Z',
+          duration_ms: 12000,
+          detail: { pod: 'restore-drill' },
+          error_reason: null,
+          created_at: '2026-04-28T10:00:00.000Z',
         }],
       },
     }),
@@ -566,8 +664,12 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByLabel('Telegram user ID')).toBeVisible()
   await expect(page.getByText(/99 · @grace/)).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()
-  await expect(page.getByText('#team')).toBeVisible()
+  await expect(page.getByText('#team · 1')).toBeVisible()
   await expect(page.getByText('MiniMax')).toBeVisible()
+  await expect(page.getByText('Learning Suggestions')).toBeVisible()
+  await expect(page.getByText('Manual transaction correction')).toBeVisible()
+  await expect(page.getByText('Restore Drills')).toBeVisible()
+  await expect(page.getByText('passed')).toBeVisible()
   await expect(page.getByLabel('Statement file')).toBeVisible()
   await page.getByRole('button', { name: 'Review' }).focus()
   await page.keyboard.press('Enter')

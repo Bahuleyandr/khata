@@ -297,6 +297,18 @@ beforeEach(() => {
     review_status: "reviewed",
     account_id: null,
     capture_event_id: null,
+    confidence: {
+      overall: 95,
+      amount: 100,
+      date: 95,
+      merchant: 70,
+      category: 95,
+      account: 55,
+      source: 98,
+      reasons: [],
+    },
+    paid_by_user_id: null,
+    settlement_scope: "personal",
   });
   vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValue(null);
   vi.mocked(mockOcr.ocrReceiptImage).mockResolvedValue(

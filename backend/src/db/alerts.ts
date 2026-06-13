@@ -1,4 +1,5 @@
 import { sql } from "./index.js";
+import { findSubscriptionCandidates } from "./query.js";
 
 export type AlertSeverity = "info" | "warning" | "critical";
 export type AlertStatus = "open" | "dismissed" | "resolved";
@@ -113,6 +114,43 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
       AND spent.spent_cents > b.target_cents
   `;
 
+  const budgetPaceRows = await sql<Array<{
+    category_name: string;
+    spent_cents: string;
+    target_cents: string;
+    projected_cents: string;
+  }>>`
+    WITH current_month AS (
+      SELECT to_char(NOW(), 'YYYY-MM') AS month_key,
+             date_trunc('month', NOW())::date AS month_start,
+             (date_trunc('month', NOW()) + INTERVAL '1 month')::date AS month_end,
+             GREATEST(EXTRACT(DAY FROM NOW())::numeric, 1) AS elapsed_days,
+             EXTRACT(DAY FROM (date_trunc('month', NOW()) + INTERVAL '1 month - 1 day'))::numeric AS days_in_month
+    ),
+    spent AS (
+      SELECT e.category_id,
+             SUM(e.amount_cents) AS spent_cents
+      FROM expenses e, current_month cm
+      WHERE e.user_id = ${userId}
+        AND e.category_id IS NOT NULL
+        AND e.occurred_at >= cm.month_start
+        AND e.occurred_at < cm.month_end
+      GROUP BY e.category_id
+    )
+    SELECT c.name AS category_name,
+           COALESCE(spent.spent_cents, 0)::text AS spent_cents,
+           b.target_cents::text AS target_cents,
+           ROUND((COALESCE(spent.spent_cents, 0) / cm.elapsed_days) * cm.days_in_month)::bigint::text AS projected_cents
+    FROM category_budgets b
+    JOIN categories c ON c.id = b.category_id
+    JOIN current_month cm ON TRUE
+    LEFT JOIN spent ON spent.category_id = b.category_id
+    WHERE b.user_id = ${userId}
+      AND ROUND((COALESCE(spent.spent_cents, 0) / cm.elapsed_days) * cm.days_in_month)::bigint > b.target_cents
+    ORDER BY ROUND((COALESCE(spent.spent_cents, 0) / cm.elapsed_days) * cm.days_in_month)::bigint - b.target_cents DESC
+    LIMIT 3
+  `;
+
   const [subscriptionCounts] = await sql<Array<{ overdue_count: string }>>`
     WITH prefs AS (
       SELECT merchant_key, merchant_name
@@ -143,6 +181,7 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
   const failedStatements = Number(statementCounts?.failed_count ?? 0);
   const overBudgets = Number(budgetCounts?.over_budget_count ?? 0);
   const overdueSubscriptions = Number(subscriptionCounts?.overdue_count ?? 0);
+  const subscriptionSignals = await findSubscriptionCandidates(userId, 6, 2, { includeIgnored: false });
 
   if (failedCaptures > 0) {
     alerts.push({
@@ -184,6 +223,17 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
       dedupeKey: "budget_overrun",
     });
   }
+  for (const budget of budgetPaceRows) {
+    const overrun = Number(budget.projected_cents) - Number(budget.target_cents);
+    alerts.push({
+      kind: "budget_projected_overrun",
+      severity: overrun > Number(budget.target_cents) * 0.25 ? "warning" : "info",
+      title: `${budget.category_name} is pacing over budget`,
+      detail: `Spent ₹${Math.round(Number(budget.spent_cents) / 100).toLocaleString("en-IN")} so far; projected ₹${Math.round(Number(budget.projected_cents) / 100).toLocaleString("en-IN")}.`,
+      href: "/manage#budgets",
+      dedupeKey: `budget_projected:${budget.category_name.toLowerCase()}`,
+    });
+  }
   if (overdueSubscriptions > 0) {
     alerts.push({
       kind: "subscription_overdue",
@@ -193,6 +243,38 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
       href: "/manage#subscriptions",
       dedupeKey: "subscription_overdue",
     });
+  }
+  for (const subscription of subscriptionSignals.slice(0, 6)) {
+    if (subscription.preference_status === null && subscription.confidence >= 75) {
+      alerts.push({
+        kind: "subscription_new_candidate",
+        severity: "info",
+        title: `Possible recurring charge: ${subscription.merchant}`,
+        detail: `${subscription.count} charges, ${subscription.confidence}% confidence, about ₹${Math.round(Number(subscription.monthly_estimate_cents) / 100).toLocaleString("en-IN")}/month.`,
+        href: "/manage#subscriptions",
+        dedupeKey: `subscription_candidate:${subscription.merchant_key}`,
+      });
+    }
+    if (subscription.preference_status === "confirmed" && subscription.days_until_next === 0) {
+      alerts.push({
+        kind: "subscription_expected_today",
+        severity: "info",
+        title: `${subscription.merchant} expected today`,
+        detail: `Expected recurring charge around ₹${Math.round(Number(subscription.avg_amount_cents) / 100).toLocaleString("en-IN")}.`,
+        href: "/manage#subscriptions",
+        dedupeKey: `subscription_today:${subscription.merchant_key}:${subscription.next_expected_at}`,
+      });
+    }
+    if (subscription.preference_status === "confirmed" && subscription.amount_variance_pct >= 20) {
+      alerts.push({
+        kind: "subscription_amount_changed",
+        severity: "warning",
+        title: `${subscription.merchant} amount is varying`,
+        detail: `Recent charges vary by about ${subscription.amount_variance_pct}%. Confirm whether the plan changed.`,
+        href: "/manage#subscriptions",
+        dedupeKey: `subscription_amount_changed:${subscription.merchant_key}`,
+      });
+    }
   }
 
   for (const alert of alerts) {

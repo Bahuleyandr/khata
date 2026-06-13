@@ -7,9 +7,11 @@ import {
   markCaptureFailed,
   markCaptureIgnored,
   markCaptureProcessed,
+  summarizeCaptureFailures,
   type CaptureSource,
   type CaptureStatus,
 } from "../db/captures.js";
+import { buildCaptureConfidence, reviewStatusFromConfidence } from "../capture/confidence.js";
 import { getCategoryByName, getUserCategories } from "../db/categories.js";
 import { insertExpense } from "../db/expenses.js";
 import { getOverrides } from "../db/overrides.js";
@@ -94,6 +96,12 @@ export async function capturesRoutes(app: FastifyInstance) {
     },
   );
 
+  app.get("/api/captures/summary", async (request, reply) => {
+    const session = await getSession(request, reply);
+    if (!session) return;
+    return { failures: await summarizeCaptureFailures(session.userId) };
+  });
+
   app.post<{ Params: { id: string } }>(
     "/api/captures/:id/ignore",
     { schema: { params: captureParamsSchema } },
@@ -167,7 +175,19 @@ export async function capturesRoutes(app: FastifyInstance) {
         });
         const accountId = rule.account_id ?? (await guessAccountFromText(session.userId, rawText));
         categoryId = rule.category_id ?? categoryId;
-        reviewStatus = rule.review_status ?? reviewStatus;
+        const confidence = buildCaptureConfidence({
+          amountCents,
+          occurredAt,
+          merchant,
+          description,
+          categoryId,
+          accountId,
+          source: "telegram",
+          ruleId: rule.rule_id,
+          parser: upi ? "upi_regex" : "llm",
+          rawText,
+        });
+        reviewStatus = rule.review_status ?? reviewStatusFromConfidence(reviewStatus, confidence);
 
         const expenseId = await insertExpense({
           userId: session.userId,
@@ -182,9 +202,12 @@ export async function capturesRoutes(app: FastifyInstance) {
           review_status: reviewStatus,
           account_id: accountId,
           capture_event_id: capture.id,
+          confidence,
+          paid_by_user_id: session.actorUserId,
+          settlement_scope: session.userId < 0 ? "shared" : "personal",
         });
         await addTags(session.userId, expenseId, rule.tag_names);
-        await markCaptureProcessed(session.userId, capture.id, expenseId);
+        await markCaptureProcessed(session.userId, capture.id, expenseId, confidence);
         await recordAuditEvent({
           userId: session.userId,
           actorUserId: session.actorUserId,

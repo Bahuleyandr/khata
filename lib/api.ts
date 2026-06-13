@@ -181,6 +181,17 @@ export interface SubscriptionCandidate {
 
 export type SubscriptionPreferenceStatus = 'confirmed' | 'ignored' | 'inactive'
 
+export interface CaptureConfidence {
+  overall: number
+  amount: number
+  date: number
+  merchant: number
+  category: number
+  account: number
+  source: number
+  reasons: string[]
+}
+
 export interface Expense {
   id: string
   amount_cents: string
@@ -195,6 +206,9 @@ export interface Expense {
   occurred_at: string
   image_key: string | null
   review_status: 'needs_review' | 'reviewed' | 'ignored'
+  confidence: CaptureConfidence
+  paid_by_user_id: string | null
+  settlement_scope: 'personal' | 'shared' | 'reimbursable'
   tags: string[]
 }
 
@@ -244,6 +258,7 @@ export interface Receipt {
   receipt_url: string
   raw_text: string | null
   review_status: 'needs_review' | 'reviewed' | 'ignored'
+  confidence?: CaptureConfidence
 }
 
 export interface ReceiptPage {
@@ -355,10 +370,19 @@ export interface CaptureEvent {
   parsed_expense_id: string | null
   parsed_expense_label: string | null
   error_reason: string | null
+  failure_kind: string | null
   metadata: Record<string, unknown>
+  confidence: Partial<CaptureConfidence>
   created_at: string
   updated_at: string
   processed_at: string | null
+}
+
+export interface CaptureFailureSummary {
+  failure_kind: string
+  count: number
+  latest_error: string | null
+  latest_at: string
 }
 
 export interface UserAlert {
@@ -403,6 +427,58 @@ export interface ReconciliationResult {
     total_statement_cents: string
   }
   items: ReconciliationItem[]
+}
+
+export interface RuleSuggestion {
+  id: string
+  source: 'correction' | 'statement_row' | 'bulk_correction'
+  source_entity_type: string | null
+  source_entity_id: string | null
+  merchant: string | null
+  pattern: string
+  match_scope: SmartRuleMatchScope
+  match_type: SmartRuleMatchType
+  category_id: string | null
+  category: string | null
+  account_id: string | null
+  account: string | null
+  tag_names: string[]
+  reason: string
+  status: 'pending' | 'accepted' | 'dismissed'
+  smart_rule_id: string | null
+  created_at: string
+  updated_at: string
+  decided_at: string | null
+}
+
+export interface HouseholdSettlement {
+  period: { year: number; month: number; start: string; end: string; label: string }
+  total_cents: string
+  member_count: number
+  payers: Array<{
+    telegram_user_id: string
+    first_name: string | null
+    username: string | null
+    paid_cents: string
+    fair_share_cents: string
+    balance_cents: string
+  }>
+  transfers: Array<{
+    from_telegram_user_id: string
+    to_telegram_user_id: string
+    amount_cents: string
+  }>
+}
+
+export interface RestoreDrill {
+  id: string
+  status: 'pending' | 'running' | 'passed' | 'failed'
+  backup_key: string | null
+  checked_at: string
+  duration_ms: number | null
+  detail: Record<string, unknown>
+  error_reason: string | null
+  created_at: string
 }
 
 export interface MonthlyReviewTask {
@@ -574,6 +650,8 @@ export interface ExpenseUpdateInput {
   account_id?: string | null
   occurred_at?: string
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
+  paid_by_user_id?: number | null
+  settlement_scope?: 'personal' | 'shared' | 'reimbursable'
 }
 
 export interface ExpenseCreateInput {
@@ -586,6 +664,8 @@ export interface ExpenseCreateInput {
   occurred_at: string
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
   tag_names?: string[]
+  paid_by_user_id?: number | null
+  settlement_scope?: 'personal' | 'shared' | 'reimbursable'
 }
 
 export function createExpense(data: ExpenseCreateInput): Promise<Expense> {
@@ -627,6 +707,7 @@ export async function bulkUpdateExpenses(data: {
   account_id?: string | null
   tag_names?: string[]
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
+  settlement_scope?: 'personal' | 'shared' | 'reimbursable'
 }): Promise<{ ok: boolean; updated: number }> {
   return apiFetch<{ ok: boolean; updated: number }>('/api/expenses/bulk', {
     method: 'POST',
@@ -869,6 +950,28 @@ export async function deleteSmartRule(id: string): Promise<void> {
   await apiFetch<{ ok: boolean }>(`/api/rules/${id}`, { method: 'DELETE' })
 }
 
+export function getRuleSuggestions(params: { status?: RuleSuggestion['status'] } = {}): Promise<{ suggestions: RuleSuggestion[] }> {
+  const q = new URLSearchParams()
+  if (params.status) q.set('status', params.status)
+  return apiFetch<{ suggestions: RuleSuggestion[] }>(`/api/rule-suggestions?${q}`)
+}
+
+export async function acceptRuleSuggestion(id: string): Promise<{ suggestion: RuleSuggestion; rule: SmartRule }> {
+  const res = await apiFetch<{ ok: boolean; suggestion: RuleSuggestion; rule: SmartRule }>(
+    `/api/rule-suggestions/${id}/accept`,
+    { method: 'POST' },
+  )
+  return { suggestion: res.suggestion, rule: res.rule }
+}
+
+export async function dismissRuleSuggestion(id: string): Promise<RuleSuggestion> {
+  const res = await apiFetch<{ ok: boolean; suggestion: RuleSuggestion }>(
+    `/api/rule-suggestions/${id}/dismiss`,
+    { method: 'POST' },
+  )
+  return res.suggestion
+}
+
 export function getCaptures(params: {
   status?: 'pending' | 'processed' | 'failed' | 'ignored'
   source?: string
@@ -879,6 +982,10 @@ export function getCaptures(params: {
   if (params.source) q.set('source', params.source)
   if (params.limit) q.set('limit', String(params.limit))
   return apiFetch<{ captures: CaptureEvent[] }>(`/api/captures?${q}`)
+}
+
+export function getCaptureSummary(): Promise<{ failures: CaptureFailureSummary[] }> {
+  return apiFetch<{ failures: CaptureFailureSummary[] }>('/api/captures/summary')
 }
 
 export async function ignoreCapture(id: string): Promise<void> {
@@ -911,6 +1018,17 @@ export function getReconciliation(params: {
   q.set('month', String(params.month))
   if (params.accountId) q.set('account_id', params.accountId)
   return apiFetch<ReconciliationResult>(`/api/reconciliation/monthly?${q}`)
+}
+
+export function getSettlement(params: { year: number; month: number }): Promise<{ settlement: HouseholdSettlement }> {
+  const q = new URLSearchParams()
+  q.set('year', String(params.year))
+  q.set('month', String(params.month))
+  return apiFetch<{ settlement: HouseholdSettlement }>(`/api/settlement/monthly?${q}`)
+}
+
+export function getRestoreDrills(): Promise<{ drills: RestoreDrill[] }> {
+  return apiFetch<{ drills: RestoreDrill[] }>('/api/ops/restore-drills')
 }
 
 export async function retryStatement(id: string): Promise<{

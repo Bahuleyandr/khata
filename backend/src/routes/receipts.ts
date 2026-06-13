@@ -66,6 +66,7 @@ export async function receiptsRoutes(app: FastifyInstance) {
       image_key: string;
       raw_text: string | null;
       review_status: string;
+      confidence: Record<string, unknown>;
     };
 
     const rows = await sql<ReceiptRow[]>`
@@ -79,7 +80,8 @@ export async function receiptsRoutes(app: FastifyInstance) {
              e.occurred_at,
              e.image_key,
              e.raw_text,
-             e.review_status
+             e.review_status,
+             e.confidence
       FROM expenses e
       LEFT JOIN categories c ON e.category_id = c.id
       WHERE e.user_id = ${session.userId}

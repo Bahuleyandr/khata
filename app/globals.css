@@ -284,6 +284,35 @@ tr:hover td { background: #f9fafb; }
 .badge-imported { background: #dcfce7; color: #166534; }
 .badge-duplicate { background: #fef3c7; color: #92400e; }
 .badge-inactive { background: #e5e7eb; color: #374151; }
+.badge-passed { background: #dcfce7; color: #166534; }
+.badge-failed { background: #fee2e2; color: #991b1b; }
+.badge-running { background: #e0f2fe; color: #075985; }
+
+.positive-amount { color: #166534; font-weight: 700; }
+.negative-amount { color: #991b1b; font-weight: 700; }
+.failure-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.65rem;
+  margin: 0.85rem 0 1rem;
+}
+.failure-summary-grid span {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.65rem 0.75rem;
+}
+.failure-summary-grid strong {
+  color: var(--text-strong);
+  font-size: 1.05rem;
+}
+.failure-summary-grid small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  text-transform: capitalize;
+}
 
 .filter-bar {
   display: flex;

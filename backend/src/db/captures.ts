@@ -1,4 +1,6 @@
 import { sql } from "./index.js";
+import { classifyCaptureFailure, type CaptureFailureKind } from "../capture/failure-kind.js";
+import type { CaptureConfidence } from "../capture/confidence.js";
 
 export type CaptureSource =
   | "telegram_text"
@@ -19,6 +21,7 @@ export interface CaptureEventInput {
   contentHash?: string | null;
   mimeType?: string | null;
   metadata?: Record<string, unknown>;
+  confidence?: CaptureConfidence;
 }
 
 export interface CaptureEventRow {
@@ -34,7 +37,9 @@ export interface CaptureEventRow {
   parsed_expense_id: string | null;
   parsed_expense_label: string | null;
   error_reason: string | null;
+  failure_kind: CaptureFailureKind | null;
   metadata: Record<string, unknown>;
+  confidence: CaptureConfidence;
   created_at: Date;
   updated_at: Date;
   processed_at: Date | null;
@@ -46,8 +51,16 @@ export interface CaptureFilters {
   limit?: number;
 }
 
+export interface CaptureFailureSummaryRow {
+  failure_kind: CaptureFailureKind;
+  count: number;
+  latest_error: string | null;
+  latest_at: Date;
+}
+
 export async function recordCaptureEvent(input: CaptureEventInput): Promise<string> {
   const metadataJson = JSON.stringify(input.metadata ?? {});
+  const confidenceJson = JSON.stringify(input.confidence ?? {});
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO capture_events (
       user_id,
@@ -57,7 +70,8 @@ export async function recordCaptureEvent(input: CaptureEventInput): Promise<stri
       file_key,
       content_hash,
       mime_type,
-      metadata
+      metadata,
+      confidence
     )
     VALUES (
       ${input.userId},
@@ -67,7 +81,8 @@ export async function recordCaptureEvent(input: CaptureEventInput): Promise<stri
       ${input.fileKey ?? null},
       ${input.contentHash ?? null},
       ${input.mimeType ?? null},
-      ${metadataJson}::jsonb
+      ${metadataJson}::jsonb,
+      ${confidenceJson}::jsonb
     )
     RETURNING id
   `;
@@ -79,13 +94,17 @@ export async function markCaptureProcessed(
   userId: number,
   captureEventId: string | null | undefined,
   expenseId: string | null,
+  confidence?: CaptureConfidence,
 ): Promise<void> {
   if (!captureEventId) return;
+  const confidenceJson = confidence ? JSON.stringify(confidence) : null;
   await sql`
     UPDATE capture_events
     SET status = 'processed',
         parsed_expense_id = ${expenseId},
         error_reason = NULL,
+        failure_kind = NULL,
+        confidence = CASE WHEN ${confidenceJson !== null} THEN ${confidenceJson ?? "{}"}::jsonb ELSE confidence END,
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
@@ -114,10 +133,12 @@ export async function markCaptureFailed(
   errorReason: string,
 ): Promise<void> {
   if (!captureEventId) return;
+  const failureKind = classifyCaptureFailure(errorReason);
   await sql`
     UPDATE capture_events
     SET status = 'failed',
         error_reason = ${errorReason.slice(0, 500)},
+        failure_kind = ${failureKind},
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
@@ -149,7 +170,9 @@ export async function markCaptureIgnored(
               parsed_expense_id::text AS parsed_expense_id,
               NULL::text AS parsed_expense_label,
               error_reason,
+              failure_kind,
               metadata,
+              confidence,
               created_at,
               updated_at,
               processed_at
@@ -178,7 +201,9 @@ export async function listCaptureEvents(
            ce.parsed_expense_id::text AS parsed_expense_id,
            COALESCE(e.merchant, e.description) AS parsed_expense_label,
            ce.error_reason,
+           ce.failure_kind,
            ce.metadata,
+           ce.confidence,
            ce.created_at,
            ce.updated_at,
            ce.processed_at
@@ -211,7 +236,9 @@ export async function getCaptureEvent(
            ce.parsed_expense_id::text AS parsed_expense_id,
            COALESCE(e.merchant, e.description) AS parsed_expense_label,
            ce.error_reason,
+           ce.failure_kind,
            ce.metadata,
+           ce.confidence,
            ce.created_at,
            ce.updated_at,
            ce.processed_at
@@ -224,4 +251,38 @@ export async function getCaptureEvent(
     LIMIT 1
   `;
   return row ?? null;
+}
+
+export async function summarizeCaptureFailures(userId: number): Promise<CaptureFailureSummaryRow[]> {
+  return sql<CaptureFailureSummaryRow[]>`
+    WITH failed AS (
+      SELECT COALESCE(failure_kind, 'unknown') AS failure_kind,
+             error_reason,
+             created_at,
+             ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(failure_kind, 'unknown')
+               ORDER BY created_at DESC
+             ) AS rn
+      FROM capture_events
+      WHERE user_id = ${userId}
+        AND status = 'failed'
+        AND created_at >= NOW() - INTERVAL '90 days'
+    ),
+    grouped AS (
+      SELECT failure_kind,
+             COUNT(*)::int AS count,
+             MAX(created_at) AS latest_at
+      FROM failed
+      GROUP BY failure_kind
+    )
+    SELECT grouped.failure_kind,
+           grouped.count,
+           failed.error_reason AS latest_error,
+           grouped.latest_at
+    FROM grouped
+    LEFT JOIN failed
+      ON failed.failure_kind = grouped.failure_kind
+     AND failed.rn = 1
+    ORDER BY grouped.count DESC, grouped.latest_at DESC
+  `;
 }

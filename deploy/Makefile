@@ -38,7 +38,7 @@ TEMP_RESTORE_DB ?= khata_restore_check
         deploy namespace migrate logs status secrets restart undeploy tailscale-serve \
         tailscale-status minio-bucket backup backup-postgres backup-minio \
         restore-dry-run restore-postgres-dry-run restore-minio-dry-run \
-        restore-to-temp-db smoke
+        restore-to-temp-db restore-drill smoke
 
 build: build-backend build-frontend
 
@@ -124,6 +124,10 @@ restore-to-temp-db:
 	kubectl exec -n $(NS) deploy/khata-postgres -- psql -U khata -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $(TEMP_RESTORE_DB) WITH (FORCE);"
 	@echo "Postgres restore validated in temp database: $(TEMP_RESTORE_DB)"
 
+restore-drill:
+	kubectl create job -n $(NS) --from=cronjob/khata-postgres-restore-drill khata-postgres-restore-drill-manual-$$(date -u +%Y%m%d%H%M%S)
+	@echo "Restore drill job started. Watch it with: kubectl get jobs,pods -n $(NS)"
+
 smoke:
 	kubectl rollout status deployment/khata-postgres -n $(NS) --timeout=120s
 	kubectl rollout status deployment/khata-minio -n $(NS) --timeout=120s
@@ -131,6 +135,7 @@ smoke:
 	kubectl rollout status deployment/khata-frontend -n $(NS) --timeout=120s
 	kubectl get cronjob/khata-postgres-backup -n $(NS)
 	kubectl get cronjob/khata-minio-backup -n $(NS)
+	kubectl get cronjob/khata-postgres-restore-drill -n $(NS)
 	kubectl exec -n $(NS) deploy/khata-backend -- node -e "fetch('http://localhost:3001/health').then(r=>{if(!r.ok)process.exit(1);return r.text()}).then(console.log)"
 
 logs:

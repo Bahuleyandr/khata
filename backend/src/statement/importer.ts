@@ -1,5 +1,6 @@
 import { sql } from "../db/index.js";
 import type { DedupeResult } from "./types.js";
+import { buildCaptureConfidence } from "../capture/confidence.js";
 
 export async function bulkInsertTransactions(
   userId: number,
@@ -9,9 +10,35 @@ export async function bulkInsertTransactions(
   const newTxs = results.filter((r) => !r.alreadyLogged).map((r) => r.transaction);
   if (newTxs.length === 0) return 0;
 
+  const payload = newTxs.map((tx) => {
+    const confidence = buildCaptureConfidence({
+      amountCents: tx.amountCents,
+      occurredAt: new Date(tx.date),
+      merchant: null,
+      description: tx.description,
+      categoryId: null,
+      accountId: null,
+      source: "statement",
+      parser: "statement",
+      rawText: tx.description,
+    });
+    return {
+      user_id: userId,
+      amount_cents: tx.amountCents,
+      currency: tx.currency,
+      description: tx.description,
+      occurred_at: tx.date,
+      statement_id: statementId,
+      confidence,
+      paid_by_user_id: userId,
+      settlement_scope: userId < 0 ? "shared" : "personal",
+    };
+  });
+
   await sql`
     INSERT INTO expenses
-      (user_id, amount_cents, currency, description, occurred_at, source, statement_id, review_status)
+      (user_id, amount_cents, currency, description, occurred_at, source, statement_id,
+       review_status, confidence, paid_by_user_id, settlement_scope)
     SELECT
       v.user_id,
       v.amount_cents,
@@ -20,23 +47,20 @@ export async function bulkInsertTransactions(
       v.occurred_at,
       'statement',
       v.statement_id,
-      'needs_review'
-    FROM jsonb_to_recordset(${JSON.stringify(
-      newTxs.map((tx) => ({
-        user_id: userId,
-        amount_cents: tx.amountCents,
-        currency: tx.currency,
-        description: tx.description,
-        occurred_at: tx.date,
-        statement_id: statementId,
-      })),
-    )}::jsonb) AS v(
+      'needs_review',
+      v.confidence,
+      v.paid_by_user_id,
+      v.settlement_scope
+    FROM jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) AS v(
       user_id BIGINT,
       amount_cents BIGINT,
       currency TEXT,
       description TEXT,
       occurred_at TIMESTAMPTZ,
-      statement_id UUID
+      statement_id UUID,
+      confidence JSONB,
+      paid_by_user_id BIGINT,
+      settlement_scope TEXT
     )
   `;
 

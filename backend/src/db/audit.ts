@@ -115,6 +115,10 @@ function getNumber(value: unknown): number | null {
   return null;
 }
 
+function getObject(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
 export async function undoAuditEvent(
   userId: number,
   actorUserId: number,
@@ -179,6 +183,9 @@ export async function undoAuditEvent(
             category_id = ${getString(before.category_id)},
             account_id = ${getString(before.account_id)},
             capture_event_id = ${getString(before.capture_event_id)},
+            confidence = ${JSON.stringify(getObject(before.confidence))}::jsonb,
+            paid_by_user_id = ${getNumber(before.paid_by_user_id)},
+            settlement_scope = ${getString(before.settlement_scope) ?? "personal"},
             occurred_at = ${occurredAt},
             image_key = ${getString(before.image_key)},
             review_status = ${reviewStatus},
@@ -210,6 +217,9 @@ export async function undoAuditEvent(
           category_id,
           account_id,
           capture_event_id,
+          confidence,
+          paid_by_user_id,
+          settlement_scope,
           occurred_at,
           source,
           image_key,
@@ -227,6 +237,9 @@ export async function undoAuditEvent(
           ${getString(before.category_id)},
           ${getString(before.account_id)},
           ${getString(before.capture_event_id)},
+          ${JSON.stringify(getObject(before.confidence))}::jsonb,
+          ${getNumber(before.paid_by_user_id)},
+          ${getString(before.settlement_scope) ?? "personal"},
           ${occurredAt},
           ${source},
           ${getString(before.image_key)},

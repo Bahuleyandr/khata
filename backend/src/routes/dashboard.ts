@@ -18,6 +18,9 @@ import { alertsRoutes } from "./alerts.js";
 import { capturesRoutes } from "./captures.js";
 import { reconciliationRoutes } from "./reconciliation.js";
 import { smartRulesRoutes } from "./smart-rules.js";
+import { ruleSuggestionsRoutes } from "./rule-suggestions.js";
+import { settlementRoutes } from "./settlement.js";
+import { opsRoutes } from "./ops.js";
 import { installCsrfOriginGuard } from "./csrf.js";
 
 export async function dashboardRoutes(app: FastifyInstance) {
@@ -41,4 +44,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
   await app.register(capturesRoutes);
   await app.register(reconciliationRoutes);
   await app.register(smartRulesRoutes);
+  await app.register(ruleSuggestionsRoutes);
+  await app.register(settlementRoutes);
+  await app.register(opsRoutes);
 }

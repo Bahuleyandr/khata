@@ -1,5 +1,6 @@
 import { sql } from "./index.js";
 import { getOrCreateMerchantCanonical } from "./merchants.js";
+import type { CaptureConfidence } from "../capture/confidence.js";
 
 export interface InsertExpenseData {
   userId: number;
@@ -17,6 +18,9 @@ export interface InsertExpenseData {
   review_status?: "needs_review" | "reviewed" | "ignored";
   account_id?: string | null;
   capture_event_id?: string | null;
+  confidence?: CaptureConfidence;
+  paid_by_user_id?: number | null;
+  settlement_scope?: "personal" | "shared" | "reimbursable";
 }
 
 export interface ExpenseForEdit {
@@ -42,6 +46,9 @@ export interface DeletedExpenseData {
   review_status: string;
   account_id: string | null;
   capture_event_id: string | null;
+  confidence: CaptureConfidence;
+  paid_by_user_id: string | null;
+  settlement_scope: string;
 }
 
 export async function insertExpense(data: InsertExpenseData): Promise<string> {
@@ -49,12 +56,14 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
   // Zomato?" works even when the raw `merchant` text is "ZOMATO IN" /
   // "Zomato Order"). Best-effort — null merchant just yields null.
   const merchantCanonicalId = await getOrCreateMerchantCanonical(data.userId, data.merchant);
+  const confidenceJson = JSON.stringify(data.confidence ?? {});
 
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO expenses
       (user_id, amount_cents, currency, description, merchant, merchant_canonical_id,
        category_id, occurred_at, source, raw_text, image_key, content_hash,
-       upi_reference_id, review_status, reviewed_at, account_id, capture_event_id)
+       upi_reference_id, review_status, reviewed_at, account_id, capture_event_id,
+       confidence, paid_by_user_id, settlement_scope)
     VALUES
       (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
        ${data.merchant}, ${merchantCanonicalId},
@@ -62,7 +71,8 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
        ${data.image_key ?? null}, ${data.content_hash ?? null},
        ${data.upi_reference_id ?? null}, ${data.review_status ?? "reviewed"},
        ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null},
-       ${data.account_id ?? null}, ${data.capture_event_id ?? null})
+       ${data.account_id ?? null}, ${data.capture_event_id ?? null},
+       ${confidenceJson}::jsonb, ${data.paid_by_user_id ?? null}, ${data.settlement_scope ?? "personal"})
     RETURNING id
   `;
   return row.id;
@@ -216,7 +226,9 @@ export async function deleteExpense(id: string, userId: number): Promise<Deleted
       AND user_id = ${userId}
     RETURNING id, amount_cents::text AS amount_cents, currency, description, merchant,
               merchant_canonical_id, category_id, source, occurred_at, image_key,
-              review_status
+              review_status, account_id::text AS account_id,
+              capture_event_id::text AS capture_event_id, confidence,
+              paid_by_user_id::text AS paid_by_user_id, settlement_scope
   `;
   return row ?? null;
 }

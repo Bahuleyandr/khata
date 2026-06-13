@@ -122,3 +122,75 @@ spec:
             - name: backups
               persistentVolumeClaim:
                 claimName: khata-backups-data
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: khata-postgres-restore-drill
+  namespace: khata
+spec:
+  schedule: "30 19 * * 0" # Sundays 01:00 IST
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: restore-drill
+              image: postgres:16.8-alpine
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-secrets
+                      key: POSTGRES_PASSWORD
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -u
+                  host="khata-postgres.khata.svc.cluster.local"
+                  db="khata"
+                  user="khata"
+                  drill_db="khata_restore_drill_$(date -u +%Y%m%d%H%M%S)"
+                  backup="$(ls -1t /backups/khata-postgres-*.dump 2>/dev/null | head -n 1 || true)"
+                  started="$(date +%s%3N)"
+                  status="passed"
+                  error=""
+                  if [ -z "$backup" ]; then
+                    status="failed"
+                    error="No postgres dump found in backup PVC"
+                  else
+                    createdb --host="$host" --username="$user" "$drill_db" 2>/tmp/restore-drill.err || status="failed"
+                    if [ "$status" = "passed" ]; then
+                      pg_restore --host="$host" --username="$user" --dbname="$drill_db" --no-owner --no-acl "$backup" 2>/tmp/restore-drill.err || status="failed"
+                    fi
+                    dropdb --if-exists --host="$host" --username="$user" "$drill_db" >/dev/null 2>&1 || true
+                    if [ "$status" = "failed" ]; then
+                      error="$(cat /tmp/restore-drill.err 2>/dev/null | tail -c 500 | tr '\n' ' ')"
+                    fi
+                  fi
+                  ended="$(date +%s%3N)"
+                  duration="$((ended - started))"
+                  detail="{\"drill_db\":\"$drill_db\",\"pod\":\"${HOSTNAME:-unknown}\"}"
+                  psql --host="$host" --username="$user" --dbname="$db" \
+                    --set=ON_ERROR_STOP=1 \
+                    --command="INSERT INTO restore_drills (status, backup_key, checked_at, duration_ms, detail, error_reason) VALUES ('$status', NULLIF('$backup',''), NOW(), $duration, '$detail'::jsonb, NULLIF($$${error}$$, ''));"
+                  test "$status" = "passed"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: khata-backups-data

@@ -14,6 +14,8 @@ import {
   handleRenameCategory,
   handleDeleteCategory,
   handleListExpenses,
+  handleMonthSummary,
+  handleNeedsReview,
   handleListTags,
   handleAsk,
   handleBudget,
@@ -35,6 +37,7 @@ bot.use(async (ctx, next) => {
     await ctx.reply("Unauthorized.");
     return;
   }
+  (ctx as typeof ctx & { khataActorUserId?: number }).khataActorUserId = userId;
   if (!isAllowedUser(userId)) {
     const access = await resolveAccessForTelegramUser(userId, {
       firstName: from.first_name,
@@ -78,6 +81,10 @@ bot.command("add", handleAddCategory);
 bot.command("rename", handleRenameCategory);
 bot.command("delete", handleDeleteCategory);
 bot.command("expenses", handleListExpenses);
+bot.command("month", handleMonthSummary);
+bot.command("summary", handleMonthSummary);
+bot.command("review", handleNeedsReview);
+bot.command("needs_review", handleNeedsReview);
 bot.command("tags", handleListTags);
 bot.command("ask", handleAsk);
 bot.command("budget", handleBudget);

@@ -63,6 +63,7 @@ import {
   listTagsWithCounts,
 } from "../db/tags.js";
 import { applySmartRules } from "../db/smart-rules.js";
+import { buildCaptureConfidence, reviewStatusFromConfidence } from "../capture/confidence.js";
 import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js";
 import { chatWithData } from "../ai/chat.js";
 import { transcribeVoice } from "../voice/transcribe.js";
@@ -76,6 +77,22 @@ import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } fr
 
 function todayString(): string {
   return new Date().toISOString().split("T")[0]!;
+}
+
+function actorUserId(ctx: Context): number {
+  return (ctx as Context & { khataActorUserId?: number }).khataActorUserId ?? ctx.from!.id;
+}
+
+async function setPendingEditForActor(
+  ctx: Context,
+  ledgerUserId: number,
+  data: PendingEdit,
+): Promise<void> {
+  const actorId = actorUserId(ctx);
+  await setPendingEdit(actorId, { ...data, ledgerUserId });
+  if (actorId !== ledgerUserId) {
+    await setPendingEdit(ledgerUserId, { ...data, ledgerUserId }).catch(console.error);
+  }
 }
 
 // ── /dashboard — open the Telegram Mini App ──────────────────────────────────
@@ -354,6 +371,10 @@ export async function handleStart(ctx: Context): Promise<void> {
       '• "paid 1200 inr for uber yesterday"\n\n' +
       "Or upload a bank statement PDF/photo and I'll parse it automatically.\n\n" +
       "Commands:\n" +
+      "/month — this month's spend so far\n" +
+      "/review — transactions that need cleanup\n" +
+      "/export — download this month as Excel\n" +
+      "/dashboard — open the web dashboard\n" +
       "/categories — list your categories\n" +
       "/add <name> — add a category\n" +
       "/rename <old> <new> — rename a category\n" +
@@ -375,8 +396,11 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "Untag with `untag: <name>`.\n\n" +
       "*Commands:*\n" +
       "/ask <question> — ask anything about your spending\n" +
+      "/month or /summary — this month's spend so far\n" +
+      "/review or /needs_review — cleanup queue\n" +
       "/expenses — list expenses from the 1st of the month till today\n" +
       "/export — download this month as Excel (or `/export YYYY-MM`)\n" +
+      "/dashboard — open the dashboard Mini App\n" +
       "/tags — list your tags with counts\n" +
       "/categories — list your categories\n" +
       "/add <name> — add a category\n" +
@@ -529,6 +553,19 @@ async function processUpiPayment(
   const categoryName =
     cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
   const reviewStatus = rule.review_status ?? (opts.source === "receipt" ? "needs_review" : "reviewed");
+  const confidence = buildCaptureConfidence({
+    amountCents: amount_cents,
+    occurredAt: occurred_at,
+    merchant: upi.merchant,
+    description,
+    categoryId,
+    accountId,
+    source: opts.source,
+    ruleId: rule.rule_id,
+    parser: "upi_regex",
+    rawText,
+  });
+  const finalReviewStatus = rule.review_status ?? reviewStatusFromConfidence(reviewStatus, confidence);
 
   const expenseId = await insertExpense({
     userId,
@@ -543,17 +580,20 @@ async function processUpiPayment(
     image_key: opts.imageKey ?? null,
     content_hash: opts.contentHash ?? null,
     upi_reference_id: upi.reference,
-    review_status: reviewStatus,
+    review_status: finalReviewStatus,
     account_id: accountId,
     capture_event_id: opts.captureEventId ?? null,
+    confidence,
+    paid_by_user_id: actorUserId(ctx),
+    settlement_scope: userId < 0 ? "shared" : "personal",
   });
   for (const rawName of rule.tag_names) {
     const tagId = await getOrCreateTag(userId, rawName);
     if (tagId) await attachTagToExpense(expenseId, tagId);
   }
-  await markCaptureProcessed(userId, opts.captureEventId, expenseId);
+  await markCaptureProcessed(userId, opts.captureEventId, expenseId, confidence);
 
-  await setPendingEdit(userId, {
+  await setPendingEditForActor(ctx, userId, {
     expenseId,
     amount_cents,
     currency: "INR",
@@ -739,6 +779,82 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
   }
 
   await ctx.reply(header + categorySection + individualBody, { parse_mode: "Markdown" });
+}
+
+export async function handleMonthSummary(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const now = new Date();
+  const bounds = currentMonthBounds(now.getFullYear(), now.getMonth() + 1);
+  const [overview] = await sql<Array<{
+    total_cents: string;
+    transaction_count: number;
+    needs_review_count: number;
+    uncategorized_count: number;
+  }>>`
+    SELECT COALESCE(SUM(amount_cents), 0)::text AS total_cents,
+           COUNT(*)::int AS transaction_count,
+           COUNT(*) FILTER (WHERE review_status = 'needs_review')::int AS needs_review_count,
+           COUNT(*) FILTER (WHERE category_id IS NULL)::int AS uncategorized_count
+    FROM expenses
+    WHERE user_id = ${userId}
+      AND occurred_at >= ${bounds.start}::date
+      AND occurred_at < (${bounds.end}::date + INTERVAL '1 day')
+  `;
+  const categories = await spendByCategory(userId, bounds.start, bounds.end);
+  const topLines = categories.slice(0, 5).map(
+    (row) => `• ${row.category}: ${formatAmount(Number(row.total_cents), row.currency)}`,
+  );
+  const total = Number(overview?.total_cents ?? 0);
+  await ctx.reply(
+    `📊 *${bounds.label} so far*\n` +
+      `Total: *${formatAmount(total, "INR")}* across ${overview?.transaction_count ?? 0} transaction${overview?.transaction_count === 1 ? "" : "s"}.\n` +
+      `${topLines.length ? `\n*Top categories:*\n${topLines.join("\n")}\n` : ""}` +
+      `\nNeeds review: ${overview?.needs_review_count ?? 0} · Uncategorized: ${overview?.uncategorized_count ?? 0}\n\n` +
+      "Use /export for Excel or /review for cleanup.",
+    { parse_mode: "Markdown" },
+  );
+}
+
+export async function handleNeedsReview(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const rows = await sql<Array<{
+    id: string;
+    amount_cents: string;
+    currency: string;
+    merchant: string | null;
+    description: string | null;
+    category: string;
+    occurred_at: Date;
+  }>>`
+    SELECT e.id,
+           e.amount_cents::text,
+           e.currency,
+           e.merchant,
+           e.description,
+           COALESCE(c.name, 'Uncategorized') AS category,
+           e.occurred_at
+    FROM expenses e
+    LEFT JOIN categories c ON c.id = e.category_id
+    WHERE e.user_id = ${userId}
+      AND (e.review_status = 'needs_review' OR e.category_id IS NULL)
+    ORDER BY e.occurred_at DESC, e.created_at DESC
+    LIMIT 10
+  `;
+  if (rows.length === 0) {
+    await ctx.reply("✅ Nothing needs review right now.");
+    return;
+  }
+  const lines = rows.map((row) => {
+    const name = row.merchant ?? row.description ?? "expense";
+    const date = new Date(row.occurred_at).toISOString().slice(0, 10);
+    return `• ${formatAmount(Number(row.amount_cents), row.currency)} ${name} — ${row.category} (${date})`;
+  });
+  await ctx.reply(
+    `🧾 *Needs review*\n${lines.join("\n")}\n\nReply \`edit\` after logging, or open /dashboard for bulk fixes.`,
+    { parse_mode: "Markdown" },
+  );
 }
 
 // ── Query handler ─────────────────────────────────────────────────────────────
@@ -1080,6 +1196,18 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   const accountId = rule.account_id ?? (await guessAccountFromText(userId, text));
   const categoryId = rule.category_id ?? cat?.id ?? null;
   const categoryName = cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
+  const confidence = buildCaptureConfidence({
+    amountCents: amount_cents,
+    occurredAt: occurred_at,
+    merchant: parsed.merchant,
+    description: parsed.description,
+    categoryId,
+    accountId,
+    source: "telegram",
+    ruleId: rule.rule_id,
+    parser: "llm",
+    rawText: text,
+  });
 
   const expenseId = await insertExpense({
     userId,
@@ -1091,17 +1219,20 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     occurred_at,
     source: "telegram",
     raw_text: text,
-    review_status: rule.review_status ?? "reviewed",
+    review_status: rule.review_status ?? reviewStatusFromConfidence(undefined, confidence),
     account_id: accountId,
     capture_event_id: captureEventId,
+    confidence,
+    paid_by_user_id: actorUserId(ctx),
+    settlement_scope: userId < 0 ? "shared" : "personal",
   });
   for (const rawName of rule.tag_names) {
     const tagId = await getOrCreateTag(userId, rawName);
     if (tagId) await attachTagToExpense(expenseId, tagId);
   }
-  await markCaptureProcessed(userId, captureEventId, expenseId);
+  await markCaptureProcessed(userId, captureEventId, expenseId, confidence);
 
-  await setPendingEdit(userId, {
+  await setPendingEditForActor(ctx, userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,
@@ -1457,6 +1588,18 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
   const accountId = rule.account_id ?? (await guessAccountFromText(userId, ocrText));
   const categoryId = rule.category_id ?? cat?.id ?? null;
   const categoryName = cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
+  const confidence = buildCaptureConfidence({
+    amountCents: amount_cents,
+    occurredAt: occurred_at,
+    merchant: parsed.merchant,
+    description: parsed.description,
+    categoryId,
+    accountId,
+    source: "receipt",
+    ruleId: rule.rule_id,
+    parser: "receipt_regex",
+    rawText: ocrText,
+  });
 
   let expenseId: string;
   try {
@@ -1472,22 +1615,25 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
       raw_text: ocrText,
       image_key: s3Key,
       content_hash: contentHash,
-      review_status: rule.review_status ?? "needs_review",
+      review_status: rule.review_status ?? reviewStatusFromConfidence("needs_review", confidence),
       account_id: accountId,
       capture_event_id: captureEventId,
+      confidence,
+      paid_by_user_id: actorUserId(ctx),
+      settlement_scope: userId < 0 ? "shared" : "personal",
     });
     for (const rawName of rule.tag_names) {
       const tagId = await getOrCreateTag(userId, rawName);
       if (tagId) await attachTagToExpense(expenseId, tagId);
     }
-    await markCaptureProcessed(userId, captureEventId, expenseId);
+    await markCaptureProcessed(userId, captureEventId, expenseId, confidence);
   } catch (err) {
     await markCaptureFailed(userId, captureEventId, (err as Error).message);
     await ctx.reply(`❌ Failed to save expense: ${String(err)}`);
     return;
   }
 
-  await setPendingEdit(userId, {
+  await setPendingEditForActor(ctx, userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,
@@ -1636,6 +1782,18 @@ export async function handleVoice(ctx: Context): Promise<void> {
   const accountId = rule.account_id ?? (await guessAccountFromText(userId, text));
   const categoryId = rule.category_id ?? cat?.id ?? null;
   const categoryName = cats.find((candidate) => candidate.id === categoryId)?.name ?? cat?.name ?? "Other";
+  const confidence = buildCaptureConfidence({
+    amountCents: amount_cents,
+    occurredAt: occurred_at,
+    merchant: parsed.merchant,
+    description: parsed.description,
+    categoryId,
+    accountId,
+    source: "telegram_voice",
+    ruleId: rule.rule_id,
+    parser: "voice",
+    rawText: text,
+  });
 
   const expenseId = await insertExpense({
     userId,
@@ -1647,17 +1805,20 @@ export async function handleVoice(ctx: Context): Promise<void> {
     occurred_at,
     source: "telegram",
     raw_text: text,
-    review_status: rule.review_status ?? "reviewed",
+    review_status: rule.review_status ?? reviewStatusFromConfidence(undefined, confidence),
     account_id: accountId,
     capture_event_id: captureEventId,
+    confidence,
+    paid_by_user_id: actorUserId(ctx),
+    settlement_scope: userId < 0 ? "shared" : "personal",
   });
   for (const rawName of rule.tag_names) {
     const tagId = await getOrCreateTag(userId, rawName);
     if (tagId) await attachTagToExpense(expenseId, tagId);
   }
-  await markCaptureProcessed(userId, captureEventId, expenseId);
+  await markCaptureProcessed(userId, captureEventId, expenseId, confidence);
 
-  await setPendingEdit(userId, {
+  await setPendingEditForActor(ctx, userId, {
     expenseId,
     amount_cents,
     currency: parsed.currency,

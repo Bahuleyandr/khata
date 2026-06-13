@@ -31,6 +31,10 @@ const accountMocks = vi.hoisted(() => ({
 }));
 const smartRuleMocks = vi.hoisted(() => ({
   applySmartRules: vi.fn(),
+  createSmartRule: vi.fn(),
+  normalizeRuleTags: vi.fn((names?: string[]) =>
+    Array.from(new Set((names ?? []).map((name) => name.trim().toLowerCase()).filter(Boolean))),
+  ),
 }));
 
 vi.mock("../config.js", () => ({
@@ -295,6 +299,8 @@ describe("route hardening", () => {
       .mockResolvedValueOnce([{ id: EXPENSE_ID }])
       .mockResolvedValueOnce([{ id: TAG_ID }])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: EXPENSE_ID, merchant: "Team Lunch", description: "team lunch" }])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
 
     const app = await buildApp();
@@ -313,7 +319,7 @@ describe("route hardening", () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ ok: true, updated: 1 });
-      expect(sqlMock).toHaveBeenCalledTimes(5);
+      expect(sqlMock).toHaveBeenCalledTimes(7);
     } finally {
       await app.close();
     }

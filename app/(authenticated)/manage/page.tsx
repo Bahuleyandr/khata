@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
+  acceptRuleSuggestion,
   clearBudget,
   clearSubscriptionPreference,
   archiveAccount,
@@ -10,6 +11,7 @@ import {
   createSmartRule,
   deleteCategory,
   deleteSmartRule,
+  dismissRuleSuggestion,
   dismissAlert,
   formatCents,
   formatDate,
@@ -19,9 +21,13 @@ import {
   getAuditLog,
   getBudgets,
   getCaptures,
+  getCaptureSummary,
   getCategories,
   getMe,
   getReconciliation,
+  getRestoreDrills,
+  getRuleSuggestions,
+  getSettlement,
   getSmartRules,
   getStatementRows,
   getStatements,
@@ -49,9 +55,13 @@ import {
   type AuditEvent,
   type BudgetVariance,
   type CaptureEvent,
+  type CaptureFailureSummary,
   type Category,
+  type HouseholdSettlement,
   type Me,
   type ReconciliationResult,
+  type RestoreDrill,
+  type RuleSuggestion,
   type SmartRule,
   type StatementImport,
   type StatementImportRow,
@@ -188,8 +198,12 @@ export default function ManagePage() {
   const [tags, setTags] = useState<Tag[]>([])
   const [alerts, setAlerts] = useState<UserAlert[]>([])
   const [captures, setCaptures] = useState<CaptureEvent[]>([])
+  const [captureFailures, setCaptureFailures] = useState<CaptureFailureSummary[]>([])
   const [rules, setRules] = useState<SmartRule[]>([])
+  const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([])
   const [reconciliation, setReconciliation] = useState<ReconciliationResult | null>(null)
+  const [settlement, setSettlement] = useState<HouseholdSettlement | null>(null)
+  const [restoreDrills, setRestoreDrills] = useState<RestoreDrill[]>([])
   const [statements, setStatements] = useState<StatementImport[]>([])
   const [statementRows, setStatementRows] = useState<StatementImportRow[]>([])
   const [selectedStatementId, setSelectedStatementId] = useState<string | null>(null)
@@ -239,7 +253,9 @@ export default function ManagePage() {
       getTags(),
       getAlerts(),
       getCaptures({ status: captureStatus, limit: 25 }),
+      getCaptureSummary(),
       getSmartRules(),
+      getRuleSuggestions(),
       getStatements(),
       getSubscriptions({ includeIgnored: true }),
       getAuditLog({
@@ -251,6 +267,7 @@ export default function ManagePage() {
         ...splitMonth(month),
         accountId: reconcileAccount || undefined,
       }),
+      getSettlement(splitMonth(month)),
     ] as const
     const meRes = await mePromise
     const [
@@ -260,15 +277,20 @@ export default function ManagePage() {
       tagRes,
       alertRes,
       captureRes,
+      captureSummaryRes,
       ruleRes,
+      suggestionRes,
       statementRes,
       subscriptionRes,
       auditRes,
       reconciliationRes,
+      settlementRes,
       accessRes,
+      restoreDrillRes,
     ] = await Promise.all([
       ...dataPromises,
       meRes.can_manage ? getAccessUsers() : Promise.resolve({ users: [] }),
+      meRes.can_manage ? getRestoreDrills() : Promise.resolve({ drills: [] }),
     ])
     setMe(meRes)
     setAccessUsers(accessRes.users)
@@ -278,11 +300,15 @@ export default function ManagePage() {
     setTags(tagRes.tags)
     setAlerts(alertRes.alerts)
     setCaptures(captureRes.captures)
+    setCaptureFailures(captureSummaryRes.failures ?? [])
     setRules(ruleRes.rules)
+    setSuggestions(suggestionRes.suggestions)
     setStatements(statementRes.statements)
     setSubscriptions(subscriptionRes.subscriptions)
     setAuditEvents(auditRes.events)
     setReconciliation(reconciliationRes)
+    setSettlement(settlementRes.settlement)
+    setRestoreDrills(restoreDrillRes.drills)
     setBudgetCategory((current) => current || cats[0]?.id || '')
   }, [auditAction, auditEntityType, auditLimit, captureStatus, month, reconcileAccount])
 
@@ -404,6 +430,14 @@ export default function ManagePage() {
     setNewRuleName('')
     setNewRulePattern('')
     setNewRuleTags('')
+  }
+
+  async function acceptSuggestion(suggestionId: string) {
+    await acceptRuleSuggestion(suggestionId)
+  }
+
+  async function dismissSuggestion(suggestionId: string) {
+    await dismissRuleSuggestion(suggestionId)
   }
 
   async function replayRawCapture(captureId: string) {
@@ -705,6 +739,42 @@ export default function ManagePage() {
           ) : <p>No reconciliation loaded.</p>}
         </section>
 
+        <section className="card workspace-card">
+          <h3>Household Settlement</h3>
+          {me?.selected_ledger_kind !== 'household' ? (
+            <p className="muted-copy">Switch to the Household ledger to see shared settlement.</p>
+          ) : settlement ? (
+            <>
+              <div className="summary-grid compact-summary">
+                <span><strong>{formatCents(settlement.total_cents)}</strong><small>shared spend</small></span>
+                <span><strong>{settlement.member_count}</strong><small>members</small></span>
+                <span><strong>{settlement.transfers.length}</strong><small>settle-ups</small></span>
+              </div>
+              <div className="statement-list">
+                {settlement.payers.map((payer) => (
+                  <div key={payer.telegram_user_id} className="statement-row">
+                    <div>
+                      <strong>{payer.first_name ?? payer.username ?? payer.telegram_user_id}</strong>
+                      <span>Paid {formatCents(payer.paid_cents)} · share {formatCents(payer.fair_share_cents)}</span>
+                    </div>
+                    <span className={Number(payer.balance_cents) >= 0 ? 'positive-amount' : 'negative-amount'}>
+                      {formatCents(Math.abs(Number(payer.balance_cents)))}
+                    </span>
+                  </div>
+                ))}
+                {settlement.transfers.length === 0 ? <p>No settlement transfer needed.</p> : settlement.transfers.map((transfer) => (
+                  <div key={`${transfer.from_telegram_user_id}-${transfer.to_telegram_user_id}`} className="statement-row">
+                    <div>
+                      <strong>{transfer.from_telegram_user_id} pays {transfer.to_telegram_user_id}</strong>
+                      <span>{formatCents(transfer.amount_cents)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : <p>No settlement loaded.</p>}
+        </section>
+
         <section className="card workspace-card wide-card">
           <h3>Smart Rules</h3>
           <div className="inline-form">
@@ -758,6 +828,35 @@ export default function ManagePage() {
           </div>
         </section>
 
+        <section className="card workspace-card wide-card">
+          <h3>Learning Suggestions</h3>
+          <div className="statement-list">
+            {suggestions.length === 0 ? <p>No pending suggestions.</p> : suggestions.map((suggestion) => (
+              <div key={suggestion.id} className="statement-row">
+                <div>
+                  <strong>
+                    {suggestion.pattern}
+                    <span className="badge badge-muted">{suggestion.source.replace(/_/g, ' ')}</span>
+                  </strong>
+                  <span>
+                    {suggestion.category ?? 'category unchanged'} · {suggestion.account ?? 'account unchanged'}
+                    {suggestion.tag_names.length ? ` · ${suggestion.tag_names.map((tag) => `#${tag}`).join(' ')}` : ''}
+                  </span>
+                  <small>{suggestion.reason}</small>
+                </div>
+                <div className="row-actions">
+                  <button type="button" onClick={() => void run(() => acceptSuggestion(suggestion.id))} disabled={busy}>
+                    Accept
+                  </button>
+                  <button type="button" onClick={() => void run(() => dismissSuggestion(suggestion.id))} disabled={busy}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <section className="card workspace-card wide-card" id="capture-inbox">
           <h3>Raw Capture Inbox</h3>
           <div className="inline-form">
@@ -768,12 +867,27 @@ export default function ManagePage() {
               <option value="ignored">Ignored</option>
             </select>
           </div>
+          {captureFailures.length > 0 ? (
+            <div className="failure-summary-grid">
+              {captureFailures.map((failure) => (
+                <span key={failure.failure_kind}>
+                  <strong>{failure.count}</strong>
+                  <small>{failure.failure_kind.replace(/_/g, ' ')}</small>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="statement-list">
             {captures.length === 0 ? <p>No captures for this filter.</p> : captures.map((capture) => (
               <div key={capture.id} className="statement-row capture-row">
                 <div>
-                  <strong>{capture.source} <span className={`badge badge-${capture.status}`}>{capture.status}</span></strong>
+                  <strong>
+                    {capture.source}
+                    <span className={`badge badge-${capture.status}`}>{capture.status}</span>
+                    {capture.failure_kind ? <span className="badge badge-muted">{capture.failure_kind.replace(/_/g, ' ')}</span> : null}
+                  </strong>
                   <span>{capture.error_reason ?? capture.parsed_expense_label ?? 'No detail'}</span>
+                  {typeof capture.confidence?.overall === 'number' ? <small>Confidence {capture.confidence.overall}%</small> : null}
                   {capture.raw_text ? <small>{capture.raw_text.slice(0, 240)}</small> : null}
                 </div>
                 <div className="row-actions">
@@ -1158,6 +1272,25 @@ export default function ManagePage() {
               </div>
             </div>
           ) : null}
+        </section>
+
+        <section className="card workspace-card wide-card">
+          <h3>Restore Drills</h3>
+          <div className="statement-list">
+            {!me?.can_manage ? <p>Owner access required.</p> : restoreDrills.length === 0 ? <p>No restore drills recorded yet.</p> : restoreDrills.map((drill) => (
+              <div key={drill.id} className="statement-row">
+                <div>
+                  <strong>
+                    {drill.status}
+                    <span className={`badge badge-${drill.status}`}>{drill.status}</span>
+                  </strong>
+                  <span>{drill.backup_key ?? 'No backup key recorded'} · {formatAuditDate(drill.checked_at)}</span>
+                  {drill.error_reason ? <small>{drill.error_reason}</small> : null}
+                </div>
+                <span>{drill.duration_ms ? `${Math.round(drill.duration_ms / 1000)}s` : '—'}</span>
+              </div>
+            ))}
+          </div>
         </section>
 
         <section className="card workspace-card wide-card">

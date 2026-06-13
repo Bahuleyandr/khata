@@ -3,6 +3,8 @@ import { accountBelongsToUser, guessAccountFromText } from "../db/accounts.js";
 import { sql } from "../db/index.js";
 import { recordAuditEvent } from "../db/audit.js";
 import { applySmartRules } from "../db/smart-rules.js";
+import { suggestionPatternFromText, upsertRuleSuggestion } from "../db/rule-suggestions.js";
+import { buildCaptureConfidence } from "../capture/confidence.js";
 import { getObjectStream, uploadStatement } from "../storage/index.js";
 import { parseStatementBuffer } from "../statement/parser.js";
 import { dedupeTransactions } from "../statement/dedup.js";
@@ -326,6 +328,8 @@ async function parseStatementIntoReviewRows(
 async function importPendingStatementRows(
   userId: number,
   statementId: string,
+  actorUserId: number,
+  settlementScope: "personal" | "shared",
   rowIds?: string[],
 ): Promise<{ importedCount: number; statement: StatementRow | null }> {
   return sql.begin(async (tx) => {
@@ -389,6 +393,17 @@ async function importPendingStatementRows(
 
     let importedCount = 0;
     for (const row of rows) {
+      const confidence = buildCaptureConfidence({
+        amountCents: Number(row.amount_cents),
+        occurredAt: new Date(`${row.occurred_at}T12:00:00Z`),
+        merchant: null,
+        description: row.description,
+        categoryId: row.category_id,
+        accountId: row.account_id,
+        source: "statement",
+        parser: "statement",
+        rawText: row.description,
+      });
       const [inserted] = await tx<Array<{ id: string }>>`
         INSERT INTO expenses (
           user_id,
@@ -400,7 +415,10 @@ async function importPendingStatementRows(
           statement_id,
           category_id,
           account_id,
-          review_status
+          review_status,
+          confidence,
+          paid_by_user_id,
+          settlement_scope
         )
         VALUES (
           ${userId},
@@ -412,7 +430,10 @@ async function importPendingStatementRows(
           ${statementId},
           ${row.category_id},
           ${row.account_id},
-          'needs_review'
+          'needs_review',
+          ${JSON.stringify(confidence)}::jsonb,
+          ${actorUserId},
+          ${settlementScope}
         )
         RETURNING id
       `;
@@ -601,6 +622,8 @@ export async function statementsRoutes(app: FastifyInstance) {
       const { importedCount, statement } = await importPendingStatementRows(
         session.userId,
         request.params.id,
+        session.actorUserId,
+        session.selectedLedgerKind === "household" ? "shared" : "personal",
         request.body?.row_ids,
       );
 
@@ -730,6 +753,27 @@ export async function statementsRoutes(app: FastifyInstance) {
           tag_names: hasTags ? tagNames : undefined,
         },
       });
+      if (
+        (hasCategory && row.category_id !== before?.category_id) ||
+        (hasAccount && row.account_id !== before?.account_id) ||
+        (hasTags && JSON.stringify(row.tag_names) !== JSON.stringify(before?.tag_names ?? []))
+      ) {
+        const pattern = suggestionPatternFromText({ description: row.description });
+        if (pattern) {
+          await upsertRuleSuggestion(session.userId, {
+            source: "statement_row",
+            sourceEntityType: "statement_row",
+            sourceEntityId: row.id,
+            pattern,
+            matchScope: "description",
+            matchType: "contains",
+            categoryId: hasCategory ? row.category_id : undefined,
+            accountId: hasAccount ? row.account_id : undefined,
+            tagNames: hasTags ? row.tag_names : undefined,
+            reason: "Statement row correction before import",
+          }).catch(console.error);
+        }
+      }
 
       return row;
     },

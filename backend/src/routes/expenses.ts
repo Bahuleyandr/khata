@@ -7,7 +7,9 @@ import { getBudgetsWithMtd } from "../db/budgets.js";
 import { findSubscriptionCandidates } from "../db/query.js";
 import { getOrCreateMerchantCanonical, setMerchantCategory } from "../db/merchants.js";
 import { applySmartRules } from "../db/smart-rules.js";
+import { suggestionPatternFromText, upsertRuleSuggestion } from "../db/rule-suggestions.js";
 import { attachTagToExpense, getOrCreateTag, getTagsForExpenses } from "../db/tags.js";
+import { buildCaptureConfidence, reviewStatusFromConfidence, type CaptureConfidence } from "../capture/confidence.js";
 import { currentMonthBounds } from "../export/xlsx.js";
 import { uploadStatement } from "../storage/index.js";
 import { getSession } from "./auth.js";
@@ -48,6 +50,8 @@ type ExpenseUpdateBody = {
   account_id?: string | null;
   occurred_at?: string;
   review_status?: "needs_review" | "reviewed" | "ignored";
+  paid_by_user_id?: number | null;
+  settlement_scope?: "personal" | "shared" | "reimbursable";
 };
 
 type ExpenseCreateBody = {
@@ -60,6 +64,8 @@ type ExpenseCreateBody = {
   occurred_at: string;
   review_status?: "needs_review" | "reviewed" | "ignored";
   tag_names?: string[];
+  paid_by_user_id?: number | null;
+  settlement_scope?: "personal" | "shared" | "reimbursable";
 };
 
 type ExpenseMergeBody = {
@@ -72,6 +78,7 @@ type ExpenseBulkBody = {
   account_id?: string | null;
   tag_names?: string[];
   review_status?: "needs_review" | "reviewed" | "ignored";
+  settlement_scope?: "personal" | "shared" | "reimbursable";
 };
 
 type ExpenseRow = {
@@ -89,6 +96,9 @@ type ExpenseRow = {
   occurred_at: Date;
   image_key: string | null;
   review_status: string;
+  confidence: CaptureConfidence;
+  paid_by_user_id: string | null;
+  settlement_scope: "personal" | "shared" | "reimbursable";
 };
 
 type ExpenseInternalRow = {
@@ -163,6 +173,8 @@ const expenseUpdateSchema = {
     account_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
     occurred_at: { type: "string", pattern: datePattern },
     review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+    paid_by_user_id: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    settlement_scope: { type: "string", enum: ["personal", "shared", "reimbursable"] },
   },
 } as const;
 
@@ -179,6 +191,8 @@ const expenseCreateSchema = {
     account_id: { anyOf: [{ type: "string", pattern: uuidPattern }, { type: "null" }] },
     occurred_at: { type: "string", pattern: datePattern },
     review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+    paid_by_user_id: { anyOf: [{ type: "integer" }, { type: "null" }] },
+    settlement_scope: { type: "string", enum: ["personal", "shared", "reimbursable"] },
     tag_names: {
       type: "array",
       maxItems: 20,
@@ -216,6 +230,7 @@ const expenseBulkSchema = {
       items: { type: "string", minLength: 1, maxLength: 80 },
     },
     review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
+    settlement_scope: { type: "string", enum: ["personal", "shared", "reimbursable"] },
   },
 } as const;
 
@@ -263,6 +278,38 @@ async function addTagsToExpenses(userId: number, expenseIds: string[], tagNames:
       await attachTagToExpense(expenseId, tagId);
     }
   }
+}
+
+async function suggestRuleFromCorrection(input: {
+  userId: number;
+  source: "correction" | "statement_row" | "bulk_correction";
+  sourceEntityType: string;
+  sourceEntityId: string;
+  merchant?: string | null;
+  description?: string | null;
+  categoryId?: string | null;
+  accountId?: string | null;
+  tagNames?: string[];
+  reason: string;
+}): Promise<void> {
+  const pattern = suggestionPatternFromText({
+    merchant: input.merchant,
+    description: input.description,
+  });
+  if (!pattern) return;
+  await upsertRuleSuggestion(input.userId, {
+    source: input.source,
+    sourceEntityType: input.sourceEntityType,
+    sourceEntityId: input.sourceEntityId,
+    merchant: input.merchant,
+    pattern,
+    matchScope: input.merchant ? "merchant" : "description",
+    matchType: "contains",
+    categoryId: input.categoryId,
+    accountId: input.accountId,
+    tagNames: input.tagNames,
+    reason: input.reason,
+  }).catch(console.error);
 }
 
 function selectedMonth(query: SummaryQuery): { year: number; month: number } {
@@ -362,7 +409,10 @@ export async function expensesRoutes(app: FastifyInstance) {
                e.source,
                e.occurred_at,
                e.image_key,
-               e.review_status
+               e.review_status,
+               e.confidence,
+               e.paid_by_user_id::text AS paid_by_user_id,
+               e.settlement_scope
         FROM expenses e
         LEFT JOIN categories c ON e.category_id = c.id
         LEFT JOIN accounts a ON a.id = e.account_id AND a.user_id = e.user_id
@@ -446,9 +496,6 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
         return reply.status(400).send({ error: "Account not found" });
       }
-      if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
-        return reply.status(400).send({ error: "Account not found" });
-      }
 
       const merchant = normalizeNullableText(body.merchant) ?? null;
       const description = normalizeNullableText(body.description) ?? null;
@@ -469,8 +516,23 @@ export async function expensesRoutes(app: FastifyInstance) {
         body.account_id ??
         rule.account_id ??
         (await guessAccountFromText(session.userId, `${merchant ?? ""} ${description ?? ""}`.trim()));
-      const reviewStatus = body.review_status ?? rule.review_status ?? "reviewed";
+      const confidence = buildCaptureConfidence({
+        amountCents: body.amount_cents,
+        occurredAt,
+        merchant,
+        description,
+        categoryId,
+        accountId,
+        source: "manual",
+        ruleId: rule.rule_id,
+        parser: "manual",
+      });
+      const reviewStatus =
+        body.review_status ?? rule.review_status ?? reviewStatusFromConfidence(undefined, confidence);
       const tagNames = Array.from(new Set([...(rule.tag_names ?? []), ...(body.tag_names ?? [])]));
+      const settlementScope =
+        body.settlement_scope ?? (session.selectedLedgerKind === "household" ? "shared" : "personal");
+      const paidByUserId = body.paid_by_user_id ?? session.actorUserId;
 
       const rows = await sql<ExpenseRow[]>`
         WITH inserted AS (
@@ -487,7 +549,10 @@ export async function expensesRoutes(app: FastifyInstance) {
             source,
             raw_text,
             review_status,
-            reviewed_at
+            reviewed_at,
+            confidence,
+            paid_by_user_id,
+            settlement_scope
           )
           VALUES (
             ${session.userId},
@@ -502,12 +567,16 @@ export async function expensesRoutes(app: FastifyInstance) {
             'manual',
             NULL,
             ${reviewStatus},
-            CASE WHEN ${reviewStatus} = 'reviewed' THEN NOW() ELSE NULL END
+            CASE WHEN ${reviewStatus} = 'reviewed' THEN NOW() ELSE NULL END,
+            ${JSON.stringify(confidence)}::jsonb,
+            ${paidByUserId},
+            ${settlementScope}
           )
           RETURNING id, amount_cents::text, currency, description, merchant,
                     merchant_canonical_id, category_id, account_id::text AS account_id,
                     source, occurred_at, image_key,
-                    review_status
+                    review_status, confidence,
+                    paid_by_user_id::text AS paid_by_user_id, settlement_scope
         )
         SELECT inserted.*,
                COALESCE(c.name, 'Uncategorized') AS category,
@@ -538,6 +607,8 @@ export async function expensesRoutes(app: FastifyInstance) {
           tag_names: tagNames,
           smart_rule_id: rule.rule_id,
           account_id: accountId,
+          paid_by_user_id: paidByUserId,
+          settlement_scope: settlementScope,
         },
       });
 
@@ -575,6 +646,10 @@ export async function expensesRoutes(app: FastifyInstance) {
               WHEN ${body.review_status !== undefined} THEN ${body.review_status ?? "reviewed"}
               ELSE review_status
             END,
+            settlement_scope = CASE
+              WHEN ${body.settlement_scope !== undefined} THEN ${body.settlement_scope ?? "personal"}
+              ELSE settlement_scope
+            END,
             reviewed_at = CASE
               WHEN ${body.review_status === "reviewed"} THEN NOW()
               WHEN ${body.review_status !== undefined} THEN NULL
@@ -585,6 +660,33 @@ export async function expensesRoutes(app: FastifyInstance) {
         RETURNING id
       `;
       await addTagsToExpenses(session.userId, updated.map((row) => row.id), body.tag_names);
+      if (body.category_id || body.account_id || body.tag_names?.length) {
+        const sourceRows = await sql<Array<{
+          id: string;
+          merchant: string | null;
+          description: string | null;
+        }>>`
+          SELECT id, merchant, description
+          FROM expenses
+          WHERE user_id = ${session.userId}
+            AND id = ANY(${updated.map((row) => row.id)}::uuid[])
+          LIMIT 20
+        `;
+        await Promise.all(sourceRows.map((row) =>
+          suggestRuleFromCorrection({
+            userId: session.userId,
+            source: "bulk_correction",
+            sourceEntityType: "expense",
+            sourceEntityId: row.id,
+            merchant: row.merchant,
+            description: row.description,
+            categoryId: body.category_id,
+            accountId: body.account_id,
+            tagNames: body.tag_names,
+            reason: "Bulk transaction correction",
+          }),
+        ));
+      }
       await recordAuditEvent({
         userId: session.userId,
         actorUserId: session.actorUserId,
@@ -640,7 +742,10 @@ export async function expensesRoutes(app: FastifyInstance) {
                e.source,
                e.occurred_at,
                e.image_key,
-               e.review_status
+               e.review_status,
+               e.confidence,
+               e.paid_by_user_id::text AS paid_by_user_id,
+               e.settlement_scope
         FROM expenses e
         LEFT JOIN categories c ON e.category_id = c.id
         LEFT JOIN accounts a ON a.id = e.account_id AND a.user_id = e.user_id
@@ -675,6 +780,9 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (body.category_id && !(await categoryBelongsToUser(session.userId, body.category_id))) {
         return reply.status(400).send({ error: "Category not found" });
       }
+      if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
+        return reply.status(400).send({ error: "Account not found" });
+      }
 
       const [before] = await sql<ExpenseRow[]>`
         SELECT e.id,
@@ -690,7 +798,10 @@ export async function expensesRoutes(app: FastifyInstance) {
                e.source,
                e.occurred_at,
                e.image_key,
-               e.review_status
+               e.review_status,
+               e.confidence,
+               e.paid_by_user_id::text AS paid_by_user_id,
+               e.settlement_scope
         FROM expenses e
         LEFT JOIN categories c ON e.category_id = c.id
         LEFT JOIN accounts a ON a.id = e.account_id AND a.user_id = e.user_id
@@ -712,6 +823,8 @@ export async function expensesRoutes(app: FastifyInstance) {
       const accountIdParam = body.account_id ?? null;
       const occurredAtParam = occurredAt ?? new Date(0);
       const reviewStatusParam = body.review_status ?? "reviewed";
+      const paidByUserIdParam = body.paid_by_user_id ?? null;
+      const settlementScopeParam = body.settlement_scope ?? "personal";
 
       const rows = await sql<ExpenseRow[]>`
         WITH updated AS (
@@ -752,6 +865,14 @@ export async function expensesRoutes(app: FastifyInstance) {
                 WHEN ${body.review_status !== undefined} THEN ${reviewStatusParam}
                 ELSE review_status
               END,
+              paid_by_user_id = CASE
+                WHEN ${body.paid_by_user_id !== undefined} THEN ${paidByUserIdParam}
+                ELSE paid_by_user_id
+              END,
+              settlement_scope = CASE
+                WHEN ${body.settlement_scope !== undefined} THEN ${settlementScopeParam}
+                ELSE settlement_scope
+              END,
               reviewed_at = CASE
                 WHEN ${body.review_status === "reviewed"} THEN NOW()
                 WHEN ${body.review_status !== undefined} THEN NULL
@@ -762,7 +883,8 @@ export async function expensesRoutes(app: FastifyInstance) {
           RETURNING id, amount_cents::text, currency, description, merchant,
                     merchant_canonical_id, category_id, account_id::text AS account_id,
                     source, occurred_at, image_key,
-                    review_status
+                    review_status, confidence,
+                    paid_by_user_id::text AS paid_by_user_id, settlement_scope
         )
         SELECT updated.*,
                COALESCE(c.name, 'Uncategorized') AS category,
@@ -777,6 +899,22 @@ export async function expensesRoutes(app: FastifyInstance) {
 
       if (body.category_id && updated.merchant_canonical_id) {
         await setMerchantCategory(session.userId, updated.merchant_canonical_id, body.category_id);
+      }
+      if (
+        (body.category_id !== undefined && body.category_id !== before.category_id) ||
+        (body.account_id !== undefined && body.account_id !== before.account_id)
+      ) {
+        await suggestRuleFromCorrection({
+          userId: session.userId,
+          source: "correction",
+          sourceEntityType: "expense",
+          sourceEntityId: updated.id,
+          merchant: updated.merchant,
+          description: updated.description,
+          categoryId: body.category_id !== undefined ? body.category_id : undefined,
+          accountId: body.account_id !== undefined ? body.account_id : undefined,
+          reason: "Manual transaction correction",
+        });
       }
 
       await recordAuditEvent({
@@ -822,7 +960,8 @@ export async function expensesRoutes(app: FastifyInstance) {
           RETURNING id, amount_cents::text, currency, description, merchant,
                     merchant_canonical_id, category_id, account_id::text AS account_id,
                     source, occurred_at, image_key,
-                    review_status
+                    review_status, confidence,
+                    paid_by_user_id::text AS paid_by_user_id, settlement_scope
         )
         SELECT updated.*,
                COALESCE(c.name, 'Uncategorized') AS category,
@@ -869,13 +1008,17 @@ export async function expensesRoutes(app: FastifyInstance) {
         occurred_at: Date;
         image_key: string | null;
         review_status: string;
+        confidence: CaptureConfidence;
+        paid_by_user_id: string | null;
+        settlement_scope: "personal" | "shared" | "reimbursable";
       }>>`
         DELETE FROM expenses
         WHERE id = ${request.params.id}
           AND user_id = ${session.userId}
         RETURNING id, amount_cents::text, currency, description, merchant,
                   merchant_canonical_id, category_id, account_id::text AS account_id,
-                  source, occurred_at, image_key, review_status
+                  source, occurred_at, image_key, review_status, confidence,
+                  paid_by_user_id::text AS paid_by_user_id, settlement_scope
       `;
       if (!result[0]) return reply.status(404).send({ error: "Transaction not found" });
       await recordAuditEvent({
@@ -962,7 +1105,8 @@ export async function expensesRoutes(app: FastifyInstance) {
             RETURNING id, amount_cents::text, currency, description, merchant,
                       merchant_canonical_id, category_id, account_id::text AS account_id,
                       source, occurred_at, image_key,
-                      review_status
+                      review_status, confidence,
+                      paid_by_user_id::text AS paid_by_user_id, settlement_scope
           )
           SELECT updated.*,
                  COALESCE(c.name, 'Uncategorized') AS category,
