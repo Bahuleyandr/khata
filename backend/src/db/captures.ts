@@ -1,5 +1,10 @@
 import { sql } from "./index.js";
-import { classifyCaptureFailure, type CaptureFailureKind } from "../capture/failure-kind.js";
+import {
+  classifyCaptureFailure,
+  diagnoseCaptureFailure,
+  type CaptureFailureDiagnosis,
+  type CaptureFailureKind,
+} from "../capture/failure-kind.js";
 import type { CaptureConfidence } from "../capture/confidence.js";
 
 export type CaptureSource =
@@ -38,16 +43,21 @@ export interface CaptureEventRow {
   parsed_expense_label: string | null;
   error_reason: string | null;
   failure_kind: CaptureFailureKind | null;
+  diagnosis: CaptureFailureDiagnosis;
   metadata: Record<string, unknown>;
   confidence: CaptureConfidence;
+  replay_count: number;
   created_at: Date;
   updated_at: Date;
   processed_at: Date | null;
+  last_replayed_at: Date | null;
 }
 
 export interface CaptureFilters {
   status?: CaptureStatus;
   source?: CaptureSource;
+  failureKind?: CaptureFailureKind;
+  q?: string;
   limit?: number;
 }
 
@@ -56,6 +66,32 @@ export interface CaptureFailureSummaryRow {
   count: number;
   latest_error: string | null;
   latest_at: Date;
+}
+
+export interface CaptureCountRow {
+  key: string;
+  count: number;
+}
+
+function isDiagnosis(value: unknown): value is CaptureFailureDiagnosis {
+  return !!value &&
+    typeof value === "object" &&
+    typeof (value as { title?: unknown }).title === "string" &&
+    typeof (value as { detail?: unknown }).detail === "string" &&
+    typeof (value as { next_action?: unknown }).next_action === "string" &&
+    typeof (value as { replayable?: unknown }).replayable === "boolean";
+}
+
+function normalizeCaptureRow(row: CaptureEventRow): CaptureEventRow {
+  const kind = row.failure_kind ?? "unknown";
+  const diagnosis = isDiagnosis(row.diagnosis)
+    ? row.diagnosis
+    : diagnoseCaptureFailure(kind, row.error_reason);
+  return {
+    ...row,
+    diagnosis,
+    replay_count: Number(row.replay_count ?? 0),
+  };
 }
 
 export async function recordCaptureEvent(input: CaptureEventInput): Promise<string> {
@@ -104,6 +140,7 @@ export async function markCaptureProcessed(
         parsed_expense_id = ${expenseId},
         error_reason = NULL,
         failure_kind = NULL,
+        diagnosis = '{}'::jsonb,
         confidence = CASE WHEN ${confidenceJson !== null} THEN ${confidenceJson ?? "{}"}::jsonb ELSE confidence END,
         processed_at = NOW(),
         updated_at = NOW()
@@ -134,15 +171,33 @@ export async function markCaptureFailed(
 ): Promise<void> {
   if (!captureEventId) return;
   const failureKind = classifyCaptureFailure(errorReason);
+  const diagnosisJson = JSON.stringify(diagnoseCaptureFailure(failureKind, errorReason));
   await sql`
     UPDATE capture_events
     SET status = 'failed',
         error_reason = ${errorReason.slice(0, 500)},
         failure_kind = ${failureKind},
+        diagnosis = ${diagnosisJson}::jsonb,
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
       AND user_id = ${userId}
+  `;
+}
+
+export async function markCaptureReplayStarted(
+  userId: number,
+  captureEventId: string,
+): Promise<void> {
+  await sql`
+    UPDATE capture_events
+    SET replay_count = replay_count + 1,
+        last_replayed_at = NOW(),
+        status = CASE WHEN status = 'ignored' THEN status ELSE 'pending' END,
+        updated_at = NOW()
+    WHERE id = ${captureEventId}
+      AND user_id = ${userId}
+      AND status IN ('pending', 'failed', 'ignored')
   `;
 }
 
@@ -171,13 +226,16 @@ export async function markCaptureIgnored(
               NULL::text AS parsed_expense_label,
               error_reason,
               failure_kind,
+              diagnosis,
               metadata,
               confidence,
+              replay_count,
               created_at,
               updated_at,
-              processed_at
+              processed_at,
+              last_replayed_at
   `;
-  return row ?? null;
+  return row ? normalizeCaptureRow(row) : null;
 }
 
 export async function listCaptureEvents(
@@ -187,8 +245,10 @@ export async function listCaptureEvents(
   const limit = Math.min(Math.max(filters.limit ?? 50, 1), 100);
   const status = filters.status ?? null;
   const source = filters.source ?? null;
+  const failureKind = filters.failureKind ?? null;
+  const q = filters.q?.trim() ? `%${filters.q.trim()}%` : null;
 
-  return sql<CaptureEventRow[]>`
+  const rows = await sql<CaptureEventRow[]>`
     SELECT ce.id,
            ce.user_id::bigint::int AS user_id,
            ce.actor_user_id::text AS actor_user_id,
@@ -202,11 +262,14 @@ export async function listCaptureEvents(
            COALESCE(e.merchant, e.description) AS parsed_expense_label,
            ce.error_reason,
            ce.failure_kind,
+           ce.diagnosis,
            ce.metadata,
            ce.confidence,
+           ce.replay_count,
            ce.created_at,
            ce.updated_at,
-           ce.processed_at
+           ce.processed_at,
+           ce.last_replayed_at
     FROM capture_events ce
     LEFT JOIN expenses e
       ON e.id = ce.parsed_expense_id
@@ -214,9 +277,17 @@ export async function listCaptureEvents(
     WHERE ce.user_id = ${userId}
       AND (${status}::text IS NULL OR ce.status = ${status})
       AND (${source}::text IS NULL OR ce.source = ${source})
+      AND (${failureKind}::text IS NULL OR ce.failure_kind = ${failureKind})
+      AND (
+        ${q}::text IS NULL
+        OR ce.raw_text ILIKE ${q}
+        OR ce.error_reason ILIKE ${q}
+        OR COALESCE(e.merchant, e.description) ILIKE ${q}
+      )
     ORDER BY ce.created_at DESC
     LIMIT ${limit}
   `;
+  return rows.map(normalizeCaptureRow);
 }
 
 export async function getCaptureEvent(
@@ -237,11 +308,14 @@ export async function getCaptureEvent(
            COALESCE(e.merchant, e.description) AS parsed_expense_label,
            ce.error_reason,
            ce.failure_kind,
+           ce.diagnosis,
            ce.metadata,
            ce.confidence,
+           ce.replay_count,
            ce.created_at,
            ce.updated_at,
-           ce.processed_at
+           ce.processed_at,
+           ce.last_replayed_at
     FROM capture_events ce
     LEFT JOIN expenses e
       ON e.id = ce.parsed_expense_id
@@ -250,7 +324,7 @@ export async function getCaptureEvent(
       AND ce.user_id = ${userId}
     LIMIT 1
   `;
-  return row ?? null;
+  return row ? normalizeCaptureRow(row) : null;
 }
 
 export async function summarizeCaptureFailures(userId: number): Promise<CaptureFailureSummaryRow[]> {
@@ -284,5 +358,29 @@ export async function summarizeCaptureFailures(userId: number): Promise<CaptureF
       ON failed.failure_kind = grouped.failure_kind
      AND failed.rn = 1
     ORDER BY grouped.count DESC, grouped.latest_at DESC
+  `;
+}
+
+export async function summarizeCaptureStatuses(userId: number): Promise<CaptureCountRow[]> {
+  return sql<CaptureCountRow[]>`
+    SELECT status AS key,
+           COUNT(*)::int AS count
+    FROM capture_events
+    WHERE user_id = ${userId}
+      AND created_at >= NOW() - INTERVAL '90 days'
+    GROUP BY status
+    ORDER BY count DESC, status ASC
+  `;
+}
+
+export async function summarizeCaptureSources(userId: number): Promise<CaptureCountRow[]> {
+  return sql<CaptureCountRow[]>`
+    SELECT source AS key,
+           COUNT(*)::int AS count
+    FROM capture_events
+    WHERE user_id = ${userId}
+      AND created_at >= NOW() - INTERVAL '90 days'
+    GROUP BY source
+    ORDER BY count DESC, source ASC
   `;
 }

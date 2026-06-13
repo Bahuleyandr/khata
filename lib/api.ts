@@ -456,11 +456,19 @@ export interface CaptureEvent {
   parsed_expense_label: string | null
   error_reason: string | null
   failure_kind: string | null
+  diagnosis: {
+    title: string
+    detail: string
+    next_action: string
+    replayable: boolean
+  }
   metadata: Record<string, unknown>
   confidence: Partial<CaptureConfidence>
+  replay_count: number
   created_at: string
   updated_at: string
   processed_at: string | null
+  last_replayed_at: string | null
 }
 
 export interface CaptureFailureSummary {
@@ -468,6 +476,11 @@ export interface CaptureFailureSummary {
   count: number
   latest_error: string | null
   latest_at: string
+}
+
+export interface CaptureCountSummary {
+  key: string
+  count: number
 }
 
 export interface UserAlert {
@@ -1060,17 +1073,29 @@ export async function dismissRuleSuggestion(id: string): Promise<RuleSuggestion>
 export function getCaptures(params: {
   status?: 'pending' | 'processed' | 'failed' | 'ignored'
   source?: string
+  failureKind?: string
+  q?: string
   limit?: number
 } = {}): Promise<{ captures: CaptureEvent[] }> {
   const q = new URLSearchParams()
   if (params.status) q.set('status', params.status)
   if (params.source) q.set('source', params.source)
+  if (params.failureKind) q.set('failure_kind', params.failureKind)
+  if (params.q) q.set('q', params.q)
   if (params.limit) q.set('limit', String(params.limit))
   return apiFetch<{ captures: CaptureEvent[] }>(`/api/captures?${q}`)
 }
 
-export function getCaptureSummary(): Promise<{ failures: CaptureFailureSummary[] }> {
-  return apiFetch<{ failures: CaptureFailureSummary[] }>('/api/captures/summary')
+export function getCaptureSummary(): Promise<{
+  failures: CaptureFailureSummary[]
+  statuses: CaptureCountSummary[]
+  sources: CaptureCountSummary[]
+}> {
+  return apiFetch<{
+    failures: CaptureFailureSummary[]
+    statuses: CaptureCountSummary[]
+    sources: CaptureCountSummary[]
+  }>('/api/captures/summary')
 }
 
 export async function ignoreCapture(id: string): Promise<void> {

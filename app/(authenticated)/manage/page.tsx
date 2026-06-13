@@ -54,6 +54,7 @@ import {
   type AccessUser,
   type AuditEvent,
   type BudgetVariance,
+  type CaptureCountSummary,
   type CaptureEvent,
   type CaptureFailureSummary,
   type Category,
@@ -146,6 +147,28 @@ function parseTagNames(value: string) {
 }
 
 type SubscriptionFilter = 'active' | 'attention' | 'confirmed' | 'ignored' | 'inactive' | 'all'
+type CaptureStatusFilter = 'pending' | 'processed' | 'failed' | 'ignored'
+
+const CAPTURE_SOURCES = [
+  'telegram_text',
+  'telegram_photo',
+  'telegram_voice',
+  'telegram_document',
+  'dashboard_manual',
+  'statement_upload',
+] as const
+
+const CAPTURE_FAILURE_KINDS = [
+  'no_text',
+  'not_receipt',
+  'no_transactions',
+  'parse_error',
+  'ocr_error',
+  'duplicate',
+  'unsupported_file',
+  'oversize',
+  'unknown',
+] as const
 
 const AUDIT_ACTION_OPTIONS = [
   'expense.create',
@@ -189,6 +212,17 @@ function subscriptionBadgeClass(status: SubscriptionPreferenceStatus) {
   return 'badge-muted'
 }
 
+function captureLabel(value: string) {
+  return value.replace(/_/g, ' ')
+}
+
+function captureRulePattern(capture: CaptureEvent) {
+  return (capture.raw_text ?? capture.error_reason ?? capture.source)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+}
+
 export default function ManagePage() {
   const [me, setMe] = useState<Me | null>(null)
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([])
@@ -203,6 +237,8 @@ export default function ManagePage() {
   const [alerts, setAlerts] = useState<UserAlert[]>([])
   const [captures, setCaptures] = useState<CaptureEvent[]>([])
   const [captureFailures, setCaptureFailures] = useState<CaptureFailureSummary[]>([])
+  const [captureStatusCounts, setCaptureStatusCounts] = useState<CaptureCountSummary[]>([])
+  const [captureSourceCounts, setCaptureSourceCounts] = useState<CaptureCountSummary[]>([])
   const [rules, setRules] = useState<SmartRule[]>([])
   const [suggestions, setSuggestions] = useState<RuleSuggestion[]>([])
   const [reconciliation, setReconciliation] = useState<ReconciliationResult | null>(null)
@@ -238,7 +274,11 @@ export default function ManagePage() {
   const [newRuleScope, setNewRuleScope] = useState<'merchant' | 'description' | 'raw_text' | 'any'>('any')
   const [newRuleMatchType, setNewRuleMatchType] = useState<'contains' | 'equals' | 'regex'>('contains')
   const [newRuleReviewStatus, setNewRuleReviewStatus] = useState('')
-  const [captureStatus, setCaptureStatus] = useState<'pending' | 'processed' | 'failed' | 'ignored'>('failed')
+  const [captureStatus, setCaptureStatus] = useState<CaptureStatusFilter>('failed')
+  const [captureSource, setCaptureSource] = useState('')
+  const [captureFailureKind, setCaptureFailureKind] = useState('')
+  const [captureSearch, setCaptureSearch] = useState('')
+  const [captureActionResult, setCaptureActionResult] = useState<string | null>(null)
   const [reconcileAccount, setReconcileAccount] = useState('')
   const [statementAccount, setStatementAccount] = useState('')
   const [statementFile, setStatementFile] = useState<File | null>(null)
@@ -256,7 +296,13 @@ export default function ManagePage() {
       getBudgets(month),
       getTags(),
       getAlerts(),
-      getCaptures({ status: captureStatus, limit: 25 }),
+      getCaptures({
+        status: captureStatus,
+        source: captureSource || undefined,
+        failureKind: captureFailureKind || undefined,
+        q: captureSearch.trim() || undefined,
+        limit: 50,
+      }),
       getCaptureSummary(),
       getSmartRules(),
       getRuleSuggestions(),
@@ -305,6 +351,8 @@ export default function ManagePage() {
     setAlerts(alertRes.alerts)
     setCaptures(captureRes.captures)
     setCaptureFailures(captureSummaryRes.failures ?? [])
+    setCaptureStatusCounts(captureSummaryRes.statuses ?? [])
+    setCaptureSourceCounts(captureSummaryRes.sources ?? [])
     setRules(ruleRes.rules)
     setSuggestions(suggestionRes.suggestions)
     setStatements(statementRes.statements)
@@ -314,7 +362,7 @@ export default function ManagePage() {
     setSettlement(settlementRes.settlement)
     setRestoreDrills(restoreDrillRes.drills)
     setBudgetCategory((current) => current || cats[0]?.id || '')
-  }, [auditAction, auditEntityType, auditLimit, captureStatus, month, reconcileAccount])
+  }, [auditAction, auditEntityType, auditLimit, captureFailureKind, captureSearch, captureSource, captureStatus, month, reconcileAccount])
 
   useEffect(() => {
     refresh().catch((e: Error) => setError(e.message))
@@ -445,7 +493,18 @@ export default function ManagePage() {
   }
 
   async function replayRawCapture(captureId: string) {
-    await replayCapture(captureId)
+    const result = await replayCapture(captureId)
+    setCaptureActionResult(`Replay created expense ${result.expense_id}`)
+  }
+
+  function draftRuleFromCapture(capture: CaptureEvent) {
+    setNewRuleName(`${captureLabel(capture.source)} correction`)
+    setNewRuleScope('raw_text')
+    setNewRuleMatchType('contains')
+    setNewRulePattern(captureRulePattern(capture))
+    setNewRuleReviewStatus('reviewed')
+    setCaptureActionResult('Rule draft populated. Pick category/account/tags in Smart Rules, then Add.')
+    window.location.hash = 'smart-rules'
   }
 
   async function undoAudit(auditId: string) {
@@ -779,7 +838,7 @@ export default function ManagePage() {
           ) : <p>No settlement loaded.</p>}
         </section>
 
-        <section className="card workspace-card wide-card">
+        <section className="card workspace-card wide-card" id="smart-rules">
           <h3>Smart Rules</h3>
           <div className="inline-form">
             <input value={newRuleName} onChange={(e) => setNewRuleName(e.target.value)} placeholder="Rule name" />
@@ -862,22 +921,70 @@ export default function ManagePage() {
         </section>
 
         <section className="card workspace-card wide-card" id="capture-inbox">
-          <h3>Raw Capture Inbox</h3>
+          <div className="chart-card-heading">
+            <div>
+              <span>Replay, diagnose, teach</span>
+              <h3>Capture Workbench</h3>
+            </div>
+          </div>
           <div className="inline-form">
-            <select value={captureStatus} onChange={(e) => setCaptureStatus(e.target.value as typeof captureStatus)}>
+            <select value={captureStatus} onChange={(e) => setCaptureStatus(e.target.value as CaptureStatusFilter)} aria-label="Capture status">
               <option value="failed">Failed</option>
               <option value="pending">Pending</option>
               <option value="processed">Processed</option>
               <option value="ignored">Ignored</option>
             </select>
+            <select value={captureSource} onChange={(e) => setCaptureSource(e.target.value)} aria-label="Capture source">
+              <option value="">All sources</option>
+              {CAPTURE_SOURCES.map((source) => (
+                <option key={source} value={source}>{captureLabel(source)}</option>
+              ))}
+            </select>
+            <select value={captureFailureKind} onChange={(e) => setCaptureFailureKind(e.target.value)} aria-label="Failure kind">
+              <option value="">All failures</option>
+              {CAPTURE_FAILURE_KINDS.map((kind) => (
+                <option key={kind} value={kind}>{captureLabel(kind)}</option>
+              ))}
+            </select>
+            <input
+              value={captureSearch}
+              onChange={(e) => setCaptureSearch(e.target.value)}
+              placeholder="Search raw text or error"
+              aria-label="Search captures"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setCaptureSource('')
+                setCaptureFailureKind('')
+                setCaptureSearch('')
+              }}
+            >
+              Clear
+            </button>
+          </div>
+          {captureActionResult ? <div className="success-msg">{captureActionResult}</div> : null}
+          <div className="failure-summary-grid">
+            {captureStatusCounts.map((status) => (
+              <button key={status.key} type="button" onClick={() => setCaptureStatus(status.key as CaptureStatusFilter)}>
+                <strong>{status.count}</strong>
+                <small>{captureLabel(status.key)}</small>
+              </button>
+            ))}
+            {captureSourceCounts.slice(0, 4).map((source) => (
+              <button key={source.key} type="button" onClick={() => setCaptureSource(source.key)}>
+                <strong>{source.count}</strong>
+                <small>{captureLabel(source.key)}</small>
+              </button>
+            ))}
           </div>
           {captureFailures.length > 0 ? (
             <div className="failure-summary-grid">
               {captureFailures.map((failure) => (
-                <span key={failure.failure_kind}>
+                <button key={failure.failure_kind} type="button" onClick={() => setCaptureFailureKind(failure.failure_kind)}>
                   <strong>{failure.count}</strong>
-                  <small>{failure.failure_kind.replace(/_/g, ' ')}</small>
-                </span>
+                  <small>{captureLabel(failure.failure_kind)}</small>
+                </button>
               ))}
             </div>
           ) : null}
@@ -888,15 +995,36 @@ export default function ManagePage() {
                   <strong>
                     {capture.source}
                     <span className={`badge badge-${capture.status}`}>{capture.status}</span>
-                    {capture.failure_kind ? <span className="badge badge-muted">{capture.failure_kind.replace(/_/g, ' ')}</span> : null}
+                    {capture.failure_kind ? <span className="badge badge-muted">{captureLabel(capture.failure_kind)}</span> : null}
                   </strong>
-                  <span>{capture.error_reason ?? capture.parsed_expense_label ?? 'No detail'}</span>
-                  {typeof capture.confidence?.overall === 'number' ? <small>Confidence {capture.confidence.overall}%</small> : null}
+                  <span>{capture.diagnosis?.title ?? capture.error_reason ?? capture.parsed_expense_label ?? 'No detail'}</span>
+                  <small>
+                    {formatDate(capture.created_at)}
+                    {capture.replay_count ? ` · replayed ${capture.replay_count}x` : ''}
+                    {capture.last_replayed_at ? ` · last replay ${formatDate(capture.last_replayed_at)}` : ''}
+                    {typeof capture.confidence?.overall === 'number' ? ` · confidence ${capture.confidence.overall}%` : ''}
+                  </small>
                   {capture.raw_text ? <small>{capture.raw_text.slice(0, 240)}</small> : null}
+                  <details className="capture-diagnostics">
+                    <summary>Diagnostics</summary>
+                    <span>{capture.diagnosis?.detail ?? capture.error_reason ?? 'No diagnostic detail stored.'}</span>
+                    <em>{capture.diagnosis?.next_action ?? 'Inspect the raw capture and decide whether to replay or ignore.'}</em>
+                    {capture.parsed_expense_label ? <small>Parsed as: {capture.parsed_expense_label}</small> : null}
+                    {capture.metadata && Object.keys(capture.metadata).length > 0 ? (
+                      <pre>{JSON.stringify(capture.metadata, null, 2)}</pre>
+                    ) : null}
+                  </details>
                 </div>
                 <div className="row-actions">
-                  <button type="button" onClick={() => void run(() => replayRawCapture(capture.id))} disabled={busy || !capture.raw_text || capture.status === 'processed'}>
+                  <button
+                    type="button"
+                    onClick={() => void run(() => replayRawCapture(capture.id))}
+                    disabled={busy || !capture.raw_text || capture.status === 'processed' || capture.status === 'ignored' || capture.diagnosis?.replayable === false}
+                  >
                     Replay
+                  </button>
+                  <button type="button" onClick={() => draftRuleFromCapture(capture)} disabled={busy || !capture.raw_text}>
+                    Make Rule
                   </button>
                   <button type="button" onClick={() => void run(() => ignoreCapture(capture.id))} disabled={busy || capture.status === 'ignored' || capture.status === 'processed'}>
                     Ignore

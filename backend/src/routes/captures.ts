@@ -7,10 +7,14 @@ import {
   markCaptureFailed,
   markCaptureIgnored,
   markCaptureProcessed,
+  markCaptureReplayStarted,
   summarizeCaptureFailures,
+  summarizeCaptureSources,
+  summarizeCaptureStatuses,
   type CaptureSource,
   type CaptureStatus,
 } from "../db/captures.js";
+import { CAPTURE_FAILURE_KINDS, type CaptureFailureKind } from "../capture/failure-kind.js";
 import { buildCaptureConfidence, reviewStatusFromConfidence } from "../capture/confidence.js";
 import { getCategoryByName, getUserCategories } from "../db/categories.js";
 import { insertExpense } from "../db/expenses.js";
@@ -40,6 +44,8 @@ const captureQuerySchema = {
         "statement_upload",
       ],
     },
+    failure_kind: { type: "string", enum: CAPTURE_FAILURE_KINDS },
+    q: { type: "string", minLength: 1, maxLength: 120 },
     limit: { type: "integer", minimum: 1, maximum: 100 },
   },
 } as const;
@@ -56,6 +62,8 @@ const captureParamsSchema = {
 type CaptureQuery = {
   status?: CaptureStatus;
   source?: CaptureSource;
+  failure_kind?: CaptureFailureKind;
+  q?: string;
   limit?: number;
 };
 
@@ -90,6 +98,8 @@ export async function capturesRoutes(app: FastifyInstance) {
         captures: await listCaptureEvents(session.userId, {
           status: request.query.status,
           source: request.query.source,
+          failureKind: request.query.failure_kind,
+          q: request.query.q,
           limit: request.query.limit ?? 50,
         }),
       };
@@ -99,7 +109,12 @@ export async function capturesRoutes(app: FastifyInstance) {
   app.get("/api/captures/summary", async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
-    return { failures: await summarizeCaptureFailures(session.userId) };
+    const [failures, statuses, sources] = await Promise.all([
+      summarizeCaptureFailures(session.userId),
+      summarizeCaptureStatuses(session.userId),
+      summarizeCaptureSources(session.userId),
+    ]);
+    return { failures, statuses, sources };
   });
 
   app.post<{ Params: { id: string } }>(
@@ -132,8 +147,15 @@ export async function capturesRoutes(app: FastifyInstance) {
       const capture = await getCaptureEvent(session.userId, request.params.id);
       if (!capture) return reply.status(404).send({ error: "Capture not found" });
       if (!capture.raw_text) return reply.status(422).send({ error: "Only text captures can be replayed here" });
+      if (capture.status === "processed" || capture.status === "ignored") {
+        return reply.status(409).send({ error: `Cannot replay ${capture.status} captures` });
+      }
+      if (!capture.diagnosis.replayable) {
+        return reply.status(409).send({ error: "This failure is not replayable" });
+      }
 
       try {
+        await markCaptureReplayStarted(session.userId, capture.id);
         const categories = await getUserCategories(session.userId);
         const categoryNames = categories.map((category) => category.name);
         const overrides = await getOverrides(session.userId);

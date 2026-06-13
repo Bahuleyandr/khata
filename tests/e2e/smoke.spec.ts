@@ -196,6 +196,14 @@ async function mockApi(page: Page) {
           latest_error: 'Receipt parser found no expense',
           latest_at: '2026-04-28T10:00:00.000Z',
         }],
+        statuses: [
+          { key: 'failed', count: 2 },
+          { key: 'processed', count: 10 },
+        ],
+        sources: [
+          { key: 'telegram_text', count: 8 },
+          { key: 'telegram_photo', count: 4 },
+        ],
       },
     }),
   )
@@ -209,6 +217,14 @@ async function mockApi(page: Page) {
             latest_error: 'Receipt parser found no expense',
             latest_at: '2026-04-28T10:00:00.000Z',
           }],
+          statuses: [
+            { key: 'failed', count: 2 },
+            { key: 'processed', count: 10 },
+          ],
+          sources: [
+            { key: 'telegram_text', count: 8 },
+            { key: 'telegram_photo', count: 4 },
+          ],
         },
       })
     }
@@ -228,11 +244,19 @@ async function mockApi(page: Page) {
           expense_id: null,
           error_reason: 'Needs manual review',
           failure_kind: 'not_receipt',
+          diagnosis: {
+            title: 'Capture was not recognized as an expense',
+            detail: 'Khata received text but did not classify it as an expense.',
+            next_action: 'Create a smart rule from the raw text and replay it.',
+            replayable: true,
+          },
           confidence: { overall: 42 },
+          replay_count: 1,
           metadata: {},
           parsed_expense_id: null,
           parsed_expense_label: null,
           processed_at: null,
+          last_replayed_at: '2026-04-28T10:10:00.000Z',
           ignored_at: null,
           created_at: '2026-04-28T10:00:00.000Z',
           updated_at: '2026-04-28T10:00:00.000Z',
@@ -796,6 +820,13 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByText('MiniMax')).toBeVisible()
   await expect(page.getByText('Learning Suggestions')).toBeVisible()
   await expect(page.getByText('Manual transaction correction')).toBeVisible()
+  await expect(page.getByText('Capture Workbench')).toBeVisible()
+  await expect(page.getByLabel('Capture source')).toBeVisible()
+  await expect(page.getByText('Capture was not recognized as an expense')).toBeVisible()
+  await expect(page.getByText('replayed 1x')).toBeVisible()
+  await page.getByRole('button', { name: 'Make Rule' }).click()
+  await expect(page.getByPlaceholder('Rule name')).toHaveValue('telegram text correction')
+  await expect(page.getByPlaceholder('Pattern')).toHaveValue(/Alert: INR 301/)
   await expect(page.getByText('Restore Drills')).toBeVisible()
   await expect(page.getByText('passed')).toBeVisible()
   await expect(page.getByLabel('Statement file')).toBeVisible()

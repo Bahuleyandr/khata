@@ -297,13 +297,22 @@ tr:hover td { background: #f9fafb; }
   gap: 0.65rem;
   margin: 0.85rem 0 1rem;
 }
-.failure-summary-grid span {
+.failure-summary-grid span,
+.failure-summary-grid button {
   background: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
   display: grid;
   gap: 0.2rem;
+  font: inherit;
   padding: 0.65rem 0.75rem;
+  text-align: left;
+}
+.failure-summary-grid button:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
 }
 .failure-summary-grid strong {
   color: var(--text-strong);
@@ -313,6 +322,39 @@ tr:hover td { background: #f9fafb; }
   color: var(--text-muted);
   font-size: 0.75rem;
   text-transform: capitalize;
+}
+.capture-diagnostics {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  padding: 0.65rem 0.75rem;
+}
+.capture-diagnostics summary {
+  color: var(--text-strong);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+.capture-diagnostics span,
+.capture-diagnostics em,
+.capture-diagnostics small {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-style: normal;
+}
+.capture-diagnostics pre {
+  background: rgba(15, 23, 42, 0.06);
+  border-radius: 8px;
+  color: var(--text-strong);
+  font-size: 0.72rem;
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 0.65rem;
+  white-space: pre-wrap;
 }
 
 .filter-bar {
@@ -1398,6 +1440,7 @@ tr:hover td { background: #f9fafb; }
 @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 .error-msg { color: #dc2626; background: #fef2f2; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+.success-msg { color: #166534; background: #ecfdf5; border-radius: 8px; padding: 0.85rem 1rem; margin: 1rem 0; }
 
 .login-page {
   min-height: 100vh;
@@ -2123,6 +2166,11 @@ html[data-theme="dark"] .skeleton {
 html[data-theme="dark"] .error-msg {
   background: var(--danger-muted);
   color: #fecaca;
+}
+
+html[data-theme="dark"] .success-msg {
+  background: rgba(22, 101, 52, 0.22);
+  color: #bbf7d0;
 }
 
 html[data-theme="dark"] .login-error {
