@@ -14,6 +14,20 @@ import {
 } from '../../lib/api'
 import { ThemeToggle } from './ThemeToggle'
 
+function ledgerOptionLabel(ledger: Ledger, me: Me | null) {
+  const isOwnPersonal = ledger.kind === 'personal' && ledger.owner_telegram_user_id === me?.telegram_user_id
+  if (ledger.kind === 'household') return ledger.name === 'Household' ? 'Household' : `Household · ${ledger.name}`
+  if (isOwnPersonal) return ledger.name === 'Personal' ? 'My Ledger' : `My Ledger · ${ledger.name}`
+  return ledger.name === 'Personal' ? `Personal · ${ledger.owner_telegram_user_id}` : ledger.name
+}
+
+function ledgerContextLabel(me: Me) {
+  const kind = me.selected_ledger_kind === 'household' ? 'Household' : 'Personal'
+  const role = me.can_manage ? 'Owner' : 'Member'
+  const access = me.can_add ? 'Can add' : 'View only'
+  return `${kind} · ${role} · ${access}`
+}
+
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -81,11 +95,11 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         >
           {ledgers.map((ledger) => (
             <option key={ledger.id} value={ledger.id}>
-              {ledger.kind === 'household' ? 'Household' : 'My Ledger'}
-              {ledger.name && ledger.name !== 'Personal' && ledger.name !== 'Household' ? ` · ${ledger.name}` : ''}
+              {ledgerOptionLabel(ledger, me)}
             </option>
           ))}
         </select>
+        {me ? <span className={`ledger-context-chip ${me.selected_ledger_kind}`}>{ledgerContextLabel(me)}</span> : null}
         <span className="nav-greeting">Hi, {me?.first_name}</span>
         <ThemeToggle />
         <button

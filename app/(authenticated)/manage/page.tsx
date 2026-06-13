@@ -23,6 +23,7 @@ import {
   getCaptures,
   getCaptureSummary,
   getCategories,
+  getLedgers,
   getMe,
   getReconciliation,
   getRestoreDrills,
@@ -39,6 +40,7 @@ import {
   retryStatement,
   revokeAccessUser,
   setBudget,
+  setSelectedLedgerId,
   setSubscriptionPreference,
   replayCapture,
   ignoreCapture,
@@ -59,6 +61,7 @@ import {
   type CaptureFailureSummary,
   type Category,
   type HouseholdSettlement,
+  type Ledger,
   type Me,
   type ReconciliationResult,
   type RestoreDrill,
@@ -148,6 +151,7 @@ function parseTagNames(value: string) {
 
 type SubscriptionFilter = 'active' | 'attention' | 'confirmed' | 'ignored' | 'inactive' | 'all'
 type CaptureStatusFilter = 'pending' | 'processed' | 'failed' | 'ignored'
+type AccessPreset = 'partner' | 'viewer' | 'owner'
 
 const CAPTURE_SOURCES = [
   'telegram_text',
@@ -223,13 +227,30 @@ function captureRulePattern(capture: CaptureEvent) {
     .slice(0, 120)
 }
 
+function ledgerDisplayName(ledger: Ledger, me: Me | null) {
+  const isOwnPersonal = ledger.kind === 'personal' && ledger.owner_telegram_user_id === me?.telegram_user_id
+  if (ledger.kind === 'household') return ledger.name === 'Household' ? 'Household' : ledger.name
+  if (isOwnPersonal) return ledger.name === 'Personal' ? 'My Ledger' : ledger.name
+  return ledger.name === 'Personal' ? `Personal ${ledger.owner_telegram_user_id}` : ledger.name
+}
+
+function ledgerPermissionSummary(item: Ledger | Me) {
+  const role = item.can_manage ? 'Owner' : 'Member'
+  const access = item.can_add ? 'can add' : 'view only'
+  return `${role} · ${access}`
+}
+
 export default function ManagePage() {
   const [me, setMe] = useState<Me | null>(null)
+  const [ledgers, setLedgers] = useState<Ledger[]>([])
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([])
   const [newAccessTelegramId, setNewAccessTelegramId] = useState('')
   const [newAccessName, setNewAccessName] = useState('')
   const [newAccessUsername, setNewAccessUsername] = useState('')
+  const [newAccessPreset, setNewAccessPreset] = useState<AccessPreset>('partner')
   const [newAccessRole, setNewAccessRole] = useState<AccessRole>('member')
+  const [newAccessCanView, setNewAccessCanView] = useState(true)
+  const [newAccessCanAdd, setNewAccessCanAdd] = useState(true)
   const [categories, setCategories] = useState<Category[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [budgets, setBudgets] = useState<BudgetVariance[]>([])
@@ -318,6 +339,7 @@ export default function ManagePage() {
         accountId: reconcileAccount || undefined,
       }),
       getSettlement(splitMonth(month)),
+      getLedgers(),
     ] as const
     const meRes = await mePromise
     const [
@@ -335,6 +357,7 @@ export default function ManagePage() {
       auditRes,
       reconciliationRes,
       settlementRes,
+      ledgerRes,
       accessRes,
       restoreDrillRes,
     ] = await Promise.all([
@@ -343,6 +366,7 @@ export default function ManagePage() {
       meRes.can_manage ? getRestoreDrills() : Promise.resolve({ drills: [] }),
     ])
     setMe(meRes)
+    setLedgers(ledgerRes.ledgers)
     setAccessUsers(accessRes.users)
     setCategories(cats)
     setAccounts(accountRes.accounts)
@@ -409,6 +433,26 @@ export default function ManagePage() {
     () => Array.from(new Set([...AUDIT_ENTITY_OPTIONS, ...auditEvents.map((event) => event.entity_type)])).sort(),
     [auditEvents],
   )
+  const selectedLedger = ledgers.find((ledger) => ledger.id === me?.selected_ledger_id)
+  const householdLedger = ledgers.find((ledger) => ledger.kind === 'household')
+
+  function switchLedger(ledgerId: number) {
+    setSelectedLedgerId(ledgerId)
+    window.location.reload()
+  }
+
+  function applyAccessPreset(preset: AccessPreset) {
+    setNewAccessPreset(preset)
+    if (preset === 'owner') {
+      setNewAccessRole('owner')
+      setNewAccessCanView(true)
+      setNewAccessCanAdd(true)
+      return
+    }
+    setNewAccessRole('member')
+    setNewAccessCanView(true)
+    setNewAccessCanAdd(preset === 'partner')
+  }
 
   async function loadStatementReview(statementId: string) {
     const res = await getStatementRows(statementId)
@@ -554,13 +598,13 @@ export default function ManagePage() {
       first_name: newAccessName.trim() || undefined,
       username: newAccessUsername.trim().replace(/^@/, '') || undefined,
       role: newAccessRole,
-      can_view: true,
-      can_add: true,
+      can_view: newAccessCanView,
+      can_add: newAccessCanView && newAccessCanAdd,
     })
     setNewAccessTelegramId('')
     setNewAccessName('')
     setNewAccessUsername('')
-    setNewAccessRole('member')
+    applyAccessPreset('partner')
   }
 
   async function changeAccessUser(
@@ -632,13 +676,63 @@ export default function ManagePage() {
               <strong>{me?.role ?? '...'}</strong>
               <small>Your role</small>
             </span>
+            <span>
+              <strong>{me ? ledgerPermissionSummary(me) : '...'}</strong>
+              <small>Current access</small>
+            </span>
           </div>
+          {ledgers.length > 0 ? (
+            <div className="ledger-family-panel">
+              <h4>Family Ledgers</h4>
+              <div className="ledger-family-grid">
+                {ledgers.map((ledger) => {
+                  const selected = ledger.id === me?.selected_ledger_id
+                  return (
+                    <button
+                      key={ledger.id}
+                      type="button"
+                      className={`ledger-family-card ${selected ? 'selected' : ''}`}
+                      onClick={() => switchLedger(ledger.id)}
+                      disabled={busy || selected}
+                    >
+                      <strong>{ledgerDisplayName(ledger, me)}</strong>
+                      <span>{ledger.kind === 'household' ? 'Shared household' : 'Personal'} · {ledgerPermissionSummary(ledger)}</span>
+                      <small>{selected ? 'Selected' : 'Switch'}</small>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
+          {selectedLedger ? (
+            <div className={`access-advisory ${selectedLedger.kind}`}>
+              <span>
+                {selectedLedger.kind === 'household'
+                  ? 'Household ledger selected · shared spending stays separate from personal ledgers.'
+                  : 'Personal ledger selected · invites here can see this personal ledger.'}
+              </span>
+              {selectedLedger.kind === 'personal' && householdLedger ? (
+                <button type="button" onClick={() => switchLedger(householdLedger.id)} disabled={busy}>
+                  Switch to Household
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {me?.can_manage ? (
             <>
               <p className="muted-copy access-note">
                 Access changes apply only to the selected ledger in the top navigation.
               </p>
               <div className="inline-form access-form">
+                <select
+                  value={newAccessPreset}
+                  onChange={(e) => applyAccessPreset(e.target.value as AccessPreset)}
+                  aria-label="Invite preset"
+                >
+                  <option value="partner">Partner: view + add</option>
+                  <option value="viewer">Viewer: view only</option>
+                  <option value="owner">Owner: manage ledger</option>
+                </select>
                 <input
                   inputMode="numeric"
                   value={newAccessTelegramId}
@@ -660,12 +754,37 @@ export default function ManagePage() {
                 />
                 <select
                   value={newAccessRole}
-                  onChange={(e) => setNewAccessRole(e.target.value as AccessRole)}
+                  onChange={(e) => {
+                    const role = e.target.value as AccessRole
+                    setNewAccessRole(role)
+                    if (role === 'owner') setNewAccessPreset('owner')
+                    else if (newAccessPreset === 'owner') setNewAccessPreset('partner')
+                  }}
                   aria-label="Access role"
                 >
                   <option value="member">Member</option>
                   <option value="owner">Owner</option>
                 </select>
+                <label className="access-toggle">
+                  <input
+                    type="checkbox"
+                    checked={newAccessCanView}
+                    onChange={(e) => {
+                      setNewAccessCanView(e.target.checked)
+                      if (!e.target.checked) setNewAccessCanAdd(false)
+                    }}
+                  />
+                  View
+                </label>
+                <label className="access-toggle">
+                  <input
+                    type="checkbox"
+                    checked={newAccessCanAdd}
+                    onChange={(e) => setNewAccessCanAdd(e.target.checked)}
+                    disabled={!newAccessCanView}
+                  />
+                  Add
+                </label>
                 <button type="button" onClick={() => void run(addAccessUser)} disabled={busy || !newAccessTelegramId.trim()}>
                   Add
                 </button>

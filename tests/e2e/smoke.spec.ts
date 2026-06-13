@@ -877,6 +877,8 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByRole('heading', { name: 'Manage' })).toBeVisible()
   await expect(page.getByText('Categories')).toBeVisible()
   await expect(page.getByText('Ledger Access')).toBeVisible()
+  await expect(page.getByText('Family Ledgers')).toBeVisible()
+  await expect(page.getByRole('option', { name: 'Partner: view + add' })).toBeAttached()
   await expect(page.getByLabel('Telegram user ID')).toBeVisible()
   await expect(page.getByText(/99 · @grace/)).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()

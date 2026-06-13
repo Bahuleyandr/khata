@@ -62,6 +62,7 @@ describe('AuthLayout', () => {
 
     expect(await screen.findByText('Secure area')).toBeTruthy()
     expect(screen.getByText('Hi, Ada')).toBeTruthy()
+    expect(screen.getByText('Personal · Owner · Can add')).toBeTruthy()
 
     await user.click(screen.getByRole('button', { name: 'Logout' }))
 
