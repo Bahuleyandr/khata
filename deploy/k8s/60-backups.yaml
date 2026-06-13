@@ -182,10 +182,24 @@ spec:
                   fi
                   ended="$(date +%s%3N)"
                   duration="$((ended - started))"
-                  detail="{\"drill_db\":\"$drill_db\",\"pod\":\"${HOSTNAME:-unknown}\"}"
+                  backup_b64="$(printf '%s' "$backup" | base64 | tr -d '\n')"
+                  error_b64="$(printf '%s' "$error" | base64 | tr -d '\n')"
+                  drill_db_b64="$(printf '%s' "$drill_db" | base64 | tr -d '\n')"
+                  pod_b64="$(printf '%s' "${HOSTNAME:-unknown}" | base64 | tr -d '\n')"
                   psql --host="$host" --username="$user" --dbname="$db" \
                     --set=ON_ERROR_STOP=1 \
-                    --command="INSERT INTO restore_drills (status, backup_key, checked_at, duration_ms, detail, error_reason) VALUES ('$status', NULLIF('$backup',''), NOW(), $duration, '$detail'::jsonb, NULLIF($$${error}$$, ''));"
+                    --command="INSERT INTO restore_drills (status, backup_key, checked_at, duration_ms, detail, error_reason)
+                      VALUES (
+                        '$status',
+                        NULLIF(convert_from(decode('$backup_b64', 'base64'), 'UTF8'), ''),
+                        NOW(),
+                        $duration,
+                        jsonb_build_object(
+                          'drill_db', convert_from(decode('$drill_db_b64', 'base64'), 'UTF8'),
+                          'pod', convert_from(decode('$pod_b64', 'base64'), 'UTF8')
+                        ),
+                        NULLIF(convert_from(decode('$error_b64', 'base64'), 'UTF8'), '')
+                      );"
                   test "$status" = "passed"
               volumeMounts:
                 - name: backups
