@@ -16,6 +16,7 @@ import {
   handleListExpenses,
   handleMonthSummary,
   handleNeedsReview,
+  handleSubscriptions,
   handleListTags,
   handleAsk,
   handleBudget,
@@ -85,6 +86,7 @@ bot.command("month", handleMonthSummary);
 bot.command("summary", handleMonthSummary);
 bot.command("review", handleNeedsReview);
 bot.command("needs_review", handleNeedsReview);
+bot.command("subscriptions", handleSubscriptions);
 bot.command("tags", handleListTags);
 bot.command("ask", handleAsk);
 bot.command("budget", handleBudget);

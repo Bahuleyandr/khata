@@ -160,6 +160,7 @@ export interface SourceBreakdown {
 export interface SubscriptionCandidate {
   name: string
   merchant_key: string
+  currency: string
   count: number
   total_cents: string
   first_seen: string
@@ -180,6 +181,66 @@ export interface SubscriptionCandidate {
 }
 
 export type SubscriptionPreferenceStatus = 'confirmed' | 'ignored' | 'inactive'
+
+export type ManagedSubscriptionStatus = 'active' | 'trial' | 'paused' | 'cancelled'
+export type BillingCycle = 'weekly' | 'fortnightly' | 'monthly' | 'quarterly' | 'yearly' | 'custom'
+
+export interface ManagedSubscription {
+  id: string
+  user_id: string
+  merchant_key: string | null
+  name: string
+  status: ManagedSubscriptionStatus
+  billing_cycle: BillingCycle
+  interval_days: number | null
+  amount_cents: string
+  currency: string
+  category_id: string | null
+  category: string | null
+  account_id: string | null
+  account: string | null
+  payment_method: string | null
+  started_at: string | null
+  next_due_at: string | null
+  days_until_next: number | null
+  monthly_estimate_cents: string
+  yearly_estimate_cents: string
+  reminder_days: number[]
+  notes: string | null
+  logo_url: string | null
+  source: 'manual' | 'detected'
+  created_at: string
+  updated_at: string
+}
+
+export interface SubscriptionSummary {
+  active_count: number
+  trial_count: number
+  paused_count: number
+  cancelled_count: number
+  due_soon_count: number
+  overdue_count: number
+  monthly_total_cents: string
+  yearly_total_cents: string
+}
+
+export interface SubscriptionRecordInput {
+  name: string
+  status: ManagedSubscriptionStatus
+  billing_cycle: BillingCycle
+  amount_cents: number
+  currency: string
+  category_id?: string | null
+  account_id?: string | null
+  payment_method?: string | null
+  started_at?: string | null
+  next_due_at?: string | null
+  interval_days?: number | null
+  reminder_days?: number[]
+  notes?: string | null
+  logo_url?: string | null
+  merchant_key?: string | null
+}
 
 export interface CaptureConfidence {
   overall: number
@@ -1047,10 +1108,18 @@ export async function retryStatement(id: string): Promise<{
   }>(`/api/statements/${id}/retry`, { method: 'POST' })
 }
 
-export function getSubscriptions(params: { includeIgnored?: boolean } = {}): Promise<{ subscriptions: SubscriptionCandidate[] }> {
+export function getSubscriptions(params: { includeIgnored?: boolean } = {}): Promise<{
+  subscriptions: SubscriptionCandidate[]
+  records?: ManagedSubscription[]
+  summary?: SubscriptionSummary
+}> {
   const q = new URLSearchParams()
   if (params.includeIgnored !== undefined) q.set('include_ignored', String(params.includeIgnored))
-  return apiFetch<{ subscriptions: SubscriptionCandidate[] }>(`/api/subscriptions?${q}`)
+  return apiFetch<{
+    subscriptions: SubscriptionCandidate[]
+    records?: ManagedSubscription[]
+    summary?: SubscriptionSummary
+  }>(`/api/subscriptions?${q}`)
 }
 
 export async function setSubscriptionPreference(
@@ -1069,6 +1138,55 @@ export async function clearSubscriptionPreference(merchantKey: string): Promise<
   await apiFetch<{ ok: boolean }>(`/api/subscriptions/${encodeURIComponent(merchantKey)}`, {
     method: 'DELETE',
   })
+}
+
+export async function createSubscriptionRecord(input: SubscriptionRecordInput): Promise<{ record: ManagedSubscription }> {
+  return apiFetch<{ ok: boolean; record: ManagedSubscription }>('/api/subscriptions/records', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updateSubscriptionRecord(
+  id: string,
+  input: SubscriptionRecordInput,
+): Promise<{ record: ManagedSubscription }> {
+  return apiFetch<{ ok: boolean; record: ManagedSubscription }>(`/api/subscriptions/records/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteSubscriptionRecord(id: string): Promise<void> {
+  await apiFetch<{ ok: boolean }>(`/api/subscriptions/records/${id}`, { method: 'DELETE' })
+}
+
+export async function confirmSubscriptionCandidate(
+  subscription: SubscriptionCandidate,
+  overrides: {
+    category_id?: string | null
+    account_id?: string | null
+    payment_method?: string | null
+    notes?: string | null
+  } = {},
+): Promise<{ record: ManagedSubscription }> {
+  return apiFetch<{ ok: boolean; record: ManagedSubscription }>(
+    `/api/subscriptions/detections/${encodeURIComponent(subscription.merchant_key)}/confirm`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        merchant_name: subscription.name,
+        cadence: subscription.cadence,
+        amount_cents: Number(subscription.avg_amount_cents),
+        currency: subscription.currency,
+        next_due_at: subscription.next_expected_at,
+        ...overrides,
+      }),
+    },
+  )
 }
 
 // Insights — populated by the nightly cron (backend/src/cron/insights.ts).

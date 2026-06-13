@@ -273,7 +273,7 @@ function DashboardActionCards({
                   </td>
                   <td>{subscription.cadence}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                    {formatCents(subscription.monthly_estimate_cents)}
+                    {formatCents(subscription.monthly_estimate_cents, subscription.currency)}
                   </td>
                   <td style={{ textAlign: 'right' }}>{subscription.confidence}%</td>
                   <td>

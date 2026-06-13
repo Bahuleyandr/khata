@@ -159,6 +159,7 @@ export interface MerchantSpend {
 
 export interface SubscriptionCandidate extends MerchantSpend {
   merchant_key: string;
+  currency: string;
   cadence: "weekly" | "fortnightly" | "monthly" | "quarterly" | "irregular";
   confidence: number;
   avg_amount_cents: string;
@@ -282,10 +283,11 @@ export async function findSubscriptionCandidates(
   minOccurrences: number = 2,
   options: { includeIgnored?: boolean } = {},
 ): Promise<SubscriptionCandidate[]> {
-  type Row = {
-    merchant_key: string;
-    merchant: string;
-    total_cents: string;
+    type Row = {
+      merchant_key: string;
+      merchant: string;
+      currency: string;
+      total_cents: string;
     count: number;
     first_seen: string;
     last_seen: string;
@@ -300,8 +302,9 @@ export async function findSubscriptionCandidates(
     WITH merchant_rows AS (
       SELECT
         lower(COALESCE(mc.name, e.merchant, e.description)) AS merchant_key,
-        COALESCE(mc.name, e.merchant, e.description) AS merchant,
-        e.amount_cents,
+          COALESCE(mc.name, e.merchant, e.description) AS merchant,
+          e.currency,
+          e.amount_cents,
         e.occurred_at::date AS charge_date
       FROM expenses e
       LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
@@ -312,8 +315,9 @@ export async function findSubscriptionCandidates(
     ),
     grouped AS (
       SELECT
-        merchant_key,
-        MIN(merchant) AS merchant,
+          merchant_key,
+          MIN(merchant) AS merchant,
+          MIN(currency) AS currency,
         SUM(amount_cents)::text AS total_cents,
         COUNT(*)::int AS count,
         MIN(charge_date)::text AS first_seen,
@@ -328,7 +332,8 @@ export async function findSubscriptionCandidates(
     )
     SELECT
       grouped.merchant_key,
-      grouped.merchant,
+        grouped.merchant,
+        grouped.currency,
       grouped.total_cents,
       grouped.count,
       grouped.first_seen,
@@ -392,7 +397,8 @@ export async function findSubscriptionCandidates(
 
       return {
         merchant_key: row.merchant_key,
-        merchant: row.merchant,
+          merchant: row.merchant,
+          currency: row.currency,
         total_cents: row.total_cents,
         count: row.count,
         first_seen: row.first_seen,

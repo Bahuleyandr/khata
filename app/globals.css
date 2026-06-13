@@ -118,6 +118,7 @@ a { color: inherit; text-decoration: none; }
   gap: 0.6rem;
 }
 .toolbar-inline input,
+.toolbar-inline select,
 .inline-form input,
 .inline-form select,
 .list-row input,
@@ -499,6 +500,7 @@ tr:hover td { background: #f9fafb; }
 }
 .form-grid textarea { resize: vertical; }
 .form-span { grid-column: 1 / -1; }
+.form-grid-wide { grid-column: 1 / -1; }
 .modal-actions {
   display: flex;
   justify-content: flex-end;
@@ -989,6 +991,73 @@ tr:hover td { background: #f9fafb; }
   color: #64748b;
   font-size: 0.72rem;
 }
+.subscriptions-page {
+  max-width: 1240px;
+}
+.page-heading p {
+  color: #64748b;
+  font-size: 0.88rem;
+  margin-top: 0.25rem;
+}
+.subscription-hero {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+.subscription-hero div {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.75rem;
+}
+.subscription-hero span {
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.subscription-hero strong {
+  color: #111827;
+  font-size: 1.15rem;
+}
+.subscription-hero small {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+.subscription-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(300px, 0.38fr) minmax(0, 1fr);
+  margin-bottom: 1rem;
+}
+.subscription-form-card h3,
+.subscription-detection-card h3 {
+  color: #111827;
+  font-size: 1rem;
+  margin-bottom: 0.9rem;
+}
+.subscription-form-card .row-actions {
+  margin-top: 0.9rem;
+}
+.subscription-list-card .chart-card-heading {
+  margin-bottom: 0.75rem;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+.compact-table td strong {
+  display: inline-block;
+  margin-right: 0.35rem;
+}
+.compact-table td small {
+  color: #64748b;
+  display: block;
+  font-size: 0.74rem;
+  margin-top: 0.18rem;
+}
 .access-summary-grid {
   display: grid;
   gap: 0.5rem;
@@ -1477,6 +1546,50 @@ tr:hover td { background: #f9fafb; }
   .chart-card { padding: 0.85rem; }
   .chart-card-heading { align-items: stretch; flex-direction: column; }
   .chart-card-heading a { align-self: flex-start; }
+  .subscription-hero,
+  .subscription-layout {
+    grid-template-columns: 1fr;
+  }
+  .compact-table,
+  .compact-table tbody,
+  .compact-table tr,
+  .compact-table td {
+    display: block;
+    width: 100%;
+  }
+  .compact-table thead {
+    display: none;
+  }
+  .compact-table tr {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+    overflow: hidden;
+  }
+  .compact-table td {
+    border-bottom: 1px solid #f1f5f9;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: minmax(92px, 0.35fr) minmax(0, 1fr);
+    padding: 0.55rem 0.65rem;
+    text-align: left !important;
+  }
+  .compact-table td::before {
+    color: #64748b;
+    content: attr(data-label);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .compact-table td:last-child {
+    border-bottom: 0;
+  }
+  .compact-table td[data-label="Actions"] {
+    grid-template-columns: 1fr;
+  }
+  .compact-table td[data-label="Actions"]::before {
+    display: none;
+  }
   .chart-link-row,
   .budget-chip-row {
     flex-wrap: nowrap;
@@ -1647,6 +1760,10 @@ html[data-theme="dark"] .statement-row span,
 html[data-theme="dark"] .statement-row small,
 html[data-theme="dark"] .statement-review-toolbar span,
 html[data-theme="dark"] .subscription-summary-grid small,
+html[data-theme="dark"] .subscription-hero small,
+html[data-theme="dark"] .subscription-hero span,
+html[data-theme="dark"] .page-heading p,
+html[data-theme="dark"] .compact-table td small,
 html[data-theme="dark"] .access-summary-grid small,
 html[data-theme="dark"] .subscription-row small,
 html[data-theme="dark"] .audit-detail-modal p,
@@ -1717,6 +1834,9 @@ html[data-theme="dark"] .compact-card h3,
 html[data-theme="dark"] .chart-card-heading h3,
 html[data-theme="dark"] .capture-list strong,
 html[data-theme="dark"] .workspace-card h3,
+html[data-theme="dark"] .subscription-form-card h3,
+html[data-theme="dark"] .subscription-detection-card h3,
+html[data-theme="dark"] .subscription-hero strong,
 html[data-theme="dark"] .subscription-summary-grid strong,
 html[data-theme="dark"] .access-summary-grid strong,
 html[data-theme="dark"] .audit-detail-modal h3,
@@ -1765,6 +1885,7 @@ html[data-theme="dark"] .modal-actions .button-primary:hover:not(:disabled) {
 }
 
 html[data-theme="dark"] .toolbar-inline input,
+html[data-theme="dark"] .toolbar-inline select,
 html[data-theme="dark"] .inline-form input,
 html[data-theme="dark"] .inline-form select,
 html[data-theme="dark"] .list-row input,
@@ -1847,6 +1968,7 @@ html[data-theme="dark"] .statement-row,
 html[data-theme="dark"] .statement-correction-bar,
 html[data-theme="dark"] .statement-review-panel,
 html[data-theme="dark"] .subscription-summary-grid span,
+html[data-theme="dark"] .subscription-hero div,
 html[data-theme="dark"] .access-summary-grid span,
 html[data-theme="dark"] .review-task,
 html[data-theme="dark"] .variance-list div,

@@ -206,6 +206,48 @@ vi.mock("../db/budgets.js", () => ({
   clearBudget: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock("../db/subscription-records.js", () => ({
+  listSubscriptionRecords: vi.fn().mockResolvedValue([
+    {
+      id: "sub-1",
+      user_id: "111111",
+      merchant_key: "minimax",
+      name: "MiniMax",
+      status: "active",
+      billing_cycle: "monthly",
+      interval_days: null,
+      amount_cents: "49900",
+      currency: "INR",
+      category_id: null,
+      category: null,
+      account_id: null,
+      account: null,
+      payment_method: "AmEx",
+      started_at: null,
+      next_due_at: "2026-05-01",
+      days_until_next: 3,
+      monthly_estimate_cents: "49900",
+      yearly_estimate_cents: "598800",
+      reminder_days: [3],
+      notes: null,
+      logo_url: null,
+      source: "detected",
+      created_at: "2026-04-28T10:00:00.000Z",
+      updated_at: "2026-04-28T10:00:00.000Z",
+    },
+  ]),
+  summarizeSubscriptionRecords: vi.fn().mockReturnValue({
+    active_count: 1,
+    trial_count: 0,
+    paused_count: 0,
+    cancelled_count: 0,
+    due_soon_count: 1,
+    overdue_count: 0,
+    monthly_total_cents: "49900",
+    yearly_total_cents: "598800",
+  }),
+}));
+
 vi.mock("../db/query.js", () => ({
   totalSpendInCategory: vi.fn().mockResolvedValue([
     { total_cents: "452300", currency: "INR", count: 12 },
@@ -234,6 +276,30 @@ vi.mock("../db/query.js", () => ({
     { category: "Food", total_cents: "452300", currency: "INR", count: 12 },
     { category: "Transport", total_cents: "210000", currency: "INR", count: 5 },
   ]),
+  findSubscriptionCandidates: vi.fn().mockResolvedValue([
+    {
+      merchant_key: "github",
+      merchant: "GitHub",
+      currency: "INR",
+      total_cents: "30000",
+      count: 3,
+      first_seen: "2026-02-01",
+      last_seen: "2026-04-01",
+      cadence: "monthly",
+      confidence: 95,
+      avg_amount_cents: "10000",
+      monthly_estimate_cents: "10000",
+      avg_interval_days: 30,
+      interval_jitter_days: 1,
+      amount_variance_pct: 0,
+      charge_dates: ["2026-02-01", "2026-03-01", "2026-04-01"],
+      next_expected_at: "2026-05-01",
+      days_until_next: 3,
+      is_overdue: false,
+      not_seen_this_month: false,
+      preference_status: null,
+    },
+  ]),
 }));
 
 import {
@@ -244,6 +310,7 @@ import {
   handleRenameCategory,
   handleDeleteCategory,
   handleBudget,
+  handleSubscriptions,
   handleTextMessage,
   handleCallbackQuery,
   handleDocument,
@@ -1150,5 +1217,16 @@ describe("handleBudget", () => {
     await handleBudget(ctx);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text.toLowerCase()).toContain("budget set");
+  });
+});
+
+describe("handleSubscriptions", () => {
+  it("lists managed subscriptions and detected candidates", async () => {
+    const ctx = makeCtx({ message: { text: "/subscriptions" } as Context["message"] });
+    await handleSubscriptions(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Monthly committed");
+    expect(text).toContain("MiniMax");
+    expect(text).toContain("GitHub");
   });
 });

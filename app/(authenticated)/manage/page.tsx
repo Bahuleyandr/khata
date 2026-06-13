@@ -156,6 +156,10 @@ const AUDIT_ACTION_OPTIONS = [
   'statement.upload',
   'statement.import',
   'statement.row_update',
+  'subscription.create',
+  'subscription.update',
+  'subscription.delete',
+  'subscription.detected_confirm',
   'subscription.preference_set',
   'subscription.preference_clear',
   'access.grant',
@@ -1024,7 +1028,7 @@ export default function ManagePage() {
                     {subscription.is_overdue ? <span className="badge badge-review">Overdue</span> : null}
                   </strong>
                   <span>
-                    {subscription.cadence} · {formatCents(subscription.monthly_estimate_cents)} / mo · {subscription.confidence}% · {subscription.count} charges
+                    {subscription.cadence} · {formatCents(subscription.monthly_estimate_cents, subscription.currency)} / mo · {subscription.confidence}% · {subscription.count} charges
                   </span>
                   <small>
                     {subscriptionTiming(subscription)}

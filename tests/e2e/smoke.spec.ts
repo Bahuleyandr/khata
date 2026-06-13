@@ -413,6 +413,7 @@ async function mockApi(page: Page) {
         subscriptions: [{
           name: 'MiniMax',
           merchant_key: 'minimax',
+          currency: 'INR',
           count: 3,
           total_cents: '149700',
           first_seen: '2026-02-01',
@@ -430,7 +431,65 @@ async function mockApi(page: Page) {
           is_overdue: false,
           not_seen_this_month: false,
           preference_status: null,
+        }, {
+          name: 'GitHub',
+          merchant_key: 'github',
+          currency: 'INR',
+          count: 3,
+          total_cents: '30000',
+          first_seen: '2026-02-01',
+          last_seen: '2026-04-01',
+          cadence: 'monthly',
+          confidence: 95,
+          avg_amount_cents: '10000',
+          monthly_estimate_cents: '10000',
+          avg_interval_days: 30,
+          interval_jitter_days: 1,
+          amount_variance_pct: 0,
+          charge_dates: ['2026-02-01', '2026-03-01', '2026-04-01'],
+          next_expected_at: '2026-05-01',
+          days_until_next: 2,
+          is_overdue: false,
+          not_seen_this_month: false,
+          preference_status: null,
         }],
+        records: [{
+          id: 'sub-1',
+          user_id: '42',
+          merchant_key: 'minimax',
+          name: 'MiniMax',
+          status: 'active',
+          billing_cycle: 'monthly',
+          interval_days: null,
+          amount_cents: '49900',
+          currency: 'INR',
+          category_id: '33333333-3333-4333-8333-333333333333',
+          category: 'Food',
+          account_id: '77777777-7777-4777-8777-777777777777',
+          account: 'AmEx Platinum',
+          payment_method: 'AmEx',
+          started_at: '2026-02-01',
+          next_due_at: '2026-05-01',
+          days_until_next: 2,
+          monthly_estimate_cents: '49900',
+          yearly_estimate_cents: '598800',
+          reminder_days: [3],
+          notes: null,
+          logo_url: null,
+          source: 'detected',
+          created_at: '2026-04-28T10:00:00.000Z',
+          updated_at: '2026-04-28T10:00:00.000Z',
+        }],
+        summary: {
+          active_count: 1,
+          trial_count: 0,
+          paused_count: 0,
+          cancelled_count: 0,
+          due_soon_count: 1,
+          overdue_count: 0,
+          monthly_total_cents: '49900',
+          yearly_total_cents: '598800',
+        },
       },
     }),
   )
@@ -501,6 +560,7 @@ async function mockApi(page: Page) {
     subscriptions: [{
       name: 'MiniMax',
       merchant_key: 'minimax',
+      currency: 'INR',
       count: 3,
       total_cents: '149700',
       first_seen: '2026-02-01',
@@ -654,6 +714,16 @@ test('transactions and receipt review flows render', async ({ page }) => {
   await expect(page.getByRole('dialog', { name: 'Review Receipt' })).toBeVisible()
   await page.locator('details.raw-text-panel').evaluate((node) => node.setAttribute('open', ''))
   await expect(page.getByText('OpenAI Cafe total 1250')).toBeVisible()
+})
+
+test('subscription center renders managed records and detected candidates', async ({ page }) => {
+  await page.goto('/subscriptions')
+  await expect(page.getByRole('heading', { name: 'Subscriptions' })).toBeVisible()
+  await expect(page.getByText('Monthly committed')).toBeVisible()
+  await expect(page.getByRole('cell', { name: /MiniMax/ })).toBeVisible()
+  await expect(page.getByText('GitHub')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Add Subscription' })).toBeVisible()
+  await expect(page.getByLabel('Subscription sort')).toBeVisible()
 })
 
 test('manage workspace renders categories, budgets, tags, and statements', async ({ page }) => {

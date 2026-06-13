@@ -68,7 +68,8 @@ import { parseExpense, classifyMessage, type QueryIntent } from "../ai/parse.js"
 import { chatWithData } from "../ai/chat.js";
 import { transcribeVoice } from "../voice/transcribe.js";
 import { tryParseUpi, type UpiParse } from "../upi/parse.js";
-import { totalSpendInCategory, topExpenses, spendByCategory } from "../db/query.js";
+import { totalSpendInCategory, topExpenses, spendByCategory, findSubscriptionCandidates } from "../db/query.js";
+import { listSubscriptionRecords, summarizeSubscriptionRecords } from "../db/subscription-records.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { tryParseReceiptText } from "../receipt/parse.js";
 import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } from "./session.js";
@@ -373,6 +374,7 @@ export async function handleStart(ctx: Context): Promise<void> {
       "Commands:\n" +
       "/month — this month's spend so far\n" +
       "/review — transactions that need cleanup\n" +
+      "/subscriptions — recurring payments\n" +
       "/export — download this month as Excel\n" +
       "/dashboard — open the web dashboard\n" +
       "/categories — list your categories\n" +
@@ -398,6 +400,7 @@ export async function handleHelp(ctx: Context): Promise<void> {
       "/ask <question> — ask anything about your spending\n" +
       "/month or /summary — this month's spend so far\n" +
       "/review or /needs_review — cleanup queue\n" +
+      "/subscriptions — recurring payments and renewal watch\n" +
       "/expenses — list expenses from the 1st of the month till today\n" +
       "/export — download this month as Excel (or `/export YYYY-MM`)\n" +
       "/dashboard — open the dashboard Mini App\n" +
@@ -855,6 +858,56 @@ export async function handleNeedsReview(ctx: Context): Promise<void> {
     `🧾 *Needs review*\n${lines.join("\n")}\n\nReply \`edit\` after logging, or open /dashboard for bulk fixes.`,
     { parse_mode: "Markdown" },
   );
+}
+
+export async function handleSubscriptions(ctx: Context): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+
+  const [records, candidates] = await Promise.all([
+    listSubscriptionRecords(userId),
+    findSubscriptionCandidates(userId, 6, 2, { includeIgnored: false }),
+  ]);
+  const summary = summarizeSubscriptionRecords(records);
+  const managedKeys = new Set(records.map((record) => record.merchant_key).filter(Boolean));
+  const activeRecords = records.filter((record) => record.status === "active" || record.status === "trial");
+  const reviewCandidates = candidates.filter((candidate) => !managedKeys.has(candidate.merchant_key)).slice(0, 5);
+
+  const lines: string[] = [
+    "Subscriptions",
+    `Monthly committed: ${formatAmount(Number(summary.monthly_total_cents), "INR")} (${activeRecords.length} active/trial)`,
+  ];
+
+  if (summary.due_soon_count > 0 || summary.overdue_count > 0) {
+    lines.push(`Renewals: ${summary.due_soon_count} due soon, ${summary.overdue_count} overdue`);
+  }
+
+  if (activeRecords.length > 0) {
+    lines.push("", "Managed:");
+    for (const record of activeRecords.slice(0, 8)) {
+      const due =
+        record.days_until_next === null
+          ? "due date not set"
+          : record.days_until_next < 0
+            ? `${Math.abs(record.days_until_next)}d overdue`
+            : record.days_until_next === 0
+              ? "due today"
+              : `due in ${record.days_until_next}d`;
+      lines.push(`• ${record.name}: ${formatAmount(Number(record.monthly_estimate_cents), record.currency)}/mo, ${due}`);
+    }
+  }
+
+  if (reviewCandidates.length > 0) {
+    lines.push("", "Detected:");
+    for (const candidate of reviewCandidates) {
+      lines.push(
+        `• ${candidate.merchant}: ${candidate.confidence}% confidence, ${formatAmount(Number(candidate.monthly_estimate_cents), candidate.currency)}/mo`,
+      );
+    }
+  }
+
+  lines.push("", "Open /dashboard -> Subscriptions to edit, confirm, or add plans.");
+  await ctx.reply(lines.join("\n"));
 }
 
 // ── Query handler ─────────────────────────────────────────────────────────────
