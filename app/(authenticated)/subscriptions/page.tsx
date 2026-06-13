@@ -18,12 +18,13 @@ import {
   type Category,
   type ManagedSubscription,
   type ManagedSubscriptionStatus,
+  type SubscriptionActivityStatus,
   type SubscriptionCandidate,
   type SubscriptionRecordInput,
   type SubscriptionSummary,
 } from '../../../lib/api'
 
-type ViewFilter = 'active' | 'due' | 'paused' | 'cancelled' | 'all'
+type ViewFilter = 'active' | 'due' | 'price' | 'missing_due' | 'paused' | 'cancelled' | 'all'
 type SortKey = 'due' | 'amount' | 'name' | 'category'
 
 type FormState = {
@@ -86,6 +87,23 @@ function statusClass(status: ManagedSubscriptionStatus) {
   if (status === 'active' || status === 'trial') return 'badge-confirmed'
   if (status === 'paused') return 'badge-review'
   return 'badge-muted'
+}
+
+function activityLabel(status: SubscriptionActivityStatus | undefined) {
+  if (status === 'overdue') return 'overdue'
+  if (status === 'due_soon') return 'due soon'
+  if (status === 'price_review') return 'price review'
+  if (status === 'missing_due_date') return 'missing due date'
+  if (status === 'not_seen') return 'not seen'
+  if (status === 'inactive') return 'inactive'
+  return 'healthy'
+}
+
+function activityClass(status: SubscriptionActivityStatus | undefined) {
+  if (status === 'overdue' || status === 'price_review') return 'badge-review'
+  if (status === 'due_soon' || status === 'missing_due_date' || status === 'not_seen') return 'badge-muted'
+  if (status === 'inactive') return 'badge-muted'
+  return 'badge-confirmed'
 }
 
 function candidateCadenceLabel(candidate: SubscriptionCandidate) {
@@ -186,6 +204,9 @@ export default function SubscriptionsPage() {
   const baseCurrency = summary?.base_currency ?? 'INR'
   const monthlyCommitted = summary?.converted_monthly_total_cents ?? summary?.monthly_total_cents ?? 0
   const yearlyCommitted = summary?.converted_yearly_total_cents ?? summary?.yearly_total_cents ?? 0
+  const upcomingRenewals = summary?.upcoming_renewals ?? []
+  const priceReviewCount = summary?.price_review_count ?? records.filter((record) => record.needs_price_review).length
+  const missingDueCount = summary?.missing_due_date_count ?? records.filter((record) => record.activity_status === 'missing_due_date').length
   const fxNote = summary?.fx?.missing_currencies.length
     ? `Missing FX for ${summary.fx.missing_currencies.join(', ')}`
     : summary?.fx?.stale
@@ -199,6 +220,8 @@ export default function SubscriptionsPage() {
       if (filter === 'all') return true
       if (filter === 'active') return record.status === 'active' || record.status === 'trial'
       if (filter === 'due') return record.days_until_next !== null && record.days_until_next <= 7 && record.status !== 'cancelled'
+      if (filter === 'price') return record.needs_price_review === true
+      if (filter === 'missing_due') return record.activity_status === 'missing_due_date' || record.activity_status === 'not_seen'
       return record.status === filter
     })
     return [...filtered].sort((a, b) => {
@@ -280,6 +303,38 @@ export default function SubscriptionsPage() {
           <span>Detected</span>
           <strong>{reviewCandidates.length}</strong>
           <small>waiting for review</small>
+        </div>
+        <div>
+          <span>Review</span>
+          <strong>{priceReviewCount + missingDueCount}</strong>
+          <small>{priceReviewCount} price · {missingDueCount} due-date</small>
+        </div>
+      </section>
+
+      <section className="card subscription-renewal-strip">
+        <div className="chart-card-heading">
+          <div>
+            <span>Renewal timeline</span>
+            <h3>Next 60 days</h3>
+          </div>
+          <small>
+            {summary?.upcoming_30_days_count ?? 0} due in 30 days · {formatCents(summary?.upcoming_30_days_total_cents ?? 0, baseCurrency)}
+          </small>
+        </div>
+        <div className="renewal-list">
+          {upcomingRenewals.length === 0 ? (
+            <p>No dated renewals in the next 60 days.</p>
+          ) : upcomingRenewals.map((renewal) => (
+            <div key={`${renewal.id}-${renewal.due_date}`} className="renewal-chip">
+              <strong>{renewal.name}</strong>
+              <span>{dueLabel({ next_due_at: renewal.due_date, days_until_next: renewal.days_until_next })}</span>
+              <small>
+                {formatCents(renewal.converted_amount_cents ?? renewal.amount_cents, renewal.converted_amount_cents ? baseCurrency : renewal.currency)}
+                {renewal.account ?? renewal.payment_method ? ` · ${renewal.account ?? renewal.payment_method}` : ''}
+              </small>
+              <em className={`badge ${activityClass(renewal.activity_status)}`}>{activityLabel(renewal.activity_status)}</em>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -395,6 +450,8 @@ export default function SubscriptionsPage() {
               <select value={filter} onChange={(e) => setFilter(e.target.value as ViewFilter)} aria-label="Subscription view">
                 <option value="active">Active</option>
                 <option value="due">Due soon</option>
+                <option value="price">Price review</option>
+                <option value="missing_due">Missing due</option>
                 <option value="paused">Paused</option>
                 <option value="cancelled">Cancelled</option>
                 <option value="all">All</option>
@@ -428,7 +485,11 @@ export default function SubscriptionsPage() {
                     <td data-label="Name">
                       <strong>{record.name}</strong>
                       <span className={`badge ${statusClass(record.status)}`}>{record.status}</span>
+                      {record.activity_status ? (
+                        <span className={`badge ${activityClass(record.activity_status)}`}>{activityLabel(record.activity_status)}</span>
+                      ) : null}
                       {record.source === 'detected' ? <span className="badge badge-muted">detected</span> : null}
+                      {record.last_seen ? <small>Last seen {formatDate(record.last_seen)}</small> : null}
                     </td>
                     <td data-label="Billing">{record.billing_cycle}</td>
                     <td data-label="Due">
@@ -439,6 +500,11 @@ export default function SubscriptionsPage() {
                     <td data-label="Account">{record.account ?? record.payment_method ?? 'None'}</td>
                     <td data-label="Monthly" style={{ textAlign: 'right', fontWeight: 700 }}>
                       {monthlyDisplay(record, baseCurrency)}
+                      {record.needs_price_review && typeof record.price_delta_pct === 'number' ? (
+                        <small className="price-delta">
+                          {record.price_delta_pct > 0 ? '+' : ''}{record.price_delta_pct}% vs detected
+                        </small>
+                      ) : null}
                     </td>
                     <td data-label="Actions">
                       <div className="row-actions">

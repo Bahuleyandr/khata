@@ -499,6 +499,13 @@ async function mockApi(page: Page) {
           yearly_estimate_cents: '598800',
           converted_monthly_estimate_cents: '49900',
           converted_yearly_estimate_cents: '598800',
+          converted_amount_cents: '49900',
+          activity_status: 'price_review',
+          last_seen: '2026-04-01',
+          detected_monthly_estimate_cents: '59900',
+          price_delta_cents: '10000',
+          price_delta_pct: 20,
+          needs_price_review: true,
           reminder_days: [3],
           notes: null,
           logo_url: null,
@@ -527,6 +534,13 @@ async function mockApi(page: Page) {
           yearly_estimate_cents: '24000',
           converted_monthly_estimate_cents: '166000',
           converted_yearly_estimate_cents: '1992000',
+          converted_amount_cents: '166000',
+          activity_status: 'due_soon',
+          last_seen: null,
+          detected_monthly_estimate_cents: null,
+          price_delta_cents: null,
+          price_delta_pct: null,
+          needs_price_review: false,
           reminder_days: [3],
           notes: 'API subscription',
           logo_url: null,
@@ -546,6 +560,36 @@ async function mockApi(page: Page) {
           base_currency: 'INR',
           converted_monthly_total_cents: '215900',
           converted_yearly_total_cents: '2590800',
+          price_review_count: 1,
+          missing_due_date_count: 0,
+          not_seen_count: 0,
+          upcoming_30_days_count: 2,
+          upcoming_30_days_total_cents: '215900',
+          upcoming_renewals: [{
+            id: 'sub-1',
+            name: 'MiniMax',
+            status: 'active',
+            due_date: '2026-05-01',
+            days_until_next: 2,
+            amount_cents: '49900',
+            converted_amount_cents: '49900',
+            currency: 'INR',
+            account: 'AmEx Platinum',
+            payment_method: 'AmEx',
+            activity_status: 'price_review',
+          }, {
+            id: 'sub-2',
+            name: 'OpenAI',
+            status: 'active',
+            due_date: '2026-05-04',
+            days_until_next: 5,
+            amount_cents: '2000',
+            converted_amount_cents: '166000',
+            currency: 'USD',
+            account: 'AmEx Platinum',
+            payment_method: 'AmEx',
+            activity_status: 'due_soon',
+          }],
           fx: {
             base_currency: 'INR',
             source: 'frankfurter',
@@ -799,7 +843,10 @@ test('subscription center renders managed records and detected candidates', asyn
   await page.goto('/subscriptions')
   await expect(page.getByRole('heading', { name: 'Subscriptions' })).toBeVisible()
   await expect(page.getByText('Monthly committed')).toBeVisible()
-  await expect(page.getByText('₹2,159.00')).toBeVisible()
+  await expect(page.locator('.subscription-hero strong', { hasText: '₹2,159.00' })).toBeVisible()
+  await expect(page.getByText('Renewal timeline')).toBeVisible()
+  await expect(page.getByText('+20% vs detected')).toBeVisible()
+  await expect(page.getByRole('option', { name: 'Price review' })).toBeAttached()
   await expect(page.getByRole('cell', { name: /MiniMax/ })).toBeVisible()
   await expect(page.getByRole('cell', { name: /OpenAI/ })).toBeVisible()
   await expect(page.getByText('$20.00 / mo (₹1,660.00)')).toBeVisible()

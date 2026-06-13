@@ -2,6 +2,14 @@ import { sql } from "./index.js";
 
 export type SubscriptionStatus = "active" | "trial" | "paused" | "cancelled";
 export type BillingCycle = "weekly" | "fortnightly" | "monthly" | "quarterly" | "yearly" | "custom";
+export type SubscriptionActivityStatus =
+  | "ok"
+  | "due_soon"
+  | "overdue"
+  | "missing_due_date"
+  | "not_seen"
+  | "price_review"
+  | "inactive";
 
 export interface SubscriptionRecordInput {
   name: string;
@@ -69,6 +77,11 @@ export interface SubscriptionSummary {
   overdue_count: number;
   monthly_total_cents: string;
   yearly_total_cents: string;
+  price_review_count?: number;
+  missing_due_date_count?: number;
+  not_seen_count?: number;
+  upcoming_30_days_count?: number;
+  upcoming_30_days_total_cents?: string;
 }
 
 type SubscriptionRow = Omit<SubscriptionRecord, "monthly_estimate_cents" | "yearly_estimate_cents">;
@@ -139,6 +152,19 @@ export function summarizeSubscriptionRecords(records: SubscriptionRecord[]): Sub
     monthly_total_cents: String(monthlyTotal),
     yearly_total_cents: String(monthlyTotal * 12),
   };
+}
+
+export function subscriptionActivityStatus(
+  record: Pick<SubscriptionRecord, "status" | "next_due_at" | "days_until_next">,
+  signals: { needsPriceReview?: boolean; notSeen?: boolean } = {},
+): SubscriptionActivityStatus {
+  if (record.status === "paused" || record.status === "cancelled") return "inactive";
+  if (record.days_until_next !== null && record.days_until_next < 0) return "overdue";
+  if (record.days_until_next !== null && record.days_until_next <= 7) return "due_soon";
+  if (signals.needsPriceReview) return "price_review";
+  if (!record.next_due_at) return "missing_due_date";
+  if (signals.notSeen) return "not_seen";
+  return "ok";
 }
 
 export async function listSubscriptionRecords(userId: number): Promise<SubscriptionRecord[]> {

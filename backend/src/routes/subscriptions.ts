@@ -6,10 +6,14 @@ import {
   createSubscriptionRecord,
   deleteSubscriptionRecord,
   listSubscriptionRecords,
+  normalizeSubscriptionMerchantKey,
   summarizeSubscriptionRecords,
+  subscriptionActivityStatus,
   updateSubscriptionRecord,
   upsertDetectedSubscriptionRecord,
   type BillingCycle,
+  type SubscriptionActivityStatus,
+  type SubscriptionRecord,
   type SubscriptionRecordInput,
   type SubscriptionStatus,
 } from "../db/subscription-records.js";
@@ -62,6 +66,32 @@ type ConfirmDetectedBody = {
   account_id?: string | null;
   payment_method?: string | null;
   notes?: string | null;
+};
+
+type EnrichedSubscriptionRecord = SubscriptionRecord & {
+  converted_amount_cents: string | null;
+  converted_monthly_estimate_cents: string | null;
+  converted_yearly_estimate_cents: string | null;
+  activity_status: SubscriptionActivityStatus;
+  last_seen: string | null;
+  detected_monthly_estimate_cents: string | null;
+  price_delta_cents: string | null;
+  price_delta_pct: number | null;
+  needs_price_review: boolean;
+};
+
+type SubscriptionRenewal = {
+  id: string;
+  name: string;
+  status: SubscriptionStatus;
+  due_date: string;
+  days_until_next: number;
+  amount_cents: string;
+  converted_amount_cents: string | null;
+  currency: string;
+  account: string | null;
+  payment_method: string | null;
+  activity_status: SubscriptionActivityStatus;
 };
 
 const subscriptionQuerySchema = {
@@ -213,6 +243,80 @@ function recordInput(body: SubscriptionRecordBody): SubscriptionRecordInput {
   };
 }
 
+function priceDeltaPct(deltaCents: number, baselineCents: number): number | null {
+  if (baselineCents <= 0) return null;
+  return Math.round((deltaCents / baselineCents) * 100);
+}
+
+function enrichSubscriptionRecords(
+  records: SubscriptionRecord[],
+  subscriptions: SubscriptionCandidate[],
+  fx: Awaited<ReturnType<typeof getFxRatesForCurrencies>>,
+): EnrichedSubscriptionRecord[] {
+  const candidatesByKey = new Map(
+    subscriptions.map((subscription) => [subscription.merchant_key, subscription]),
+  );
+  return records.map((record) => {
+    const merchantKey = normalizeSubscriptionMerchantKey(record.merchant_key ?? record.name);
+    const candidate = candidatesByKey.get(merchantKey) ?? null;
+    const convertedAmount = convertCents(record.amount_cents, record.currency, fx);
+    const convertedMonthly = convertCents(record.monthly_estimate_cents, record.currency, fx);
+    const comparableCandidate = candidate?.currency === record.currency ? candidate : null;
+    const detectedMonthly = comparableCandidate ? Number(comparableCandidate.monthly_estimate_cents) : null;
+    const recordMonthly = Number(record.monthly_estimate_cents);
+    const priceDelta = detectedMonthly === null ? null : detectedMonthly - recordMonthly;
+    const deltaPct = priceDelta === null ? null : priceDeltaPct(priceDelta, recordMonthly);
+    const needsPriceReview =
+      comparableCandidate !== null &&
+      comparableCandidate.count >= 2 &&
+      deltaPct !== null &&
+      Math.abs(deltaPct) >= 15;
+    const activityStatus = subscriptionActivityStatus(record, {
+      needsPriceReview,
+      notSeen: candidate?.not_seen_this_month === true,
+    });
+
+    return {
+      ...record,
+      converted_amount_cents: convertedAmount === null ? null : String(convertedAmount),
+      converted_monthly_estimate_cents: convertedMonthly === null ? null : String(convertedMonthly),
+      converted_yearly_estimate_cents: convertedMonthly === null ? null : String(convertedMonthly * 12),
+      activity_status: activityStatus,
+      last_seen: candidate?.last_seen ?? null,
+      detected_monthly_estimate_cents: candidate?.monthly_estimate_cents ?? null,
+      price_delta_cents: priceDelta === null ? null : String(priceDelta),
+      price_delta_pct: deltaPct,
+      needs_price_review: needsPriceReview,
+    };
+  });
+}
+
+function upcomingRenewals(records: EnrichedSubscriptionRecord[]): SubscriptionRenewal[] {
+  return records
+    .filter((record) =>
+      (record.status === "active" || record.status === "trial") &&
+      record.next_due_at !== null &&
+      record.days_until_next !== null &&
+      record.days_until_next >= -14 &&
+      record.days_until_next <= 60,
+    )
+    .sort((a, b) => (a.days_until_next ?? 99999) - (b.days_until_next ?? 99999) || a.name.localeCompare(b.name))
+    .slice(0, 12)
+    .map((record) => ({
+      id: record.id,
+      name: record.name,
+      status: record.status,
+      due_date: record.next_due_at!,
+      days_until_next: record.days_until_next!,
+      amount_cents: record.amount_cents,
+      converted_amount_cents: record.converted_amount_cents,
+      currency: record.currency,
+      account: record.account,
+      payment_method: record.payment_method,
+      activity_status: record.activity_status,
+    }));
+}
+
 export async function subscriptionsRoutes(app: FastifyInstance) {
   app.get<{ Querystring: SubscriptionQuery }>(
     "/api/subscriptions",
@@ -226,17 +330,12 @@ export async function subscriptionsRoutes(app: FastifyInstance) {
       });
       const records = await listSubscriptionRecords(session.userId);
       const fx = await getFxRatesForCurrencies(records.map((record) => record.currency));
-      const recordsWithFx = records.map((record) => {
-        const convertedMonthly = convertCents(record.monthly_estimate_cents, record.currency, fx);
-        return {
-          ...record,
-          converted_monthly_estimate_cents: convertedMonthly === null ? null : String(convertedMonthly),
-          converted_yearly_estimate_cents: convertedMonthly === null ? null : String(convertedMonthly * 12),
-        };
-      });
+      const recordsWithFx = enrichSubscriptionRecords(records, subscriptions, fx);
       const convertedMonthlyTotal = recordsWithFx
         .filter((record) => record.status === "active" || record.status === "trial")
         .reduce((sum, record) => sum + Number(record.converted_monthly_estimate_cents ?? 0), 0);
+      const renewals = upcomingRenewals(recordsWithFx);
+      const next30 = renewals.filter((renewal) => renewal.days_until_next >= 0 && renewal.days_until_next <= 30);
       return {
         subscriptions: subscriptions.map(toApiSubscription),
         records: recordsWithFx,
@@ -245,6 +344,14 @@ export async function subscriptionsRoutes(app: FastifyInstance) {
           base_currency: fx.base_currency,
           converted_monthly_total_cents: String(convertedMonthlyTotal),
           converted_yearly_total_cents: String(convertedMonthlyTotal * 12),
+          price_review_count: recordsWithFx.filter((record) => record.needs_price_review).length,
+          missing_due_date_count: recordsWithFx.filter((record) => record.activity_status === "missing_due_date").length,
+          not_seen_count: recordsWithFx.filter((record) => record.activity_status === "not_seen").length,
+          upcoming_30_days_count: next30.length,
+          upcoming_30_days_total_cents: String(
+            next30.reduce((sum, renewal) => sum + Number(renewal.converted_amount_cents ?? 0), 0),
+          ),
+          upcoming_renewals: renewals,
           fx,
         },
       };

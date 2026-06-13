@@ -1044,7 +1044,7 @@ tr:hover td { background: #f9fafb; }
 .subscription-hero {
   display: grid;
   gap: 0.85rem;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   margin-bottom: 1rem;
 }
 .subscription-hero div {
@@ -1068,6 +1068,53 @@ tr:hover td { background: #f9fafb; }
 .subscription-hero small {
   color: #64748b;
   font-size: 0.76rem;
+}
+.subscription-renewal-strip {
+  margin-bottom: 1rem;
+}
+.subscription-renewal-strip .chart-card-heading {
+  margin-bottom: 0.75rem;
+}
+.subscription-renewal-strip .chart-card-heading small {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.renewal-list {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+.renewal-list p {
+  color: #64748b;
+  margin: 0;
+}
+.renewal-chip {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.22rem;
+  min-height: 112px;
+  padding: 0.7rem;
+}
+.renewal-chip strong {
+  color: #111827;
+  font-size: 0.95rem;
+}
+.renewal-chip span,
+.renewal-chip small {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+.renewal-chip em {
+  font-style: normal;
+  justify-self: start;
+  margin-top: 0.15rem;
+}
+.price-delta {
+  color: #b45309 !important;
+  font-weight: 700;
 }
 .subscription-layout {
   display: grid;
@@ -1590,6 +1637,7 @@ tr:hover td { background: #f9fafb; }
   .chart-card-heading { align-items: stretch; flex-direction: column; }
   .chart-card-heading a { align-self: flex-start; }
   .subscription-hero,
+  .renewal-list,
   .subscription-layout {
     grid-template-columns: 1fr;
   }
@@ -1805,6 +1853,10 @@ html[data-theme="dark"] .statement-review-toolbar span,
 html[data-theme="dark"] .subscription-summary-grid small,
 html[data-theme="dark"] .subscription-hero small,
 html[data-theme="dark"] .subscription-hero span,
+html[data-theme="dark"] .subscription-renewal-strip .chart-card-heading small,
+html[data-theme="dark"] .renewal-list p,
+html[data-theme="dark"] .renewal-chip span,
+html[data-theme="dark"] .renewal-chip small,
 html[data-theme="dark"] .page-heading p,
 html[data-theme="dark"] .compact-table td small,
 html[data-theme="dark"] .access-summary-grid small,
@@ -1881,6 +1933,7 @@ html[data-theme="dark"] .subscription-form-card h3,
 html[data-theme="dark"] .subscription-detection-card h3,
 html[data-theme="dark"] .subscription-hero strong,
 html[data-theme="dark"] .subscription-summary-grid strong,
+html[data-theme="dark"] .renewal-chip strong,
 html[data-theme="dark"] .access-summary-grid strong,
 html[data-theme="dark"] .audit-detail-modal h3,
 html[data-theme="dark"] .review-hero h3,
@@ -2012,6 +2065,7 @@ html[data-theme="dark"] .statement-correction-bar,
 html[data-theme="dark"] .statement-review-panel,
 html[data-theme="dark"] .subscription-summary-grid span,
 html[data-theme="dark"] .subscription-hero div,
+html[data-theme="dark"] .renewal-chip,
 html[data-theme="dark"] .access-summary-grid span,
 html[data-theme="dark"] .review-task,
 html[data-theme="dark"] .variance-list div,

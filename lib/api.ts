@@ -184,6 +184,14 @@ export type SubscriptionPreferenceStatus = 'confirmed' | 'ignored' | 'inactive'
 
 export type ManagedSubscriptionStatus = 'active' | 'trial' | 'paused' | 'cancelled'
 export type BillingCycle = 'weekly' | 'fortnightly' | 'monthly' | 'quarterly' | 'yearly' | 'custom'
+export type SubscriptionActivityStatus =
+  | 'ok'
+  | 'due_soon'
+  | 'overdue'
+  | 'missing_due_date'
+  | 'not_seen'
+  | 'price_review'
+  | 'inactive'
 
 export interface ManagedSubscription {
   id: string
@@ -205,8 +213,15 @@ export interface ManagedSubscription {
   days_until_next: number | null
   monthly_estimate_cents: string
   yearly_estimate_cents: string
+  converted_amount_cents?: string | null
   converted_monthly_estimate_cents?: string | null
   converted_yearly_estimate_cents?: string | null
+  activity_status?: SubscriptionActivityStatus
+  last_seen?: string | null
+  detected_monthly_estimate_cents?: string | null
+  price_delta_cents?: string | null
+  price_delta_pct?: number | null
+  needs_price_review?: boolean
   reminder_days: number[]
   notes: string | null
   logo_url: string | null
@@ -233,6 +248,20 @@ export interface FxConversionSummary {
   fetched_at: string | null
 }
 
+export interface SubscriptionRenewal {
+  id: string
+  name: string
+  status: ManagedSubscriptionStatus
+  due_date: string
+  days_until_next: number
+  amount_cents: string
+  converted_amount_cents?: string | null
+  currency: string
+  account: string | null
+  payment_method: string | null
+  activity_status: SubscriptionActivityStatus
+}
+
 export interface SubscriptionSummary {
   active_count: number
   trial_count: number
@@ -245,6 +274,12 @@ export interface SubscriptionSummary {
   base_currency?: string
   converted_monthly_total_cents?: string
   converted_yearly_total_cents?: string
+  price_review_count?: number
+  missing_due_date_count?: number
+  not_seen_count?: number
+  upcoming_30_days_count?: number
+  upcoming_30_days_total_cents?: string
+  upcoming_renewals?: SubscriptionRenewal[]
   fx?: FxConversionSummary
 }
 

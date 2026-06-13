@@ -4,7 +4,12 @@ vi.mock("./index.js", () => ({
   sql: vi.fn(),
 }));
 
-import { monthlyEstimateCents, summarizeSubscriptionRecords, type SubscriptionRecord } from "./subscription-records.js";
+import {
+  monthlyEstimateCents,
+  subscriptionActivityStatus,
+  summarizeSubscriptionRecords,
+  type SubscriptionRecord,
+} from "./subscription-records.js";
 
 function record(overrides: Partial<SubscriptionRecord>): SubscriptionRecord {
   return {
@@ -59,5 +64,15 @@ describe("subscription records", () => {
     expect(summary.paused_count).toBe(1);
     expect(summary.due_soon_count).toBe(1);
     expect(summary.overdue_count).toBe(1);
+  });
+
+  it("classifies subscription activity status by operational priority", () => {
+    expect(subscriptionActivityStatus(record({ status: "paused" }))).toBe("inactive");
+    expect(subscriptionActivityStatus(record({ days_until_next: -1 }))).toBe("overdue");
+    expect(subscriptionActivityStatus(record({ days_until_next: 3 }))).toBe("due_soon");
+    expect(subscriptionActivityStatus(record({ days_until_next: 20 }), { needsPriceReview: true })).toBe("price_review");
+    expect(subscriptionActivityStatus(record({ next_due_at: null, days_until_next: null }))).toBe("missing_due_date");
+    expect(subscriptionActivityStatus(record({ next_due_at: "2026-08-01", days_until_next: 45 }), { notSeen: true })).toBe("not_seen");
+    expect(subscriptionActivityStatus(record({ next_due_at: "2026-08-01", days_until_next: 45 }))).toBe("ok");
   });
 });
