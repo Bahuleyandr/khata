@@ -7,7 +7,10 @@ import ReviewPage from './page'
 import { getMonthlyReview, withLedgerParam, type MonthlyReview } from '../../../lib/api'
 
 vi.mock('../../../lib/api', () => ({
+  closeMonthlyReview: vi.fn(),
   getMonthlyReview: vi.fn(),
+  markMonthlyReviewExported: vi.fn(),
+  reopenMonthlyReview: vi.fn(),
   withLedgerParam: vi.fn((path: string) => path),
   formatCents: (cents: string | number, currency = 'INR') => `${currency} ${(Number(cents) / 100).toFixed(2)}`,
   formatDate: (iso: string) => iso.slice(0, 10),
@@ -95,6 +98,23 @@ const review: MonthlyReview = {
     occurred_at: '2026-04-20T10:00:00.000Z',
   }],
   narrative: 'April 2026 has 3 cleanup areas before close.',
+  close: {
+    status: 'open',
+    readiness_score: 50,
+    can_close: false,
+    blockers: [
+      {
+        id: 'uncategorized',
+        label: 'Categorize transactions',
+        count: 1,
+        href: '/transactions?start=2026-04-01&end=2026-04-30&uncategorized=true',
+      },
+    ],
+    exported_at: null,
+    closed_at: null,
+    reopened_at: null,
+    close_note: null,
+  },
 }
 
 describe('ReviewPage', () => {
@@ -116,6 +136,8 @@ describe('ReviewPage', () => {
       '/receipts?start=2026-04-01&end=2026-04-30&review_status=needs_review',
     )
     expect(screen.getByRole('link', { name: 'Export' }).getAttribute('href')).toBe('/api/export/xlsx?year=2026&month=4')
+    expect(screen.getByRole('button', { name: 'Mark Exported' })).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Close Month' }) as HTMLButtonElement).disabled).toBe(true)
 
     await waitFor(() => expect(getMonthlyReview).toHaveBeenCalled())
   })

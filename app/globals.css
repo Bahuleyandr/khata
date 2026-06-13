@@ -152,6 +152,23 @@ a { color: inherit; text-decoration: none; }
   padding: 0.45rem 0.9rem;
 }
 .button-primary:disabled { opacity: 0.5; cursor: default; }
+.button-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  color: #374151;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.45rem 0.9rem;
+}
+.button-secondary:hover:not(:disabled) { background: #f9fafb; }
+.button-secondary:disabled { opacity: 0.5; cursor: default; }
 
 .card {
   background: #fff;
@@ -1366,6 +1383,66 @@ tr:hover td { background: #f9fafb; }
   display: block;
   height: 100%;
 }
+.month-close-panel {
+  border: 1px solid #d9e7e3;
+  border-radius: 8px;
+  display: grid;
+  gap: 0.65rem;
+  max-width: 360px;
+  padding: 0.85rem;
+  width: 100%;
+}
+.month-close-topline,
+.month-close-actions {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: space-between;
+}
+.month-close-topline span {
+  color: #0f766e;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.month-close-topline strong {
+  color: #111827;
+  font-size: 0.95rem;
+}
+.month-close-meta,
+.month-close-blockers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.month-close-meta span,
+.month-close-blockers span,
+.month-close-blockers a {
+  background: #f3f4f6;
+  border-radius: 999px;
+  color: #4b5563;
+  font-size: 0.74rem;
+  padding: 0.22rem 0.5rem;
+}
+.month-close-blockers a {
+  background: #fff7f7;
+  color: #b91c1c;
+  font-weight: 650;
+}
+.month-close-panel textarea {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.84rem;
+  padding: 0.5rem 0.65rem;
+  resize: vertical;
+}
+.success-msg.compact {
+  font-size: 0.82rem;
+  margin: 0;
+  padding: 0.55rem 0.65rem;
+}
 .review-metrics {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1776,6 +1853,9 @@ tr:hover td { background: #f9fafb; }
   .monthly-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .review-hero { align-items: stretch; flex-direction: column; }
   .review-progress { min-width: 0; text-align: left; width: 100%; }
+  .month-close-panel { max-width: none; }
+  .month-close-actions { align-items: stretch; flex-direction: column; }
+  .month-close-actions button { width: 100%; }
   .review-metrics,
   .review-layout { grid-template-columns: 1fr; }
 }
@@ -1980,6 +2060,16 @@ html[data-theme="dark"] .modal-actions .button-primary:hover:not(:disabled) {
   background: var(--primary-hover);
 }
 
+html[data-theme="dark"] .button-secondary {
+  background: var(--surface-subtle);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+html[data-theme="dark"] .button-secondary:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
 html[data-theme="dark"] .toolbar-inline input,
 html[data-theme="dark"] .toolbar-inline select,
 html[data-theme="dark"] .inline-form input,
@@ -1998,7 +2088,8 @@ html[data-theme="dark"] .form-grid input,
 html[data-theme="dark"] .form-grid select,
 html[data-theme="dark"] .form-grid textarea,
 html[data-theme="dark"] .merge-select select,
-html[data-theme="dark"] .audit-filter-bar select {
+html[data-theme="dark"] .audit-filter-bar select,
+html[data-theme="dark"] .month-close-panel textarea {
   background: var(--surface-subtle);
   border-color: var(--border-strong);
   color: var(--text);
@@ -2067,6 +2158,9 @@ html[data-theme="dark"] .subscription-summary-grid span,
 html[data-theme="dark"] .subscription-hero div,
 html[data-theme="dark"] .renewal-chip,
 html[data-theme="dark"] .access-summary-grid span,
+html[data-theme="dark"] .month-close-panel,
+html[data-theme="dark"] .month-close-meta span,
+html[data-theme="dark"] .month-close-blockers span,
 html[data-theme="dark"] .review-task,
 html[data-theme="dark"] .variance-list div,
 html[data-theme="dark"] .review-sample-list a,
@@ -2076,6 +2170,19 @@ html[data-theme="dark"] .receipt-review-toolbar {
   background: var(--surface-subtle);
   border-color: var(--border);
   color: var(--text);
+}
+
+html[data-theme="dark"] .month-close-topline strong {
+  color: var(--text-strong);
+}
+
+html[data-theme="dark"] .month-close-topline span {
+  color: var(--accent);
+}
+
+html[data-theme="dark"] .month-close-blockers a {
+  background: var(--danger-muted);
+  color: var(--danger);
 }
 
 html[data-theme="dark"] .notice-card {

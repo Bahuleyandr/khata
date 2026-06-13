@@ -624,6 +624,24 @@ export interface MonthlyReviewTask {
   href: string
 }
 
+export type MonthlyCloseStatus = 'open' | 'ready' | 'closed' | 'reopened'
+
+export interface MonthlyCloseState {
+  status: MonthlyCloseStatus
+  readiness_score: number
+  can_close: boolean
+  blockers: Array<{
+    id: MonthlyReviewTask['id']
+    label: string
+    count: number
+    href: string
+  }>
+  exported_at: string | null
+  closed_at: string | null
+  reopened_at: string | null
+  close_note: string | null
+}
+
 export interface MonthlyReview {
   period: SummaryPeriod
   overview: {
@@ -660,6 +678,7 @@ export interface MonthlyReview {
     occurred_at: string
   }>
   narrative: string
+  close: MonthlyCloseState
 }
 
 export interface AuditEvent {
@@ -736,6 +755,42 @@ export function getMonthlyReview(params: { year?: number; month?: number } = {})
   if (params.year) q.set('year', String(params.year))
   if (params.month) q.set('month', String(params.month))
   return apiFetch<MonthlyReview>(`/api/review/monthly?${q}`)
+}
+
+export function markMonthlyReviewExported(params: {
+  year: number
+  month: number
+  note?: string
+}): Promise<{ ok: boolean; close: MonthlyCloseState }> {
+  return apiFetch<{ ok: boolean; close: MonthlyCloseState }>('/api/review/monthly/exported', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+}
+
+export function closeMonthlyReview(params: {
+  year: number
+  month: number
+  note?: string
+}): Promise<{ ok: boolean; close: MonthlyCloseState }> {
+  return apiFetch<{ ok: boolean; close: MonthlyCloseState }>('/api/review/monthly/close', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+}
+
+export function reopenMonthlyReview(params: {
+  year: number
+  month: number
+  note?: string
+}): Promise<{ ok: boolean; close: MonthlyCloseState }> {
+  return apiFetch<{ ok: boolean; close: MonthlyCloseState }>('/api/review/monthly/reopen', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
 }
 
 export function getExpenses(params: {

@@ -82,6 +82,7 @@ const CATEGORY_ID = "33333333-3333-4333-8333-333333333333";
 const TAG_ID = "44444444-4444-4444-8444-444444444444";
 const STATEMENT_ID = "55555555-5555-4555-8555-555555555555";
 const STATEMENT_ROW_ID = "66666666-6666-4666-8666-666666666666";
+const MONTH_CLOSE_ID = "77777777-7777-4777-8777-777777777777";
 
 function authCookie(): string {
   return `session=${signSession(12345, "Subash", Math.floor(Date.now() / 1000))}`;
@@ -772,7 +773,8 @@ describe("route hardening", () => {
           target_cents: "100000",
           spent_cents: "200000",
         },
-      ]);
+      ])
+      .mockResolvedValueOnce([]);
 
     const app = await buildApp();
     try {
@@ -793,6 +795,11 @@ describe("route hardening", () => {
           open_task_count: 5,
         },
         statements: { total: 1, failed: 1, parsed_count: 8, imported_count: 4 },
+        close: {
+          status: "open",
+          readiness_score: 17,
+          can_close: false,
+        },
       });
       expect(res.json().tasks).toEqual(
         expect.arrayContaining([
@@ -807,6 +814,85 @@ describe("route hardening", () => {
           }),
         ]),
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("closes a monthly review when checklist blockers are clear", async () => {
+    const closedAt = new Date("2026-05-01T08:00:00.000Z");
+    sqlMock
+      .mockResolvedValueOnce([
+        {
+          transaction_count: "2",
+          total_cents: "125000",
+          uncategorized_count: "0",
+          uncategorized_cents: "0",
+          needs_review_count: "0",
+          receipts_needs_review_count: "0",
+          missing_receipt_count: "0",
+        },
+      ])
+      .mockResolvedValueOnce([{ duplicate_count: "0" }])
+      .mockResolvedValueOnce([
+        {
+          total: "0",
+          failed: "0",
+          pending: "0",
+          parsed: "0",
+          imported: "0",
+          parsed_count: "0",
+          imported_count: "0",
+          duplicate_count: "0",
+        },
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: MONTH_CLOSE_ID,
+          user_id: "12345",
+          period_month: new Date("2026-04-01T00:00:00.000Z"),
+          status: "closed",
+          readiness_score: 100,
+          open_task_count: 0,
+          total_cents: "125000",
+          transaction_count: 2,
+          exported_at: null,
+          closed_at: closedAt,
+          reopened_at: null,
+          actor_user_id: "12345",
+          close_note: "Looks good",
+          snapshot: {},
+          created_at: closedAt,
+          updated_at: closedAt,
+        },
+      ])
+      .mockResolvedValueOnce([{ id: "audit-1" }]);
+
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/review/monthly/close",
+        headers: { cookie: authCookie() },
+        payload: { year: 2026, month: 4, note: "Looks good" },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        ok: true,
+        close: {
+          status: "closed",
+          readiness_score: 100,
+          can_close: false,
+          close_note: "Looks good",
+        },
+      });
+      const auditCall = sqlMock.mock.calls.at(-1);
+      expect(String(auditCall?.[0]?.[0])).toContain("INSERT INTO audit_log");
+      expect(auditCall).toEqual(expect.arrayContaining(["month_close.close", "month_close", MONTH_CLOSE_ID]));
     } finally {
       await app.close();
     }

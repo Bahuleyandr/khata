@@ -1,11 +1,14 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
+  closeMonthlyReview,
   formatCents,
   formatDate,
   getMonthlyReview,
+  markMonthlyReviewExported,
+  reopenMonthlyReview,
   withLedgerParam,
   type MonthlyReview,
   type MonthlyReviewTask,
@@ -33,10 +36,31 @@ function taskMetric(task: MonthlyReviewTask) {
   return String(task.count)
 }
 
+function closeStatusLabel(status: MonthlyReview['close']['status']) {
+  if (status === 'closed') return 'Closed'
+  if (status === 'reopened') return 'Reopened'
+  if (status === 'ready') return 'Ready'
+  return 'Open'
+}
+
+function formatTimestamp(value: string | null) {
+  if (!value) return null
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
 export default function ReviewPage() {
   const [monthValue, setMonthValue] = useState(currentMonthValue)
   const [review, setReview] = useState<MonthlyReview | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [actionBusy, setActionBusy] = useState<'exported' | 'close' | 'reopen' | null>(null)
+  const [closeNote, setCloseNote] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -44,11 +68,11 @@ export default function ReviewPage() {
     if (month && /^\d{4}-\d{2}$/.test(month)) setMonthValue(month)
   }, [])
 
-  useEffect(() => {
+  const loadReview = useCallback((showLoading = true) => {
     const { year, month } = parseMonthValue(monthValue)
-    setLoading(true)
+    if (showLoading) setLoading(true)
     setError(null)
-    getMonthlyReview({ year, month })
+    return getMonthlyReview({ year, month })
       .then((data) => {
         setReview(data)
         setLoading(false)
@@ -58,6 +82,40 @@ export default function ReviewPage() {
         setLoading(false)
       })
   }, [monthValue])
+
+  useEffect(() => {
+    setActionMessage(null)
+    setCloseNote('')
+    void loadReview()
+  }, [loadReview])
+
+  async function runMonthAction(action: 'exported' | 'close' | 'reopen') {
+    if (!review || actionBusy) return
+    const { year, month } = parseMonthValue(monthValue)
+    const note = closeNote.trim() || undefined
+    setActionBusy(action)
+    setError(null)
+    setActionMessage(null)
+    try {
+      if (action === 'exported') {
+        await markMonthlyReviewExported({ year, month })
+        setActionMessage('Monthly workbook marked exported.')
+      } else if (action === 'close') {
+        await closeMonthlyReview({ year, month, note })
+        setActionMessage(`${review.period.label} closed.`)
+        setCloseNote('')
+      } else {
+        await reopenMonthlyReview({ year, month, note })
+        setActionMessage(`${review.period.label} reopened for correction.`)
+        setCloseNote('')
+      }
+      await loadReview(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Monthly close action failed')
+    } finally {
+      setActionBusy(null)
+    }
+  }
 
   const doneCount = useMemo(
     () => review?.tasks.filter((task) => task.status !== 'attention').length ?? 0,
@@ -104,6 +162,64 @@ export default function ReviewPage() {
               <strong>{completionPct}%</strong>
               <span>{doneCount} of {totalTasks} checks clear</span>
               <div><i style={{ width: `${completionPct}%` }} /></div>
+            </div>
+            <div className="month-close-panel">
+              <div className="month-close-topline">
+                <span>{closeStatusLabel(review.close.status)}</span>
+                <strong>{review.close.readiness_score}% ready</strong>
+              </div>
+              <div className="month-close-meta">
+                {review.close.exported_at ? <span>Exported {formatTimestamp(review.close.exported_at)}</span> : <span>Not exported yet</span>}
+                {review.close.closed_at ? <span>Closed {formatTimestamp(review.close.closed_at)}</span> : null}
+                {review.close.reopened_at ? <span>Reopened {formatTimestamp(review.close.reopened_at)}</span> : null}
+              </div>
+              <textarea
+                aria-label="Month close note"
+                placeholder="Optional close note"
+                value={closeNote}
+                onChange={(e) => setCloseNote(e.target.value)}
+                rows={2}
+              />
+              {review.close.blockers.length > 0 ? (
+                <div className="month-close-blockers">
+                  <span>Blocked by</span>
+                  {review.close.blockers.map((blocker) => (
+                    <Link key={blocker.id} href={blocker.href}>
+                      {blocker.label} ({blocker.count})
+                    </Link>
+                  ))}
+                </div>
+              ) : null}
+              <div className="month-close-actions">
+                <button
+                  className="button-secondary"
+                  type="button"
+                  disabled={actionBusy !== null}
+                  onClick={() => void runMonthAction('exported')}
+                >
+                  {actionBusy === 'exported' ? 'Marking...' : 'Mark Exported'}
+                </button>
+                {review.close.status === 'closed' ? (
+                  <button
+                    className="button-secondary"
+                    type="button"
+                    disabled={actionBusy !== null}
+                    onClick={() => void runMonthAction('reopen')}
+                  >
+                    {actionBusy === 'reopen' ? 'Reopening...' : 'Reopen'}
+                  </button>
+                ) : (
+                  <button
+                    className="button-primary"
+                    type="button"
+                    disabled={!review.close.can_close || actionBusy !== null}
+                    onClick={() => void runMonthAction('close')}
+                  >
+                    {actionBusy === 'close' ? 'Closing...' : 'Close Month'}
+                  </button>
+                )}
+              </div>
+              {actionMessage ? <p className="success-msg compact">{actionMessage}</p> : null}
             </div>
           </section>
 

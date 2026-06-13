@@ -750,6 +750,21 @@ async function mockApi(page: Page) {
         },
         samples: [expense],
         narrative: 'April 2026 has 1 cleanup area before close.',
+        close: {
+          status: 'open',
+          readiness_score: 50,
+          can_close: false,
+          blockers: [{
+            id: 'receipts',
+            label: 'Review receipt OCR',
+            count: 1,
+            href: '/receipts?start=2026-04-01&end=2026-04-30&review_status=needs_review',
+          }],
+          exported_at: null,
+          closed_at: null,
+          reopened_at: null,
+          close_note: null,
+        },
       },
     }),
   )
@@ -821,7 +836,9 @@ test('monthly review checklist renders action links', async ({ page }) => {
   await page.goto('/review')
   await expect(page.getByRole('heading', { name: 'Monthly Review' })).toBeVisible()
   await expect(page.getByText('Close Checklist')).toBeVisible()
-  await expect(page.getByText('Review receipt OCR')).toBeVisible()
+  await expect(page.locator('.review-task', { hasText: 'Review receipt OCR' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Mark Exported' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Close Month' })).toBeDisabled()
   await expect(page.getByRole('link', { name: 'Export', exact: true })).toHaveAttribute('href', /\/api\/export\/xlsx/)
 })
 
