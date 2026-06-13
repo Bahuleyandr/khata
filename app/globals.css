@@ -320,6 +320,7 @@ tr:hover td { background: #f9fafb; }
 .badge-passed { background: #dcfce7; color: #166534; }
 .badge-failed { background: #fee2e2; color: #991b1b; }
 .badge-running { background: #e0f2fe; color: #075985; }
+.badge-warning { background: #fef3c7; color: #92400e; }
 
 .positive-amount { color: #166534; font-weight: 700; }
 .negative-amount { color: #991b1b; font-weight: 700; }
@@ -922,6 +923,83 @@ tr:hover td { background: #f9fafb; }
 .muted-copy {
   color: #6b7280;
   font-size: 0.88rem;
+}
+.ops-panel {
+  display: grid;
+  gap: 0.9rem;
+}
+.ops-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.ops-heading h3 {
+  margin-bottom: 0.2rem;
+}
+.ops-heading .badge {
+  margin-left: 0;
+}
+.ops-grid {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.ops-card {
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: 0.18rem;
+  padding: 0.75rem;
+  text-align: left;
+}
+.ops-card:hover {
+  background: #f9fafb;
+}
+.ops-card span {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.ops-card strong {
+  color: #111827;
+  font-size: 1.25rem;
+  overflow-wrap: anywhere;
+}
+.ops-card small {
+  color: #64748b;
+  font-size: 0.76rem;
+}
+.ops-rail {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ops-rail div {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.65rem;
+}
+.ops-rail strong {
+  color: #111827;
+  flex: 1 0 100%;
+  font-size: 0.86rem;
+}
+.ops-rail span {
+  background: #f3f4f6;
+  border-radius: 999px;
+  color: #4b5563;
+  font-size: 0.76rem;
+  padding: 0.25rem 0.55rem;
 }
 .inline-form {
   display: flex;
@@ -1958,6 +2036,9 @@ tr:hover td { background: #f9fafb; }
   .month-close-actions button { width: 100%; }
   .access-advisory { align-items: stretch; flex-direction: column; }
   .access-advisory button { width: 100%; }
+  .ops-heading { align-items: stretch; flex-direction: column; }
+  .ops-grid,
+  .ops-rail { grid-template-columns: 1fr; }
   .review-metrics,
   .review-layout { grid-template-columns: 1fr; }
 }
@@ -2120,6 +2201,8 @@ html[data-theme="dark"] .page-heading h2,
 html[data-theme="dark"] .monthly-summary h3,
 html[data-theme="dark"] .monthly-summary-grid dd,
 html[data-theme="dark"] .compact-card h3,
+html[data-theme="dark"] .ops-card strong,
+html[data-theme="dark"] .ops-rail strong,
 html[data-theme="dark"] .chart-card-heading h3,
 html[data-theme="dark"] .capture-list strong,
 html[data-theme="dark"] .workspace-card h3,
@@ -2259,6 +2342,8 @@ html[data-theme="dark"] .receipt-review-status,
 html[data-theme="dark"] .receipt-preview,
 html[data-theme="dark"] .merge-summary,
 html[data-theme="dark"] .monthly-summary-grid div,
+html[data-theme="dark"] .ops-card,
+html[data-theme="dark"] .ops-rail div,
 html[data-theme="dark"] .empty-chart,
 html[data-theme="dark"] .chart-link-row a,
 html[data-theme="dark"] .budget-chip-row a,
@@ -2309,7 +2394,14 @@ html[data-theme="dark"] .access-advisory.personal {
 
 html[data-theme="dark"] .access-advisory span,
 html[data-theme="dark"] .ledger-family-card span,
-html[data-theme="dark"] .ledger-family-card small {
+html[data-theme="dark"] .ledger-family-card small,
+html[data-theme="dark"] .ops-card span,
+html[data-theme="dark"] .ops-card small {
+  color: var(--text-muted);
+}
+
+html[data-theme="dark"] .ops-rail span {
+  background: var(--surface-muted);
   color: var(--text-muted);
 }
 
@@ -2440,6 +2532,11 @@ html[data-theme="dark"] .badge-receipt,
 html[data-theme="dark"] .badge-duplicate {
   background: #33250a;
   color: #fde68a;
+}
+
+html[data-theme="dark"] .badge-warning {
+  background: #33250a;
+  color: #facc15;
 }
 
 html[data-theme="dark"] .badge-review {

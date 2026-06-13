@@ -192,9 +192,26 @@ const AUDIT_ACTION_OPTIONS = [
   'access.grant',
   'access.update',
   'access.revoke',
+  'capture.ignore',
+  'capture.replay',
+  'month_close.exported',
+  'month_close.close',
+  'month_close.reopen',
 ]
 
-const AUDIT_ENTITY_OPTIONS = ['expense', 'statement', 'statement_row', 'subscription', 'category', 'budget', 'tag', 'access_user']
+const AUDIT_ENTITY_OPTIONS = [
+  'expense',
+  'statement',
+  'statement_row',
+  'subscription',
+  'category',
+  'budget',
+  'tag',
+  'access_user',
+  'capture_event',
+  'month_close',
+  'alert',
+]
 const UNDOABLE_AUDIT_ACTIONS = new Set(['expense.create', 'expense.update', 'expense.delete', 'statement.row_update'])
 
 function canUndoAudit(event: AuditEvent) {
@@ -238,6 +255,10 @@ function ledgerPermissionSummary(item: Ledger | Me) {
   const role = item.can_manage ? 'Owner' : 'Member'
   const access = item.can_add ? 'can add' : 'view only'
   return `${role} · ${access}`
+}
+
+function captureCount(counts: CaptureCountSummary[], key: string) {
+  return counts.find((item) => item.key === key)?.count ?? 0
 }
 
 export default function ManagePage() {
@@ -435,6 +456,18 @@ export default function ManagePage() {
   )
   const selectedLedger = ledgers.find((ledger) => ledger.id === me?.selected_ledger_id)
   const householdLedger = ledgers.find((ledger) => ledger.kind === 'household')
+  const failedCaptureCount = captureCount(captureStatusCounts, 'failed')
+  const pendingCaptureCount = captureCount(captureStatusCounts, 'pending')
+  const processedCaptureCount = captureCount(captureStatusCounts, 'processed')
+  const latestRestoreDrill = restoreDrills[0] ?? null
+  const latestAuditEvent = auditEvents[0] ?? null
+  const criticalAlertCount = alerts.filter((alert) => alert.severity === 'critical').length
+  const opsAttentionCount =
+    failedCaptureCount +
+    pendingCaptureCount +
+    alerts.length +
+    (latestRestoreDrill && latestRestoreDrill.status !== 'passed' ? 1 : 0)
+  const topCaptureFailures = captureFailures.slice(0, 3)
 
   function switchLedger(ledgerId: number) {
     setSelectedLedgerId(ledgerId)
@@ -661,6 +694,66 @@ export default function ManagePage() {
       {error ? <div className="error-msg">{error}</div> : null}
 
       <div className="grid-2">
+        <section className="card workspace-card wide-card ops-panel">
+          <div className="ops-heading">
+            <div>
+              <h3>Observability</h3>
+              <p className="muted-copy">{me?.selected_ledger_name ?? 'Current ledger'} · {formatDate(new Date().toISOString())}</p>
+            </div>
+            <span className={`badge ${opsAttentionCount > 0 ? 'badge-warning' : 'badge-confirmed'}`}>
+              {opsAttentionCount > 0 ? `${opsAttentionCount} signals` : 'clear'}
+            </span>
+          </div>
+          <div className="ops-grid">
+            <a href="#alerts" className="ops-card">
+              <span>Open alerts</span>
+              <strong>{alerts.length}</strong>
+              <small>{criticalAlertCount} critical</small>
+            </a>
+            <a href="#capture-workbench" className="ops-card">
+              <span>Failed captures</span>
+              <strong>{failedCaptureCount}</strong>
+              <small>{pendingCaptureCount} pending · {processedCaptureCount} processed</small>
+            </a>
+            <div className="ops-card">
+              <span>Restore drill</span>
+              <strong>{latestRestoreDrill?.status ?? 'none'}</strong>
+              <small>{latestRestoreDrill ? formatAuditDate(latestRestoreDrill.checked_at) : 'No drill recorded'}</small>
+            </div>
+            <button
+              type="button"
+              className="ops-card"
+              onClick={() => latestAuditEvent ? setAuditDetail(latestAuditEvent) : undefined}
+            >
+              <span>Last audit</span>
+              <strong>{latestAuditEvent ? auditLabel(latestAuditEvent) : 'none'}</strong>
+              <small>{latestAuditEvent ? formatAuditDate(latestAuditEvent.created_at) : 'No events'}</small>
+            </button>
+          </div>
+          <div className="ops-rail">
+            <div>
+              <strong>Capture failure mix</strong>
+              {topCaptureFailures.length === 0 ? (
+                <span>No capture failures in the current window.</span>
+              ) : (
+                topCaptureFailures.map((failure) => (
+                  <span key={failure.failure_kind}>
+                    {captureLabel(failure.failure_kind)} · {failure.count}
+                  </span>
+                ))
+              )}
+            </div>
+            <div>
+              <strong>Latest restore detail</strong>
+              <span>
+                {latestRestoreDrill
+                  ? `${latestRestoreDrill.backup_key ?? 'No backup key'} · ${latestRestoreDrill.duration_ms ? `${Math.round(latestRestoreDrill.duration_ms / 1000)}s` : 'duration unknown'}`
+                  : 'No restore drill recorded'}
+              </span>
+            </div>
+          </div>
+        </section>
+
         <section className="card workspace-card wide-card">
           <h3>Ledger Access</h3>
           <div className="access-summary-grid">
@@ -815,7 +908,7 @@ export default function ManagePage() {
           )}
         </section>
 
-        <section className="card workspace-card">
+        <section className="card workspace-card" id="alerts">
           <h3>Alerts</h3>
           <div className="statement-list">
             {alerts.length === 0 ? <p>No open alerts.</p> : alerts.map((alert) => (
@@ -1039,7 +1132,7 @@ export default function ManagePage() {
           </div>
         </section>
 
-        <section className="card workspace-card wide-card" id="capture-inbox">
+        <section className="card workspace-card wide-card" id="capture-workbench">
           <div className="chart-card-heading">
             <div>
               <span>Replay, diagnose, teach</span>
