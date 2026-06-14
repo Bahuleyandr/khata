@@ -35,13 +35,14 @@ export interface AuditEventFilters {
 }
 
 export async function recordAuditEvent(input: AuditEventInput): Promise<string> {
-  // NOTE: `${json}::jsonb` stores before/after as a double-encoded jsonb STRING
-  // (a systemic pattern in this codebase, also used for `confidence`). It keeps
-  // this consistent with every other audit event; fixing the double-encoding
-  // app-wide (so undo + audit diffs work) is tracked as a separate follow-up.
-  const beforeJson = JSON.stringify(input.before ?? null);
-  const afterJson = JSON.stringify(input.after ?? null);
-  const metadataJson = JSON.stringify(input.metadata ?? {});
+  // Normalise to plain JSON (Date -> ISO string, drop undefined) and let
+  // postgres.js serialize ONCE into the jsonb columns. The previous
+  // `${JSON.stringify(x)}::jsonb` double-encoded the value into a jsonb STRING,
+  // which broke undoAuditEvent's isRecord(before/after) checks (undo silently
+  // no-op'd) and made audit diffs never render.
+  const before = input.before == null ? null : JSON.parse(JSON.stringify(input.before));
+  const after = input.after == null ? null : JSON.parse(JSON.stringify(input.after));
+  const metadata = JSON.parse(JSON.stringify(input.metadata ?? {}));
 
   const rows = await sql<Array<{ id: string }>>`
     INSERT INTO audit_log (
@@ -60,9 +61,9 @@ export async function recordAuditEvent(input: AuditEventInput): Promise<string> 
       ${input.action},
       ${input.entityType},
       ${input.entityId ?? null},
-      ${beforeJson}::jsonb,
-      ${afterJson}::jsonb,
-      ${metadataJson}::jsonb
+      ${before},
+      ${after},
+      ${metadata}
     )
     RETURNING id
   `;
