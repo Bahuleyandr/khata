@@ -12,6 +12,7 @@ import {
   type MonthlyCloseStatus,
 } from "../db/monthly-closes.js";
 import { currentMonthBounds } from "../export/xlsx.js";
+import { nowIstParts } from "../lib/time.js";
 import { getSession, type AuthenticatedSession } from "./auth.js";
 
 type MonthlyReviewQuery = {
@@ -106,19 +107,19 @@ const monthCloseActionBodySchema = {
 } as const;
 
 function selectedMonth(query: MonthlyReviewQuery): { year: number; month: number } {
-  const now = new Date();
+  const { year, month } = nowIstParts();
   return {
-    year: query.year ?? now.getFullYear(),
-    month: query.month ?? now.getMonth() + 1,
+    year: query.year ?? year,
+    month: query.month ?? month,
   };
 }
 
 function monthProgress(year: number, month: number): { elapsedDays: number; daysInMonth: number } {
-  const now = new Date();
+  const { year: nowYear, month: nowMonth, day: nowDay } = nowIstParts();
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
+  const isCurrentMonth = nowYear === year && nowMonth === month;
   return {
-    elapsedDays: isCurrentMonth ? Math.max(1, Math.min(now.getDate(), daysInMonth)) : daysInMonth,
+    elapsedDays: isCurrentMonth ? Math.max(1, Math.min(nowDay, daysInMonth)) : daysInMonth,
     daysInMonth,
   };
 }

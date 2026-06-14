@@ -69,7 +69,7 @@ export async function getBudgetsWithMtd(
     LEFT JOIN expenses e
       ON e.category_id = b.category_id
       AND e.user_id = b.user_id
-      AND TO_CHAR(e.occurred_at AT TIME ZONE 'UTC', 'YYYY-MM') = ${yearMonth}
+      AND TO_CHAR(e.occurred_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM') = ${yearMonth}
     WHERE b.user_id = ${userId}
     GROUP BY b.id, b.category_id, c.name, b.target_cents
   `;

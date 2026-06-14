@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { getExpensesForExport, type ExportRow } from "../db/query.js";
+import { nowIstParts, monthStartString } from "../lib/time.js";
 
 export interface MonthlyXlsx {
   buffer: Buffer;
@@ -174,14 +175,13 @@ export function previousMonthBounds(now: Date = new Date()): {
   label: string; // e.g. "March 2026"
   rangeKey: string; // e.g. "2026-03"
 } {
-  // First of the current month, then back one day → last day of prev month
-  const firstOfThis = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const lastOfPrev = new Date(firstOfThis.getTime() - 24 * 60 * 60 * 1000);
-  const y = lastOfPrev.getUTCFullYear();
-  const m = lastOfPrev.getUTCMonth() + 1; // 1-12
-  const start = `${y}-${String(m).padStart(2, "0")}-01`;
-  const end = `${y}-${String(m).padStart(2, "0")}-${lastOfPrev.getUTCDate()}`;
-  const label = lastOfPrev.toLocaleString("en-US", {
+  const { year, month } = nowIstParts(now);
+  // `month` is the 1-based current IST month; the previous month start handles the Jan→Dec rollover.
+  const start = monthStartString(year, month - 1); // "YYYY-MM-01"
+  const [y, m] = start.split("-").map(Number) as [number, number];
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const end = `${y}-${String(m).padStart(2, "0")}-${lastDay}`;
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-US", {
     month: "long",
     year: "numeric",
     timeZone: "UTC",

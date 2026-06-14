@@ -24,6 +24,7 @@ import { attachTagToExpense, getOrCreateTag } from "../db/tags.js";
 import { classifyMessage } from "../ai/parse.js";
 import { tryParseUpi } from "../upi/parse.js";
 import { getSession } from "./auth.js";
+import { todayIst } from "../lib/time.js";
 
 const uuidPattern =
   "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
@@ -68,7 +69,7 @@ type CaptureQuery = {
 };
 
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIst();
 }
 
 function dateFromIso(value: string): Date | null {

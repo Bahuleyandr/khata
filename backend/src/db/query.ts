@@ -1,4 +1,5 @@
 import { sql } from "./index.js";
+import { yearMonthIst } from "../lib/time.js";
 
 export interface SpendTotal {
   total_cents: string;
@@ -427,7 +428,7 @@ export async function findSubscriptionCandidates(
         nextExpectedDate.setUTCDate(nextExpectedDate.getUTCDate() + intervalDays);
       }
       const daysUntilNext = nextExpectedDate ? daysBetween(new Date(), nextExpectedDate) : null;
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const currentMonth = yearMonthIst();
 
       return {
         merchant_key: row.merchant_key,

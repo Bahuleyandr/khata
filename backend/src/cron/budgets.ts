@@ -11,21 +11,21 @@ import { userHasExpenseToday } from "../db/expenses.js";
 import { buildMonthlyXlsx, previousMonthBounds } from "../export/xlsx.js";
 import { config } from "../config.js";
 import { sql } from "../db/index.js";
+import { yearMonthIst, monthStartString, nowIstParts } from "../lib/time.js";
 
 function currentYearMonth(): string {
-  return new Date().toISOString().slice(0, 7);
+  return yearMonthIst();
 }
 
 function prevYearMonth(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 1);
-  return d.toISOString().slice(0, 7);
+  const { year, month } = nowIstParts();
+  return monthStartString(year, month - 1).slice(0, 7);
 }
 
 function daysLeftInMonth(): number {
-  const now = new Date();
-  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  return last.getDate() - now.getDate();
+  const { year, month, day } = nowIstParts();
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return lastDay - day;
 }
 
 function fmt(cents: number): string {

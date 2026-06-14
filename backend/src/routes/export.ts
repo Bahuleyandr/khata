@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { buildMonthlyXlsx, currentMonthBounds } from "../export/xlsx.js";
 import { getSession } from "./auth.js";
+import { nowIstParts } from "../lib/time.js";
 
 const XLSX_MIME =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -30,9 +31,9 @@ export async function exportRoutes(app: FastifyInstance) {
       const session = await getSession(request, reply);
       if (!session) return;
 
-      const now = new Date();
-      const year = Number(request.query.year ?? now.getFullYear());
-      const month = Number(request.query.month ?? now.getMonth() + 1);
+      const { year: nowYear, month: nowMonth } = nowIstParts();
+      const year = Number(request.query.year ?? nowYear);
+      const month = Number(request.query.month ?? nowMonth);
       if (isNaN(year) || isNaN(month) || month < 1 || month > 12) {
         return reply.status(400).send({ error: "Invalid year/month" });
       }
