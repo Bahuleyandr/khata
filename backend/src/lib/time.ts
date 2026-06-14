@@ -28,6 +28,12 @@ export function nowIstParts(now: Date = new Date()): { year: number; month: numb
   return { year, month, day };
 }
 
+/** Current IST year-month as YYYY-MM. */
+export function yearMonthIst(now: Date = new Date()): string {
+  const { year, month } = nowIstParts(now);
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+
 /**
  * First day (`YYYY-MM-01`) of a 1-based month, rolling the year when month1 < 1
  * or > 12 (e.g. `monthStartString(2026, 13)` → "2027-01-01"). Used for IST

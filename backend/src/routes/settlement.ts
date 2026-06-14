@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { computeHouseholdSettlement } from "../db/settlements.js";
 import { getSession } from "./auth.js";
+import { nowIstParts } from "../lib/time.js";
 
 type SettlementQuery = {
   year?: number;
@@ -17,10 +18,10 @@ const settlementQuerySchema = {
 } as const;
 
 function selectedMonth(query: SettlementQuery): { year: number; month: number } {
-  const now = new Date();
+  const { year, month } = nowIstParts();
   return {
-    year: query.year ?? now.getFullYear(),
-    month: query.month ?? now.getMonth() + 1,
+    year: query.year ?? year,
+    month: query.month ?? month,
   };
 }
 

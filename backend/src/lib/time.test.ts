@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { APP_TIME_ZONE, formatIstDate, monthStartString, nowIstParts, todayIst } from "./time.js";
+import { APP_TIME_ZONE, formatIstDate, monthStartString, nowIstParts, todayIst, yearMonthIst } from "./time.js";
 
 describe("lib/time", () => {
   it("uses Asia/Kolkata", () => {
@@ -24,6 +24,10 @@ describe("lib/time", () => {
     vi.setSystemTime(new Date("2026-06-30T20:30:00Z"));
     expect(todayIst()).toBe("2026-07-01");
     vi.useRealTimers();
+  });
+
+  it("yearMonthIst returns IST YYYY-MM at the boundary", () => {
+    expect(yearMonthIst(new Date("2026-06-30T20:30:00Z"))).toBe("2026-07");
   });
 
   it("monthStartString rolls over year boundaries", () => {

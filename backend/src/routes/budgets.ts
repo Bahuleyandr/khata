@@ -3,13 +3,14 @@ import { recordAuditEvent } from "../db/audit.js";
 import { clearBudget, getBudgetsWithMtd, setBudget } from "../db/budgets.js";
 import { sql } from "../db/index.js";
 import { getSession } from "./auth.js";
+import { yearMonthIst } from "../lib/time.js";
 
 const uuidPattern =
   "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
 const monthPattern = "^\\d{4}-\\d{2}$";
 
 function currentYearMonth(): string {
-  return new Date().toISOString().slice(0, 7);
+  return yearMonthIst();
 }
 
 async function categoryBelongsToUser(userId: number, categoryId: string): Promise<boolean> {
