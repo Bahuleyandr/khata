@@ -23,6 +23,7 @@ import {
   type Expense,
   type Tag,
 } from '../../../lib/api'
+import { toDateInputValue } from '../../../lib/dates'
 
 const SOURCE_OPTIONS = [
   { label: 'All', value: '' },
@@ -55,7 +56,7 @@ function sourceBadgeLabel(source: string) {
 }
 
 function dateInputValue(iso: string) {
-  return new Date(iso).toISOString().slice(0, 10)
+  return toDateInputValue(iso)
 }
 
 function todayInputValue() {

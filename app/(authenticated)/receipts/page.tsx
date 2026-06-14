@@ -11,6 +11,7 @@ import {
   type Category,
   type Receipt,
 } from '../../../lib/api'
+import { toDateInputValue } from '../../../lib/dates'
 
 type ReceiptDraft = {
   amount: string
@@ -25,7 +26,7 @@ function receiptTitle(receipt: Receipt) {
 }
 
 function dateInputValue(iso: string) {
-  return new Date(iso).toISOString().slice(0, 10)
+  return toDateInputValue(iso)
 }
 
 function centsToAmountInput(cents: string) {
