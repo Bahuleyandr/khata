@@ -575,6 +575,20 @@ tr:hover td { background: #f9fafb; }
 }
 .form-grid textarea { resize: vertical; }
 .form-span { grid-column: 1 / -1; }
+
+/* iOS Safari/WebView auto-zooms (and shifts the layout) when a focused input's
+   computed font-size is < 16px. Every form control here is 14-14.4px, so editing
+   an amount on a phone -- the primary Telegram Mini-App surface -- jerks the page
+   on every field. Force 16px on touch-width viewports only; the compact desktop
+   dashboard is unchanged. !important overrides the many higher-specificity
+   per-control rules. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
 .form-grid-wide { grid-column: 1 / -1; }
 .modal-actions {
   display: flex;
