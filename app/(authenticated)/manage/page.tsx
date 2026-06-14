@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   acceptRuleSuggestion,
   clearBudget,
@@ -13,8 +13,6 @@ import {
   deleteSmartRule,
   dismissRuleSuggestion,
   dismissAlert,
-  formatCents,
-  formatDate,
   getAccessUsers,
   getAccounts,
   getAlerts,
@@ -30,14 +28,11 @@ import {
   getRuleSuggestions,
   getSettlement,
   getSmartRules,
-  getStatementRows,
   getStatements,
   getSubscriptions,
   getTags,
   grantAccessUser,
-  importStatementRows,
   renameCategory,
-  retryStatement,
   revokeAccessUser,
   setBudget,
   setSelectedLedgerId,
@@ -48,11 +43,7 @@ import {
   updateAccount,
   updateAccessUserRole,
   updateSmartRule,
-  updateStatementImportRow,
-  uploadStatement,
   type Account,
-  type AccountType,
-  type AccessRole,
   type AccessUser,
   type AuditEvent,
   type BudgetVariance,
@@ -68,210 +59,32 @@ import {
   type RuleSuggestion,
   type SmartRule,
   type StatementImport,
-  type StatementImportRow,
   type SubscriptionCandidate,
-  type SubscriptionPreferenceStatus,
   type Tag,
   type UserAlert,
 } from '../../../lib/api'
-
-function currentMonthValue() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
-
-function splitMonth(value: string) {
-  const [yearRaw, monthRaw] = value.split('-')
-  return { year: Number(yearRaw), month: Number(monthRaw) }
-}
-
-function rupeesToCents(value: string) {
-  const cleaned = value.trim().replace(/,/g, '')
-  if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return null
-  const [rupees, paise = ''] = cleaned.split('.')
-  return Number(rupees) * 100 + Number(paise.padEnd(2, '0'))
-}
-
-function formatAuditDate(value: string) {
-  return new Date(value).toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-function auditLabel(event: AuditEvent) {
-  return event.action
-    .split('.')
-    .map((part) => part.replace(/_/g, ' '))
-    .join(' ')
-}
-
-function formatAuditJson(value: unknown) {
-  if (value === undefined) return 'undefined'
-  return JSON.stringify(value, null, 2) ?? 'null'
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function formatAuditCell(value: unknown) {
-  if (value === undefined) return '—'
-  if (value === null) return 'null'
-  if (typeof value === 'object') return JSON.stringify(value) ?? 'null'
-  return String(value)
-}
-
-function auditDiff(event: AuditEvent) {
-  const before = event.before
-  const after = event.after
-  if (!isRecord(before) || !isRecord(after)) return []
-  const keys = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort()
-  return keys
-    .map((key) => ({
-      field: key,
-      before: before[key],
-      after: after[key],
-    }))
-    .filter((row) => JSON.stringify(row.before) !== JSON.stringify(row.after))
-}
-
-function parseTagNames(value: string) {
-  return Array.from(
-    new Set(
-      value
-        .split(',')
-        .map((tag) => tag.trim().toLowerCase().replace(/\s+/g, ' '))
-        .filter(Boolean),
-    ),
-  )
-}
-
-type SubscriptionFilter = 'active' | 'attention' | 'confirmed' | 'ignored' | 'inactive' | 'all'
-type CaptureStatusFilter = 'pending' | 'processed' | 'failed' | 'ignored'
-type AccessPreset = 'partner' | 'viewer' | 'owner'
-
-const CAPTURE_SOURCES = [
-  'telegram_text',
-  'telegram_photo',
-  'telegram_voice',
-  'telegram_document',
-  'dashboard_manual',
-  'statement_upload',
-] as const
-
-const CAPTURE_FAILURE_KINDS = [
-  'no_text',
-  'not_receipt',
-  'no_transactions',
-  'parse_error',
-  'ocr_error',
-  'duplicate',
-  'unsupported_file',
-  'oversize',
-  'unknown',
-] as const
-
-const AUDIT_ACTION_OPTIONS = [
-  'expense.create',
-  'expense.update',
-  'expense.delete',
-  'expense.merge',
-  'expense.bulk_update',
-  'statement.upload',
-  'statement.import',
-  'statement.row_update',
-  'subscription.create',
-  'subscription.update',
-  'subscription.delete',
-  'subscription.detected_confirm',
-  'subscription.preference_set',
-  'subscription.preference_clear',
-  'access.grant',
-  'access.update',
-  'access.revoke',
-  'capture.ignore',
-  'capture.replay',
-  'month_close.exported',
-  'month_close.close',
-  'month_close.reopen',
-]
-
-const AUDIT_ENTITY_OPTIONS = [
-  'expense',
-  'statement',
-  'statement_row',
-  'subscription',
-  'category',
-  'budget',
-  'tag',
-  'access_user',
-  'capture_event',
-  'month_close',
-  'alert',
-]
-const UNDOABLE_AUDIT_ACTIONS = new Set(['expense.create', 'expense.update', 'expense.delete', 'statement.row_update'])
-
-function canUndoAudit(event: AuditEvent) {
-  return UNDOABLE_AUDIT_ACTIONS.has(event.action) && !event.undone_at
-}
-
-function subscriptionTiming(subscription: SubscriptionCandidate) {
-  if (subscription.next_expected_at === null || subscription.days_until_next === null) return 'Timing unknown'
-  if (subscription.days_until_next < 0) {
-    return `Expected ${Math.abs(subscription.days_until_next)} days ago`
-  }
-  if (subscription.days_until_next === 0) return 'Expected today'
-  return `Expected in ${subscription.days_until_next} days`
-}
-
-function subscriptionBadgeClass(status: SubscriptionPreferenceStatus) {
-  if (status === 'confirmed') return 'badge-confirmed'
-  if (status === 'inactive') return 'badge-inactive'
-  return 'badge-muted'
-}
-
-function captureLabel(value: string) {
-  return value.replace(/_/g, ' ')
-}
-
-function captureRulePattern(capture: CaptureEvent) {
-  return (capture.raw_text ?? capture.error_reason ?? capture.source)
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120)
-}
-
-function ledgerDisplayName(ledger: Ledger, me: Me | null) {
-  const isOwnPersonal = ledger.kind === 'personal' && ledger.owner_telegram_user_id === me?.telegram_user_id
-  if (ledger.kind === 'household') return ledger.name === 'Household' ? 'Household' : ledger.name
-  if (isOwnPersonal) return ledger.name === 'Personal' ? 'My Ledger' : ledger.name
-  return ledger.name === 'Personal' ? `Personal ${ledger.owner_telegram_user_id}` : ledger.name
-}
-
-function ledgerPermissionSummary(item: Ledger | Me) {
-  const role = item.can_manage ? 'Owner' : 'Member'
-  const access = item.can_add ? 'can add' : 'view only'
-  return `${role} · ${access}`
-}
-
-function captureCount(counts: CaptureCountSummary[], key: string) {
-  return counts.find((item) => item.key === key)?.count ?? 0
-}
+import { currentMonthValue, splitMonth } from './components/helpers'
+import type { RuleDraft } from './components/SmartRulesPanel'
+import AccountsPanel from './components/AccountsPanel'
+import AlertsPanel from './components/AlertsPanel'
+import AuditTrailPanel from './components/AuditTrailPanel'
+import BudgetsPanel from './components/BudgetsPanel'
+import CaptureWorkbenchPanel from './components/CaptureWorkbenchPanel'
+import CategoriesPanel from './components/CategoriesPanel'
+import LedgerAccessPanel from './components/LedgerAccessPanel'
+import ObservabilityPanel from './components/ObservabilityPanel'
+import ReconciliationPanel from './components/ReconciliationPanel'
+import RestoreDrillsPanel from './components/RestoreDrillsPanel'
+import SettlementPanel from './components/SettlementPanel'
+import SmartRulesPanel from './components/SmartRulesPanel'
+import StatementImportsPanel from './components/StatementImportsPanel'
+import SubscriptionsPanel from './components/SubscriptionsPanel'
+import TagsPanel from './components/TagsPanel'
 
 export default function ManagePage() {
   const [me, setMe] = useState<Me | null>(null)
   const [ledgers, setLedgers] = useState<Ledger[]>([])
   const [accessUsers, setAccessUsers] = useState<AccessUser[]>([])
-  const [newAccessTelegramId, setNewAccessTelegramId] = useState('')
-  const [newAccessName, setNewAccessName] = useState('')
-  const [newAccessUsername, setNewAccessUsername] = useState('')
-  const [newAccessPreset, setNewAccessPreset] = useState<AccessPreset>('partner')
-  const [newAccessRole, setNewAccessRole] = useState<AccessRole>('member')
-  const [newAccessCanView, setNewAccessCanView] = useState(true)
-  const [newAccessCanAdd, setNewAccessCanAdd] = useState(true)
   const [categories, setCategories] = useState<Category[]>([])
   const [accounts, setAccounts] = useState<Account[]>([])
   const [budgets, setBudgets] = useState<BudgetVariance[]>([])
@@ -287,45 +100,20 @@ export default function ManagePage() {
   const [settlement, setSettlement] = useState<HouseholdSettlement | null>(null)
   const [restoreDrills, setRestoreDrills] = useState<RestoreDrill[]>([])
   const [statements, setStatements] = useState<StatementImport[]>([])
-  const [statementRows, setStatementRows] = useState<StatementImportRow[]>([])
-  const [selectedStatementId, setSelectedStatementId] = useState<string | null>(null)
-  const [selectedStatementRowIds, setSelectedStatementRowIds] = useState<string[]>([])
-  const [bulkStatementCategory, setBulkStatementCategory] = useState('')
-  const [bulkStatementAccount, setBulkStatementAccount] = useState('')
-  const [bulkStatementTags, setBulkStatementTags] = useState('')
   const [subscriptions, setSubscriptions] = useState<SubscriptionCandidate[]>([])
-  const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('active')
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [auditDetail, setAuditDetail] = useState<AuditEvent | null>(null)
   const [auditLimit, setAuditLimit] = useState(30)
   const [auditAction, setAuditAction] = useState('')
   const [auditEntityType, setAuditEntityType] = useState('')
   const [month, setMonth] = useState(currentMonthValue)
-  const [newCategory, setNewCategory] = useState('')
-  const [budgetCategory, setBudgetCategory] = useState('')
-  const [budgetAmount, setBudgetAmount] = useState('')
-  const [newAccountName, setNewAccountName] = useState('')
-  const [newAccountType, setNewAccountType] = useState<AccountType>('card')
-  const [newAccountInstitution, setNewAccountInstitution] = useState('')
-  const [newAccountLastFour, setNewAccountLastFour] = useState('')
-  const [newRuleName, setNewRuleName] = useState('')
-  const [newRulePattern, setNewRulePattern] = useState('')
-  const [newRuleCategory, setNewRuleCategory] = useState('')
-  const [newRuleAccount, setNewRuleAccount] = useState('')
-  const [newRuleTags, setNewRuleTags] = useState('')
-  const [newRuleScope, setNewRuleScope] = useState<'merchant' | 'description' | 'raw_text' | 'any'>('any')
-  const [newRuleMatchType, setNewRuleMatchType] = useState<'contains' | 'equals' | 'regex'>('contains')
-  const [newRuleReviewStatus, setNewRuleReviewStatus] = useState('')
-  const [captureStatus, setCaptureStatus] = useState<CaptureStatusFilter>('failed')
+  const [captureStatus, setCaptureStatus] = useState<'pending' | 'processed' | 'failed' | 'ignored'>('failed')
   const [captureSource, setCaptureSource] = useState('')
   const [captureFailureKind, setCaptureFailureKind] = useState('')
   const [captureSearch, setCaptureSearch] = useState('')
-  const [captureActionResult, setCaptureActionResult] = useState<string | null>(null)
   const [reconcileAccount, setReconcileAccount] = useState('')
-  const [statementAccount, setStatementAccount] = useState('')
-  const [statementFile, setStatementFile] = useState<File | null>(null)
-  const [statementInputKey, setStatementInputKey] = useState(0)
-  const [statementUploadResult, setStatementUploadResult] = useState<string | null>(null)
+  const [defaultCategoryId, setDefaultCategoryId] = useState('')
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -406,7 +194,7 @@ export default function ManagePage() {
     setReconciliation(reconciliationRes)
     setSettlement(settlementRes.settlement)
     setRestoreDrills(restoreDrillRes.drills)
-    setBudgetCategory((current) => current || cats[0]?.id || '')
+    setDefaultCategoryId((current) => current || cats[0]?.id || '')
   }, [auditAction, auditEntityType, auditLimit, captureFailureKind, captureSearch, captureSource, captureStatus, month, reconcileAccount])
 
   useEffect(() => {
@@ -426,262 +214,16 @@ export default function ManagePage() {
     }
   }
 
-  const pendingStatementRows = statementRows.filter((row) => row.status === 'pending')
-  const selectedPendingRowIds = selectedStatementRowIds.filter((id) =>
-    pendingStatementRows.some((row) => row.id === id),
-  )
-  const activeSubscriptions = subscriptions.filter(
-    (subscription) => !['ignored', 'inactive'].includes(subscription.preference_status ?? ''),
-  )
-  const attentionSubscriptions = activeSubscriptions.filter(
-    (subscription) => subscription.is_overdue || subscription.not_seen_this_month,
-  )
-  const confirmedSubscriptions = subscriptions.filter((subscription) => subscription.preference_status === 'confirmed')
-  const subscriptionMonthlyTotal = (
-    confirmedSubscriptions.length > 0 ? confirmedSubscriptions : activeSubscriptions
-  ).reduce((sum, subscription) => sum + Number(subscription.monthly_estimate_cents), 0)
-  const filteredSubscriptions = subscriptions.filter((subscription) => {
-    if (subscriptionFilter === 'all') return true
-    if (subscriptionFilter === 'active') return !['ignored', 'inactive'].includes(subscription.preference_status ?? '')
-    if (subscriptionFilter === 'attention') return subscription.is_overdue || subscription.not_seen_this_month
-    return subscription.preference_status === subscriptionFilter
-  })
-  const auditActions = useMemo(
-    () => Array.from(new Set([...AUDIT_ACTION_OPTIONS, ...auditEvents.map((event) => event.action)])).sort(),
-    [auditEvents],
-  )
-  const auditEntityTypes = useMemo(
-    () => Array.from(new Set([...AUDIT_ENTITY_OPTIONS, ...auditEvents.map((event) => event.entity_type)])).sort(),
-    [auditEvents],
-  )
-  const selectedLedger = ledgers.find((ledger) => ledger.id === me?.selected_ledger_id)
-  const householdLedger = ledgers.find((ledger) => ledger.kind === 'household')
-  const failedCaptureCount = captureCount(captureStatusCounts, 'failed')
-  const pendingCaptureCount = captureCount(captureStatusCounts, 'pending')
-  const processedCaptureCount = captureCount(captureStatusCounts, 'processed')
-  const latestRestoreDrill = restoreDrills[0] ?? null
   const latestAuditEvent = auditEvents[0] ?? null
-  const criticalAlertCount = alerts.filter((alert) => alert.severity === 'critical').length
-  const opsAttentionCount =
-    failedCaptureCount +
-    pendingCaptureCount +
-    alerts.length +
-    (latestRestoreDrill && latestRestoreDrill.status !== 'passed' ? 1 : 0)
-  const topCaptureFailures = captureFailures.slice(0, 3)
 
   function switchLedger(ledgerId: number) {
     setSelectedLedgerId(ledgerId)
     window.location.reload()
   }
 
-  function applyAccessPreset(preset: AccessPreset) {
-    setNewAccessPreset(preset)
-    if (preset === 'owner') {
-      setNewAccessRole('owner')
-      setNewAccessCanView(true)
-      setNewAccessCanAdd(true)
-      return
-    }
-    setNewAccessRole('member')
-    setNewAccessCanView(true)
-    setNewAccessCanAdd(preset === 'partner')
-  }
-
-  async function loadStatementReview(statementId: string) {
-    const res = await getStatementRows(statementId)
-    setSelectedStatementId(statementId)
-    setStatementRows(res.rows)
-    setSelectedStatementRowIds(res.rows.filter((row) => row.status === 'pending').map((row) => row.id))
-  }
-
-  function toggleStatementRow(rowId: string, checked: boolean) {
-    setSelectedStatementRowIds((ids) =>
-      checked ? Array.from(new Set([...ids, rowId])) : ids.filter((id) => id !== rowId),
-    )
-  }
-
-  async function importSelectedRows(rowIds?: string[]) {
-    if (!selectedStatementId) return
-    const result = await importStatementRows(selectedStatementId, rowIds)
-    setStatementUploadResult(`${result.imported_count} imported from reviewed statement rows`)
-    await loadStatementReview(selectedStatementId)
-  }
-
-  async function ignoreSelectedRows() {
-    if (!selectedStatementId || selectedPendingRowIds.length === 0) return
-    await Promise.all(
-      selectedPendingRowIds.map((rowId) => updateStatementImportRow(selectedStatementId, rowId, { status: 'ignored' })),
-    )
-    await loadStatementReview(selectedStatementId)
-  }
-
-  async function restoreStatementRow(rowId: string) {
-    if (!selectedStatementId) return
-    await updateStatementImportRow(selectedStatementId, rowId, { status: 'pending' })
-    await loadStatementReview(selectedStatementId)
-  }
-
-  async function saveStatementRowCorrection(
-    rowId: string,
-    data: { category_id: string | null; account_id?: string | null; tag_names: string[] },
-  ) {
-    if (!selectedStatementId) return
-    await updateStatementImportRow(selectedStatementId, rowId, data)
-    await loadStatementReview(selectedStatementId)
-  }
-
-  async function createNewAccount() {
-    if (!newAccountName.trim()) return
-    await createAccount({
-      name: newAccountName,
-      type: newAccountType,
-      institution: newAccountInstitution.trim() || null,
-      last_four: newAccountLastFour.trim() || null,
-      is_default: accounts.length === 0,
-    })
-    setNewAccountName('')
-    setNewAccountInstitution('')
-    setNewAccountLastFour('')
-  }
-
-  async function createNewRule() {
-    if (!newRuleName.trim() || !newRulePattern.trim()) return
-    await createSmartRule({
-      name: newRuleName,
-      pattern: newRulePattern,
-      match_scope: newRuleScope,
-      match_type: newRuleMatchType,
-      category_id: newRuleCategory || null,
-      account_id: newRuleAccount || null,
-      tag_names: parseTagNames(newRuleTags),
-      review_status: newRuleReviewStatus ? (newRuleReviewStatus as 'needs_review' | 'reviewed' | 'ignored') : null,
-    })
-    setNewRuleName('')
-    setNewRulePattern('')
-    setNewRuleTags('')
-  }
-
-  async function acceptSuggestion(suggestionId: string) {
-    await acceptRuleSuggestion(suggestionId)
-  }
-
-  async function dismissSuggestion(suggestionId: string) {
-    await dismissRuleSuggestion(suggestionId)
-  }
-
-  async function replayRawCapture(captureId: string) {
-    const result = await replayCapture(captureId)
-    setCaptureActionResult(`Replay created expense ${result.expense_id}`)
-  }
-
-  function draftRuleFromCapture(capture: CaptureEvent) {
-    setNewRuleName(`${captureLabel(capture.source)} correction`)
-    setNewRuleScope('raw_text')
-    setNewRuleMatchType('contains')
-    setNewRulePattern(captureRulePattern(capture))
-    setNewRuleReviewStatus('reviewed')
-    setCaptureActionResult('Rule draft populated. Pick category/account/tags in Smart Rules, then Add.')
-    window.location.hash = 'smart-rules'
-  }
-
   async function undoAudit(auditId: string) {
     const event = await undoAuditEvent(auditId)
     setAuditDetail(event)
-  }
-
-  async function applyCorrectionsToSelected() {
-    if (!selectedStatementId || selectedPendingRowIds.length === 0) return
-    const body: { category_id?: string | null; account_id?: string | null; tag_names?: string[] } = {}
-    if (bulkStatementCategory === '__none__') body.category_id = null
-    else if (bulkStatementCategory) body.category_id = bulkStatementCategory
-    if (bulkStatementAccount === '__none__') body.account_id = null
-    else if (bulkStatementAccount) body.account_id = bulkStatementAccount
-    if (bulkStatementTags.trim()) body.tag_names = parseTagNames(bulkStatementTags)
-    if (!Object.keys(body).length) {
-      throw new Error('Choose a category, account, or enter tags to apply.')
-    }
-    await Promise.all(
-      selectedPendingRowIds.map((rowId) => updateStatementImportRow(selectedStatementId, rowId, body)),
-    )
-    setBulkStatementCategory('')
-    setBulkStatementAccount('')
-    setBulkStatementTags('')
-    await loadStatementReview(selectedStatementId)
-  }
-
-  async function reparseStatement(statementId: string) {
-    const result = await retryStatement(statementId)
-    setStatementUploadResult(
-      `${result.parsed_count} parsed for review · ${result.duplicate_count} duplicates`,
-    )
-    setSelectedStatementId(statementId)
-    setStatementRows(result.rows)
-    setSelectedStatementRowIds(result.rows.filter((row) => row.status === 'pending').map((row) => row.id))
-  }
-
-  async function updateSubscription(subscription: SubscriptionCandidate, status: SubscriptionPreferenceStatus) {
-    await setSubscriptionPreference(subscription.merchant_key, subscription.name, status)
-  }
-
-  async function addAccessUser() {
-    const telegramId = newAccessTelegramId.trim()
-    if (!telegramId) return
-    await grantAccessUser({
-      telegram_user_id: telegramId,
-      first_name: newAccessName.trim() || undefined,
-      username: newAccessUsername.trim().replace(/^@/, '') || undefined,
-      role: newAccessRole,
-      can_view: newAccessCanView,
-      can_add: newAccessCanView && newAccessCanAdd,
-    })
-    setNewAccessTelegramId('')
-    setNewAccessName('')
-    setNewAccessUsername('')
-    applyAccessPreset('partner')
-  }
-
-  async function changeAccessUser(
-    user: AccessUser,
-    data: { role?: AccessRole; can_view?: boolean; can_add?: boolean },
-  ) {
-    await updateAccessUserRole(user.telegram_user_id, data)
-  }
-
-  async function revokeAccess(user: AccessUser) {
-    await revokeAccessUser(user.telegram_user_id)
-  }
-
-  async function addCategory() {
-    const name = newCategory.trim()
-    if (!name) return
-    await createCategory(name)
-    setNewCategory('')
-  }
-
-  async function saveBudget() {
-    const cents = rupeesToCents(budgetAmount)
-    if (!budgetCategory || !cents) {
-      setError('Choose a category and enter a valid amount.')
-      return
-    }
-    await setBudget(budgetCategory, cents)
-    setBudgetAmount('')
-  }
-
-  async function uploadSelectedStatement() {
-    if (!statementFile) {
-      setError('Choose a PDF or statement image first.')
-      return
-    }
-    const result = await uploadStatement(statementFile, statementAccount || undefined)
-    setStatementUploadResult(
-      `${result.parsed_count} parsed for review · ${result.duplicate_count} duplicates`,
-    )
-    setSelectedStatementId(result.statement.id)
-    setStatementRows(result.rows)
-    setSelectedStatementRowIds(result.rows.filter((row) => row.status === 'pending').map((row) => row.id))
-    setStatementFile(null)
-    setStatementInputKey((key) => key + 1)
   }
 
   return (
@@ -694,1237 +236,158 @@ export default function ManagePage() {
       {error ? <div className="error-msg">{error}</div> : null}
 
       <div className="grid-2">
-        <section className="card workspace-card wide-card ops-panel">
-          <div className="ops-heading">
-            <div>
-              <h3>Observability</h3>
-              <p className="muted-copy">{me?.selected_ledger_name ?? 'Current ledger'} · {formatDate(new Date().toISOString())}</p>
-            </div>
-            <span className={`badge ${opsAttentionCount > 0 ? 'badge-warning' : 'badge-confirmed'}`}>
-              {opsAttentionCount > 0 ? `${opsAttentionCount} signals` : 'clear'}
-            </span>
-          </div>
-          <div className="ops-grid">
-            <a href="#alerts" className="ops-card">
-              <span>Open alerts</span>
-              <strong>{alerts.length}</strong>
-              <small>{criticalAlertCount} critical</small>
-            </a>
-            <a href="#capture-workbench" className="ops-card">
-              <span>Failed captures</span>
-              <strong>{failedCaptureCount}</strong>
-              <small>{pendingCaptureCount} pending · {processedCaptureCount} processed</small>
-            </a>
-            <div className="ops-card">
-              <span>Restore drill</span>
-              <strong>{latestRestoreDrill?.status ?? 'none'}</strong>
-              <small>{latestRestoreDrill ? formatAuditDate(latestRestoreDrill.checked_at) : 'No drill recorded'}</small>
-            </div>
-            <button
-              type="button"
-              className="ops-card"
-              onClick={() => latestAuditEvent ? setAuditDetail(latestAuditEvent) : undefined}
-            >
-              <span>Last audit</span>
-              <strong>{latestAuditEvent ? auditLabel(latestAuditEvent) : 'none'}</strong>
-              <small>{latestAuditEvent ? formatAuditDate(latestAuditEvent.created_at) : 'No events'}</small>
-            </button>
-          </div>
-          <div className="ops-rail">
-            <div>
-              <strong>Capture failure mix</strong>
-              {topCaptureFailures.length === 0 ? (
-                <span>No capture failures in the current window.</span>
-              ) : (
-                topCaptureFailures.map((failure) => (
-                  <span key={failure.failure_kind}>
-                    {captureLabel(failure.failure_kind)} · {failure.count}
-                  </span>
-                ))
-              )}
-            </div>
-            <div>
-              <strong>Latest restore detail</strong>
-              <span>
-                {latestRestoreDrill
-                  ? `${latestRestoreDrill.backup_key ?? 'No backup key'} · ${latestRestoreDrill.duration_ms ? `${Math.round(latestRestoreDrill.duration_ms / 1000)}s` : 'duration unknown'}`
-                  : 'No restore drill recorded'}
-              </span>
-            </div>
-          </div>
-        </section>
+        <ObservabilityPanel
+          me={me}
+          alerts={alerts}
+          captureStatusCounts={captureStatusCounts}
+          captureFailures={captureFailures}
+          restoreDrills={restoreDrills}
+          latestAuditEvent={latestAuditEvent}
+          onShowAuditDetail={setAuditDetail}
+        />
 
-        <section className="card workspace-card wide-card">
-          <h3>Ledger Access</h3>
-          <div className="access-summary-grid">
-            <span>
-              <strong>{me?.telegram_user_id ?? '...'}</strong>
-              <small>Your Telegram ID</small>
-            </span>
-            <span>
-              <strong>{me?.selected_ledger_name ?? '...'}</strong>
-              <small>{me?.selected_ledger_kind === 'household' ? 'Shared ledger' : 'Personal ledger'}</small>
-            </span>
-            <span>
-              <strong>{me?.role ?? '...'}</strong>
-              <small>Your role</small>
-            </span>
-            <span>
-              <strong>{me ? ledgerPermissionSummary(me) : '...'}</strong>
-              <small>Current access</small>
-            </span>
-          </div>
-          {ledgers.length > 0 ? (
-            <div className="ledger-family-panel">
-              <h4>Family Ledgers</h4>
-              <div className="ledger-family-grid">
-                {ledgers.map((ledger) => {
-                  const selected = ledger.id === me?.selected_ledger_id
-                  return (
-                    <button
-                      key={ledger.id}
-                      type="button"
-                      className={`ledger-family-card ${selected ? 'selected' : ''}`}
-                      onClick={() => switchLedger(ledger.id)}
-                      disabled={busy || selected}
-                    >
-                      <strong>{ledgerDisplayName(ledger, me)}</strong>
-                      <span>{ledger.kind === 'household' ? 'Shared household' : 'Personal'} · {ledgerPermissionSummary(ledger)}</span>
-                      <small>{selected ? 'Selected' : 'Switch'}</small>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          ) : null}
-          {selectedLedger ? (
-            <div className={`access-advisory ${selectedLedger.kind}`}>
-              <span>
-                {selectedLedger.kind === 'household'
-                  ? 'Household ledger selected · shared spending stays separate from personal ledgers.'
-                  : 'Personal ledger selected · invites here can see this personal ledger.'}
-              </span>
-              {selectedLedger.kind === 'personal' && householdLedger ? (
-                <button type="button" onClick={() => switchLedger(householdLedger.id)} disabled={busy}>
-                  Switch to Household
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {me?.can_manage ? (
-            <>
-              <p className="muted-copy access-note">
-                Access changes apply only to the selected ledger in the top navigation.
-              </p>
-              <div className="inline-form access-form">
-                <select
-                  value={newAccessPreset}
-                  onChange={(e) => applyAccessPreset(e.target.value as AccessPreset)}
-                  aria-label="Invite preset"
-                >
-                  <option value="partner">Partner: view + add</option>
-                  <option value="viewer">Viewer: view only</option>
-                  <option value="owner">Owner: manage ledger</option>
-                </select>
-                <input
-                  inputMode="numeric"
-                  value={newAccessTelegramId}
-                  onChange={(e) => setNewAccessTelegramId(e.target.value)}
-                  placeholder="Telegram user ID"
-                  aria-label="Telegram user ID"
-                />
-                <input
-                  value={newAccessName}
-                  onChange={(e) => setNewAccessName(e.target.value)}
-                  placeholder="Display name"
-                  aria-label="Access display name"
-                />
-                <input
-                  value={newAccessUsername}
-                  onChange={(e) => setNewAccessUsername(e.target.value)}
-                  placeholder="@username"
-                  aria-label="Telegram username"
-                />
-                <select
-                  value={newAccessRole}
-                  onChange={(e) => {
-                    const role = e.target.value as AccessRole
-                    setNewAccessRole(role)
-                    if (role === 'owner') setNewAccessPreset('owner')
-                    else if (newAccessPreset === 'owner') setNewAccessPreset('partner')
-                  }}
-                  aria-label="Access role"
-                >
-                  <option value="member">Member</option>
-                  <option value="owner">Owner</option>
-                </select>
-                <label className="access-toggle">
-                  <input
-                    type="checkbox"
-                    checked={newAccessCanView}
-                    onChange={(e) => {
-                      setNewAccessCanView(e.target.checked)
-                      if (!e.target.checked) setNewAccessCanAdd(false)
-                    }}
-                  />
-                  View
-                </label>
-                <label className="access-toggle">
-                  <input
-                    type="checkbox"
-                    checked={newAccessCanAdd}
-                    onChange={(e) => setNewAccessCanAdd(e.target.checked)}
-                    disabled={!newAccessCanView}
-                  />
-                  Add
-                </label>
-                <button type="button" onClick={() => void run(addAccessUser)} disabled={busy || !newAccessTelegramId.trim()}>
-                  Add
-                </button>
-              </div>
-              <div className="statement-list">
-                {accessUsers.length === 0 ? <p>No access users yet.</p> : accessUsers.map((user) => (
-                  <AccessUserRow
-                    key={user.telegram_user_id}
-                    user={user}
-                    me={me}
-                    busy={busy}
-                    onChange={(data) => run(() => changeAccessUser(user, data))}
-                    onRevoke={() => run(() => revokeAccess(user))}
-                    onReactivate={() => run(() => grantAccessUser({
-                      telegram_user_id: user.telegram_user_id,
-                      first_name: user.first_name,
-                      username: user.username,
-                      role: user.role,
-                      can_view: true,
-                      can_add: user.can_add,
-                    }).then(() => undefined))}
-                  />
-                ))}
-              </div>
-            </>
-          ) : (
-            <p className="muted-copy">Only ledger owners can add, remove, or change visibility.</p>
-          )}
-        </section>
+        <LedgerAccessPanel
+          me={me}
+          ledgers={ledgers}
+          accessUsers={accessUsers}
+          busy={busy}
+          onSwitchLedger={switchLedger}
+          onAddUser={(data) => run(() => grantAccessUser(data).then(() => undefined))}
+          onChangeUser={(user, data) => run(() => updateAccessUserRole(user.telegram_user_id, data).then(() => undefined))}
+          onRevokeUser={(user) => run(() => revokeAccessUser(user.telegram_user_id))}
+          onReactivateUser={(user) => run(() => grantAccessUser({
+            telegram_user_id: user.telegram_user_id,
+            first_name: user.first_name,
+            username: user.username,
+            role: user.role,
+            can_view: true,
+            can_add: user.can_add,
+          }).then(() => undefined))}
+        />
 
-        <section className="card workspace-card" id="alerts">
-          <h3>Alerts</h3>
-          <div className="statement-list">
-            {alerts.length === 0 ? <p>No open alerts.</p> : alerts.map((alert) => (
-              <div key={alert.id} className="statement-row">
-                <div>
-                  <strong>{alert.title} <span className={`badge badge-${alert.severity}`}>{alert.severity}</span></strong>
-                  <span>{alert.detail}</span>
-                </div>
-                <div className="row-actions">
-                  {alert.href ? <a href={alert.href}>Open</a> : null}
-                  <button type="button" onClick={() => void run(() => dismissAlert(alert.id))} disabled={busy}>
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <AlertsPanel
+          alerts={alerts}
+          busy={busy}
+          onDismiss={(alertId) => run(() => dismissAlert(alertId))}
+        />
 
-        <section className="card workspace-card">
-          <h3>Accounts</h3>
-          <div className="inline-form">
-            <input value={newAccountName} onChange={(e) => setNewAccountName(e.target.value)} placeholder="AmEx Platinum" />
-            <select value={newAccountType} onChange={(e) => setNewAccountType(e.target.value as AccountType)}>
-              <option value="card">Card</option>
-              <option value="bank">Bank</option>
-              <option value="upi">UPI</option>
-              <option value="wallet">Wallet</option>
-              <option value="cash">Cash</option>
-              <option value="other">Other</option>
-            </select>
-            <input value={newAccountInstitution} onChange={(e) => setNewAccountInstitution(e.target.value)} placeholder="Institution" />
-            <input value={newAccountLastFour} onChange={(e) => setNewAccountLastFour(e.target.value)} placeholder="Last 4" />
-            <button type="button" onClick={() => void run(createNewAccount)} disabled={busy || !newAccountName.trim()}>Add</button>
-          </div>
-          <div className="statement-list">
-            {accounts.length === 0 ? <p>No accounts yet.</p> : accounts.map((account) => (
-              <div key={account.id} className="statement-row">
-                <div>
-                  <strong>{account.name} {account.is_default ? <span className="badge badge-confirmed">default</span> : null}</strong>
-                  <span>{account.type}{account.institution ? ` · ${account.institution}` : ''}{account.last_four ? ` · **${account.last_four}` : ''}</span>
-                </div>
-                <div className="row-actions">
-                  <button type="button" onClick={() => void run(() => updateAccount(account.id, { is_default: true }).then(() => undefined))} disabled={busy || account.is_default}>
-                    Default
-                  </button>
-                  <button type="button" className="danger" onClick={() => void run(() => archiveAccount(account.id))} disabled={busy}>
-                    Archive
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <AccountsPanel
+          accounts={accounts}
+          busy={busy}
+          onAdd={(data) => run(() => createAccount(data).then(() => undefined))}
+          onSetDefault={(accountId) => run(() => updateAccount(accountId, { is_default: true }).then(() => undefined))}
+          onArchive={(accountId) => run(() => archiveAccount(accountId))}
+        />
 
-        <section className="card workspace-card wide-card">
-          <h3>Monthly Reconciliation</h3>
-          <div className="inline-form">
-            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
-            <select value={reconcileAccount} onChange={(e) => setReconcileAccount(e.target.value)}>
-              <option value="">All accounts</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>{account.name}</option>
-              ))}
-            </select>
-            <button type="button" onClick={() => void run(async () => undefined)} disabled={busy}>Refresh</button>
-          </div>
-          {reconciliation ? (
-            <>
-              <div className="summary-grid compact-summary">
-                <span><strong>{reconciliation.summary.matched_count}</strong><small>matched</small></span>
-                <span><strong>{reconciliation.summary.missing_in_khata}</strong><small>missing in Khata</small></span>
-                <span><strong>{reconciliation.summary.missing_in_statement}</strong><small>missing in statement</small></span>
-                <span><strong>{reconciliation.summary.amount_mismatch}</strong><small>amount mismatch</small></span>
-              </div>
-              <div className="table-scroll">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Status</th>
-                      <th>Date</th>
-                      <th>Description</th>
-                      <th>Account</th>
-                      <th style={{ textAlign: 'right' }}>Khata</th>
-                      <th style={{ textAlign: 'right' }}>Statement</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reconciliation.items.slice(0, 20).map((item) => (
-                      <tr key={`${item.status}-${item.expense_id ?? item.statement_row_id}`}>
-                        <td><span className={`badge badge-${item.status}`}>{item.status.replace(/_/g, ' ')}</span></td>
-                        <td>{formatDate(item.occurred_at)}</td>
-                        <td>{item.description}</td>
-                        <td>{item.account ?? '—'}</td>
-                        <td style={{ textAlign: 'right' }}>{formatCents(item.amount_cents, item.currency)}</td>
-                        <td style={{ textAlign: 'right' }}>{item.statement_amount_cents ? formatCents(item.statement_amount_cents, item.currency) : '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : <p>No reconciliation loaded.</p>}
-        </section>
+        <ReconciliationPanel
+          month={month}
+          accounts={accounts}
+          reconcileAccount={reconcileAccount}
+          reconciliation={reconciliation}
+          busy={busy}
+          onSetMonth={setMonth}
+          onSetReconcileAccount={setReconcileAccount}
+          onRefresh={() => run(async () => undefined)}
+        />
 
-        <section className="card workspace-card">
-          <h3>Household Settlement</h3>
-          {me?.selected_ledger_kind !== 'household' ? (
-            <p className="muted-copy">Switch to the Household ledger to see shared settlement.</p>
-          ) : settlement ? (
-            <>
-              <div className="summary-grid compact-summary">
-                <span><strong>{formatCents(settlement.total_cents)}</strong><small>shared spend</small></span>
-                <span><strong>{settlement.member_count}</strong><small>members</small></span>
-                <span><strong>{settlement.transfers.length}</strong><small>settle-ups</small></span>
-              </div>
-              <div className="statement-list">
-                {settlement.payers.map((payer) => (
-                  <div key={payer.telegram_user_id} className="statement-row">
-                    <div>
-                      <strong>{payer.first_name ?? payer.username ?? payer.telegram_user_id}</strong>
-                      <span>Paid {formatCents(payer.paid_cents)} · share {formatCents(payer.fair_share_cents)}</span>
-                    </div>
-                    <span className={Number(payer.balance_cents) >= 0 ? 'positive-amount' : 'negative-amount'}>
-                      {formatCents(Math.abs(Number(payer.balance_cents)))}
-                    </span>
-                  </div>
-                ))}
-                {settlement.transfers.length === 0 ? <p>No settlement transfer needed.</p> : settlement.transfers.map((transfer) => (
-                  <div key={`${transfer.from_telegram_user_id}-${transfer.to_telegram_user_id}`} className="statement-row">
-                    <div>
-                      <strong>{transfer.from_telegram_user_id} pays {transfer.to_telegram_user_id}</strong>
-                      <span>{formatCents(transfer.amount_cents)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : <p>No settlement loaded.</p>}
-        </section>
+        <SettlementPanel
+          me={me}
+          settlement={settlement}
+        />
 
-        <section className="card workspace-card wide-card" id="smart-rules">
-          <h3>Smart Rules</h3>
-          <div className="inline-form">
-            <input value={newRuleName} onChange={(e) => setNewRuleName(e.target.value)} placeholder="Rule name" />
-            <select value={newRuleScope} onChange={(e) => setNewRuleScope(e.target.value as typeof newRuleScope)}>
-              <option value="any">Any field</option>
-              <option value="merchant">Merchant</option>
-              <option value="description">Description</option>
-              <option value="raw_text">Raw text</option>
-            </select>
-            <select value={newRuleMatchType} onChange={(e) => setNewRuleMatchType(e.target.value as typeof newRuleMatchType)}>
-              <option value="contains">Contains</option>
-              <option value="equals">Equals</option>
-              <option value="regex">Regex</option>
-            </select>
-            <input value={newRulePattern} onChange={(e) => setNewRulePattern(e.target.value)} placeholder="Pattern" />
-            <select value={newRuleCategory} onChange={(e) => setNewRuleCategory(e.target.value)}>
-              <option value="">Keep category</option>
-              {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-            </select>
-            <select value={newRuleAccount} onChange={(e) => setNewRuleAccount(e.target.value)}>
-              <option value="">Keep account</option>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-            </select>
-            <input value={newRuleTags} onChange={(e) => setNewRuleTags(e.target.value)} placeholder="tags" />
-            <select value={newRuleReviewStatus} onChange={(e) => setNewRuleReviewStatus(e.target.value)}>
-              <option value="">Keep review</option>
-              <option value="reviewed">Reviewed</option>
-              <option value="needs_review">Needs review</option>
-              <option value="ignored">Ignored</option>
-            </select>
-            <button type="button" onClick={() => void run(createNewRule)} disabled={busy || !newRuleName.trim() || !newRulePattern.trim()}>Add</button>
-          </div>
-          <div className="statement-list">
-            {rules.length === 0 ? <p>No rules yet.</p> : rules.map((rule) => (
-              <div key={rule.id} className="statement-row">
-                <div>
-                  <strong>{rule.name} <span className="badge badge-muted">{rule.match_scope}:{rule.match_type}</span></strong>
-                  <span>{rule.pattern} · {rule.category ?? 'category unchanged'} · {rule.account ?? 'account unchanged'} · {rule.tag_names.join(', ') || 'no tags'}</span>
-                </div>
-                <div className="row-actions">
-                  <button type="button" onClick={() => void run(() => updateSmartRule(rule.id, { enabled: !rule.enabled }).then(() => undefined))} disabled={busy}>
-                    {rule.enabled ? 'Disable' : 'Enable'}
-                  </button>
-                  <button type="button" className="danger" onClick={() => void run(() => deleteSmartRule(rule.id))} disabled={busy}>
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <SmartRulesPanel
+          rules={rules}
+          suggestions={suggestions}
+          categories={categories}
+          accounts={accounts}
+          busy={busy}
+          ruleDraft={ruleDraft}
+          onDraftConsumed={() => setRuleDraft(null)}
+          onAdd={(data) => run(() => createSmartRule(data).then(() => undefined))}
+          onToggleEnabled={(ruleId, enabled) => run(() => updateSmartRule(ruleId, { enabled }).then(() => undefined))}
+          onDelete={(ruleId) => run(() => deleteSmartRule(ruleId))}
+          onAcceptSuggestion={(suggestionId) => run(() => acceptRuleSuggestion(suggestionId).then(() => undefined))}
+          onDismissSuggestion={(suggestionId) => run(() => dismissRuleSuggestion(suggestionId).then(() => undefined))}
+        />
 
-        <section className="card workspace-card wide-card">
-          <h3>Learning Suggestions</h3>
-          <div className="statement-list">
-            {suggestions.length === 0 ? <p>No pending suggestions.</p> : suggestions.map((suggestion) => (
-              <div key={suggestion.id} className="statement-row">
-                <div>
-                  <strong>
-                    {suggestion.pattern}
-                    <span className="badge badge-muted">{suggestion.source.replace(/_/g, ' ')}</span>
-                  </strong>
-                  <span>
-                    {suggestion.category ?? 'category unchanged'} · {suggestion.account ?? 'account unchanged'}
-                    {suggestion.tag_names.length ? ` · ${suggestion.tag_names.map((tag) => `#${tag}`).join(' ')}` : ''}
-                  </span>
-                  <small>{suggestion.reason}</small>
-                </div>
-                <div className="row-actions">
-                  <button type="button" onClick={() => void run(() => acceptSuggestion(suggestion.id))} disabled={busy}>
-                    Accept
-                  </button>
-                  <button type="button" onClick={() => void run(() => dismissSuggestion(suggestion.id))} disabled={busy}>
-                    Dismiss
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <CaptureWorkbenchPanel
+          captures={captures}
+          captureStatusCounts={captureStatusCounts}
+          captureSourceCounts={captureSourceCounts}
+          captureFailures={captureFailures}
+          captureStatus={captureStatus}
+          captureSource={captureSource}
+          captureFailureKind={captureFailureKind}
+          captureSearch={captureSearch}
+          busy={busy}
+          onSetCaptureStatus={setCaptureStatus}
+          onSetCaptureSource={setCaptureSource}
+          onSetCaptureFailureKind={setCaptureFailureKind}
+          onSetCaptureSearch={setCaptureSearch}
+          onReplay={(captureId) => run(() => replayCapture(captureId).then(() => undefined))}
+          onIgnore={(captureId) => run(() => ignoreCapture(captureId))}
+          onMakeRule={(draft) => {
+            setRuleDraft(draft)
+          }}
+        />
 
-        <section className="card workspace-card wide-card" id="capture-workbench">
-          <div className="chart-card-heading">
-            <div>
-              <span>Replay, diagnose, teach</span>
-              <h3>Capture Workbench</h3>
-            </div>
-          </div>
-          <div className="inline-form">
-            <select value={captureStatus} onChange={(e) => setCaptureStatus(e.target.value as CaptureStatusFilter)} aria-label="Capture status">
-              <option value="failed">Failed</option>
-              <option value="pending">Pending</option>
-              <option value="processed">Processed</option>
-              <option value="ignored">Ignored</option>
-            </select>
-            <select value={captureSource} onChange={(e) => setCaptureSource(e.target.value)} aria-label="Capture source">
-              <option value="">All sources</option>
-              {CAPTURE_SOURCES.map((source) => (
-                <option key={source} value={source}>{captureLabel(source)}</option>
-              ))}
-            </select>
-            <select value={captureFailureKind} onChange={(e) => setCaptureFailureKind(e.target.value)} aria-label="Failure kind">
-              <option value="">All failures</option>
-              {CAPTURE_FAILURE_KINDS.map((kind) => (
-                <option key={kind} value={kind}>{captureLabel(kind)}</option>
-              ))}
-            </select>
-            <input
-              value={captureSearch}
-              onChange={(e) => setCaptureSearch(e.target.value)}
-              placeholder="Search raw text or error"
-              aria-label="Search captures"
-            />
-            <button
-              type="button"
-              onClick={() => {
-                setCaptureSource('')
-                setCaptureFailureKind('')
-                setCaptureSearch('')
-              }}
-            >
-              Clear
-            </button>
-          </div>
-          {captureActionResult ? <div className="success-msg">{captureActionResult}</div> : null}
-          <div className="failure-summary-grid">
-            {captureStatusCounts.map((status) => (
-              <button key={status.key} type="button" onClick={() => setCaptureStatus(status.key as CaptureStatusFilter)}>
-                <strong>{status.count}</strong>
-                <small>{captureLabel(status.key)}</small>
-              </button>
-            ))}
-            {captureSourceCounts.slice(0, 4).map((source) => (
-              <button key={source.key} type="button" onClick={() => setCaptureSource(source.key)}>
-                <strong>{source.count}</strong>
-                <small>{captureLabel(source.key)}</small>
-              </button>
-            ))}
-          </div>
-          {captureFailures.length > 0 ? (
-            <div className="failure-summary-grid">
-              {captureFailures.map((failure) => (
-                <button key={failure.failure_kind} type="button" onClick={() => setCaptureFailureKind(failure.failure_kind)}>
-                  <strong>{failure.count}</strong>
-                  <small>{captureLabel(failure.failure_kind)}</small>
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <div className="statement-list">
-            {captures.length === 0 ? <p>No captures for this filter.</p> : captures.map((capture) => (
-              <div key={capture.id} className="statement-row capture-row">
-                <div>
-                  <strong>
-                    {capture.source}
-                    <span className={`badge badge-${capture.status}`}>{capture.status}</span>
-                    {capture.failure_kind ? <span className="badge badge-muted">{captureLabel(capture.failure_kind)}</span> : null}
-                  </strong>
-                  <span>{capture.diagnosis?.title ?? capture.error_reason ?? capture.parsed_expense_label ?? 'No detail'}</span>
-                  <small>
-                    {formatDate(capture.created_at)}
-                    {capture.replay_count ? ` · replayed ${capture.replay_count}x` : ''}
-                    {capture.last_replayed_at ? ` · last replay ${formatDate(capture.last_replayed_at)}` : ''}
-                    {typeof capture.confidence?.overall === 'number' ? ` · confidence ${capture.confidence.overall}%` : ''}
-                  </small>
-                  {capture.raw_text ? <small>{capture.raw_text.slice(0, 240)}</small> : null}
-                  <details className="capture-diagnostics">
-                    <summary>Diagnostics</summary>
-                    <span>{capture.diagnosis?.detail ?? capture.error_reason ?? 'No diagnostic detail stored.'}</span>
-                    <em>{capture.diagnosis?.next_action ?? 'Inspect the raw capture and decide whether to replay or ignore.'}</em>
-                    {capture.parsed_expense_label ? <small>Parsed as: {capture.parsed_expense_label}</small> : null}
-                    {capture.metadata && Object.keys(capture.metadata).length > 0 ? (
-                      <pre>{JSON.stringify(capture.metadata, null, 2)}</pre>
-                    ) : null}
-                  </details>
-                </div>
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    onClick={() => void run(() => replayRawCapture(capture.id))}
-                    disabled={busy || !capture.raw_text || capture.status === 'processed' || capture.status === 'ignored' || capture.diagnosis?.replayable === false}
-                  >
-                    Replay
-                  </button>
-                  <button type="button" onClick={() => draftRuleFromCapture(capture)} disabled={busy || !capture.raw_text}>
-                    Make Rule
-                  </button>
-                  <button type="button" onClick={() => void run(() => ignoreCapture(capture.id))} disabled={busy || capture.status === 'ignored' || capture.status === 'processed'}>
-                    Ignore
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <CategoriesPanel
+          categories={categories}
+          busy={busy}
+          onAdd={(name) => run(() => createCategory(name).then(() => undefined))}
+          onRename={(categoryId, name) => run(() => renameCategory(categoryId, name).then(() => undefined))}
+          onDelete={(categoryId) => run(() => deleteCategory(categoryId))}
+        />
 
-        <section className="card workspace-card">
-          <h3>Categories</h3>
-          <div className="inline-form">
-            <input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} placeholder="New category" />
-            <button type="button" onClick={() => void run(addCategory)} disabled={busy}>Add</button>
-          </div>
-          <div className="stack-list">
-            {categories.map((category) => (
-              <CategoryRow
-                key={category.id}
-                category={category}
-                busy={busy}
-                onRename={(name) => run(() => renameCategory(category.id, name).then(() => undefined))}
-                onDelete={() => run(() => deleteCategory(category.id))}
-              />
-            ))}
-          </div>
-        </section>
+        <BudgetsPanel
+          categories={categories}
+          budgets={budgets}
+          busy={busy}
+          defaultCategoryId={defaultCategoryId}
+          onSetBudget={(categoryId, cents) => run(() => setBudget(categoryId, cents))}
+          onClearBudget={(categoryId) => run(() => clearBudget(categoryId))}
+          onError={(msg) => setError(msg)}
+        />
 
-        <section className="card workspace-card">
-          <h3>Budgets</h3>
-          <div className="inline-form">
-            <select value={budgetCategory} onChange={(e) => setBudgetCategory(e.target.value)}>
-              {categories.map((category) => (
-                <option key={category.id} value={category.id}>{category.name}</option>
-              ))}
-            </select>
-            <input
-              inputMode="decimal"
-              value={budgetAmount}
-              onChange={(e) => setBudgetAmount(e.target.value)}
-              placeholder="Monthly budget"
-            />
-            <button type="button" onClick={() => void run(saveBudget)} disabled={busy}>Set</button>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>Category</th>
-                <th style={{ textAlign: 'right' }}>Spent</th>
-                <th style={{ textAlign: 'right' }}>Target</th>
-                <th style={{ textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {budgets.length === 0 ? (
-                <tr><td colSpan={4}>No budgets yet.</td></tr>
-              ) : budgets.map((budget) => (
-                <tr key={budget.id}>
-                  <td>{budget.category_name}</td>
-                  <td style={{ textAlign: 'right' }}>{formatCents(budget.spent_cents)}</td>
-                  <td style={{ textAlign: 'right' }}>{formatCents(budget.target_cents)}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    <button type="button" onClick={() => void run(() => clearBudget(budget.category_id))} disabled={busy}>
-                      Clear
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+        <TagsPanel tags={tags} />
 
-        <section className="card workspace-card">
-          <h3>Tags</h3>
-          <div className="tag-cloud">
-            {tags.length === 0 ? <span>No tags yet.</span> : tags.map((tag) => (
-              <span key={tag.id}>#{tag.name} · {tag.count}</span>
-            ))}
-          </div>
-        </section>
+        <SubscriptionsPanel
+          subscriptions={subscriptions}
+          busy={busy}
+          onConfirm={(s) => run(() => setSubscriptionPreference(s.merchant_key, s.name, 'confirmed'))}
+          onIgnore={(s) => run(() => setSubscriptionPreference(s.merchant_key, s.name, 'ignored'))}
+          onInactive={(s) => run(() => setSubscriptionPreference(s.merchant_key, s.name, 'inactive'))}
+          onClearPreference={(s) => run(() => clearSubscriptionPreference(s.merchant_key))}
+        />
 
-        <section className="card workspace-card">
-          <h3>Subscriptions</h3>
-          <div className="subscription-summary-grid">
-            <span>
-              <strong>{formatCents(subscriptionMonthlyTotal)}</strong>
-              <small>monthly watch</small>
-            </span>
-            <span>
-              <strong>{confirmedSubscriptions.length}</strong>
-              <small>confirmed</small>
-            </span>
-            <span>
-              <strong>{attentionSubscriptions.length}</strong>
-              <small>need attention</small>
-            </span>
-          </div>
-          <div className="segmented-control subscription-filter" aria-label="Subscription filter">
-            {([
-              ['active', `Active ${activeSubscriptions.length}`],
-              ['attention', `Attention ${attentionSubscriptions.length}`],
-              ['confirmed', `Confirmed ${confirmedSubscriptions.length}`],
-              ['ignored', 'Ignored'],
-              ['inactive', 'Inactive'],
-              ['all', 'All'],
-            ] as Array<[SubscriptionFilter, string]>).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={subscriptionFilter === value ? 'active' : ''}
-                onClick={() => setSubscriptionFilter(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="statement-list">
-            {filteredSubscriptions.length === 0 ? <p>No recurring signals in this view.</p> : filteredSubscriptions.map((subscription) => (
-              <div key={subscription.merchant_key} className="statement-row subscription-row">
-                <div>
-                  <strong>
-                    {subscription.name}
-                    {subscription.preference_status ? (
-                      <span className={`badge ${subscriptionBadgeClass(subscription.preference_status)}`}>
-                        {subscription.preference_status}
-                      </span>
-                    ) : null}
-                    {subscription.is_overdue ? <span className="badge badge-review">Overdue</span> : null}
-                  </strong>
-                  <span>
-                    {subscription.cadence} · {formatCents(subscription.monthly_estimate_cents, subscription.currency)} / mo · {subscription.confidence}% · {subscription.count} charges
-                  </span>
-                  <small>
-                    {subscriptionTiming(subscription)}
-                    {subscription.last_seen ? ` · Last ${formatDate(subscription.last_seen)}` : ''}
-                    {subscription.not_seen_this_month ? ' · Not seen this month' : ''}
-                  </small>
-                </div>
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    onClick={() => void run(() => updateSubscription(subscription, 'confirmed'))}
-                    disabled={busy || subscription.preference_status === 'confirmed'}
-                  >
-                    Confirm
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => updateSubscription(subscription, 'ignored'))}
-                    disabled={busy || subscription.preference_status === 'ignored'}
-                  >
-                    Ignore
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => updateSubscription(subscription, 'inactive'))}
-                    disabled={busy || subscription.preference_status === 'inactive'}
-                  >
-                    Inactive
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => clearSubscriptionPreference(subscription.merchant_key))}
-                    disabled={busy || !subscription.preference_status}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <StatementImportsPanel
+          statements={statements}
+          categories={categories}
+          accounts={accounts}
+          busy={busy}
+          onRefresh={refresh}
+          onError={(msg) => setError(msg)}
+        />
 
-        <section className="card workspace-card">
-          <h3>Statement Imports</h3>
-          <div className="statement-upload-panel">
-            <input
-              key={statementInputKey}
-              type="file"
-              accept="application/pdf,image/jpeg,image/png,image/webp,image/gif"
-              onChange={(e) => {
-                setStatementFile(e.target.files?.[0] ?? null)
-                setStatementUploadResult(null)
-              }}
-              aria-label="Statement file"
-            />
-            <select
-              value={statementAccount}
-              onChange={(e) => setStatementAccount(e.target.value)}
-              aria-label="Statement account"
-            >
-              <option value="">Detect account</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>{account.name}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="button-primary"
-              onClick={() => void run(uploadSelectedStatement)}
-              disabled={busy || !statementFile}
-            >
-              Upload
-            </button>
-            {statementUploadResult ? <span>{statementUploadResult}</span> : null}
-          </div>
-          <div className="statement-list">
-            {statements.length === 0 ? <p>No statement imports yet.</p> : statements.map((statement) => (
-              <div key={statement.id} className="statement-row">
-                <div>
-                  <strong>{statement.status}</strong>
-                  <span>
-                    {statement.parsed_count} parsed · {statement.imported_count} imported · {statement.duplicate_count} duplicates
-                  </span>
-                  {statement.error_reason ? <small>{statement.error_reason}</small> : null}
-                  {statement.account ? <small>Account: {statement.account}</small> : null}
-                </div>
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    onClick={() => void run(() => loadStatementReview(statement.id))}
-                    disabled={busy}
-                  >
-                    Review
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => reparseStatement(statement.id))}
-                    disabled={busy || !['failed', 'parsed'].includes(statement.status)}
-                  >
-                    Re-parse
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          {selectedStatementId ? (
-            <div className="statement-review-panel">
-              <div className="statement-review-toolbar">
-                <div>
-                  <strong>Import Review</strong>
-                  <span>{pendingStatementRows.length} pending · {statementRows.length} total rows</span>
-                </div>
-                <div className="row-actions">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedStatementRowIds(pendingStatementRows.map((row) => row.id))}
-                    disabled={busy || pendingStatementRows.length === 0}
-                  >
-                    Select pending
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => importSelectedRows(selectedPendingRowIds))}
-                    disabled={busy || selectedPendingRowIds.length === 0}
-                  >
-                    Import selected
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(() => importSelectedRows())}
-                    disabled={busy || pendingStatementRows.length === 0}
-                  >
-                    Import all
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void run(ignoreSelectedRows)}
-                    disabled={busy || selectedPendingRowIds.length === 0}
-                  >
-                    Ignore selected
-                  </button>
-                </div>
-              </div>
-              <div className="statement-correction-bar">
-                <select
-                  value={bulkStatementCategory}
-                  onChange={(e) => setBulkStatementCategory(e.target.value)}
-                  aria-label="Bulk statement category"
-                >
-                  <option value="">Keep category</option>
-                  <option value="__none__">Uncategorized</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>{category.name}</option>
-                  ))}
-                </select>
-                <input
-                  value={bulkStatementTags}
-                  onChange={(e) => setBulkStatementTags(e.target.value)}
-                  placeholder="Tags: travel, reimbursable"
-                  aria-label="Bulk statement tags"
-                />
-                <select
-                  value={bulkStatementAccount}
-                  onChange={(e) => setBulkStatementAccount(e.target.value)}
-                  aria-label="Bulk statement account"
-                >
-                  <option value="">Keep account</option>
-                  <option value="__none__">No account</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>{account.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void run(applyCorrectionsToSelected)}
-                  disabled={busy || selectedPendingRowIds.length === 0}
-                >
-                  Apply to selected
-                </button>
-              </div>
-              <div className="table-scroll">
-                <table className="statement-review-table">
-                  <thead>
-                    <tr>
-                      <th>Select</th>
-                      <th>Date</th>
-                      <th>Description</th>
-                      <th>Suggested</th>
-                      <th>Category</th>
-                      <th>Account</th>
-                      <th>Tags</th>
-                      <th>Status</th>
-                      <th style={{ textAlign: 'right' }}>Amount</th>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {statementRows.length === 0 ? (
-                      <tr><td colSpan={10}>No parsed rows for this statement.</td></tr>
-                    ) : statementRows.map((row) => (
-                      <tr key={row.id}>
-                        <td data-label="Select">
-                          <input
-                            type="checkbox"
-                            checked={selectedStatementRowIds.includes(row.id)}
-                            onChange={(e) => toggleStatementRow(row.id, e.target.checked)}
-                            disabled={row.status !== 'pending'}
-                            aria-label={`Select ${row.description}`}
-                          />
-                        </td>
-                        <td data-label="Date" style={{ whiteSpace: 'nowrap' }}>{formatDate(row.occurred_at)}</td>
-                        <td data-label="Description">{row.description}</td>
-                        <td data-label="Suggested">{row.suggested_category ?? '—'}</td>
-                        <td data-label="Category">{row.category ?? 'Uncategorized'}</td>
-                        <td data-label="Account">{row.account ?? '—'}</td>
-                        <td data-label="Tags">{row.tag_names.length ? row.tag_names.map((tag) => `#${tag}`).join(' ') : '—'}</td>
-                        <td data-label="Status"><span className={`badge badge-${row.status}`}>{row.status}</span></td>
-                        <td data-label="Amount" style={{ textAlign: 'right', fontWeight: 600 }}>{formatCents(row.amount_cents, row.currency)}</td>
-                        <td data-label="Actions">
-                          <div className="row-actions">
-                            {row.status === 'pending' ? (
-                              <StatementRowCorrection
-                                row={row}
-                                categories={categories}
-                                accounts={accounts}
-                                busy={busy}
-                                onSave={(data) => run(() => saveStatementRowCorrection(row.id, data))}
-                              />
-                            ) : null}
-                            {row.status === 'ignored' ? (
-                              <button
-                                type="button"
-                                onClick={() => void run(() => restoreStatementRow(row.id))}
-                                disabled={busy}
-                              >
-                                Restore
-                              </button>
-                            ) : null}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
-        </section>
+        <RestoreDrillsPanel
+          me={me}
+          restoreDrills={restoreDrills}
+        />
 
-        <section className="card workspace-card wide-card">
-          <h3>Restore Drills</h3>
-          <div className="statement-list">
-            {!me?.can_manage ? <p>Owner access required.</p> : restoreDrills.length === 0 ? <p>No restore drills recorded yet.</p> : restoreDrills.map((drill) => (
-              <div key={drill.id} className="statement-row">
-                <div>
-                  <strong>
-                    {drill.status}
-                    <span className={`badge badge-${drill.status}`}>{drill.status}</span>
-                  </strong>
-                  <span>{drill.backup_key ?? 'No backup key recorded'} · {formatAuditDate(drill.checked_at)}</span>
-                  {drill.error_reason ? <small>{drill.error_reason}</small> : null}
-                </div>
-                <span>{drill.duration_ms ? `${Math.round(drill.duration_ms / 1000)}s` : '—'}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="card workspace-card wide-card">
-          <h3>Audit Trail</h3>
-          <div className="audit-filter-bar">
-            <select
-              value={auditAction}
-              onChange={(e) => setAuditAction(e.target.value)}
-              aria-label="Audit action"
-            >
-              <option value="">All actions</option>
-              {auditActions.map((action) => (
-                <option key={action} value={action}>{action}</option>
-              ))}
-            </select>
-            <select
-              value={auditEntityType}
-              onChange={(e) => setAuditEntityType(e.target.value)}
-              aria-label="Audit entity type"
-            >
-              <option value="">All entities</option>
-              {auditEntityTypes.map((entityType) => (
-                <option key={entityType} value={entityType}>{entityType}</option>
-              ))}
-            </select>
-            <select
-              value={auditLimit}
-              onChange={(e) => setAuditLimit(Number(e.target.value))}
-              aria-label="Audit limit"
-            >
-              {[30, 50, 100].map((limit) => (
-                <option key={limit} value={limit}>{limit} events</option>
-              ))}
-            </select>
-          </div>
-          <div className="statement-list">
-            {auditEvents.length === 0 ? <p>No corrections recorded yet.</p> : auditEvents.map((event) => (
-              <button
-                key={event.id}
-                type="button"
-                className="statement-row audit-row"
-                onClick={() => setAuditDetail(event)}
-              >
-                <div>
-                  <strong>{auditLabel(event)}</strong>
-                  <span>
-                    {event.entity_type}{event.entity_id ? ` · ${event.entity_id.slice(0, 8)}` : ''} · {formatAuditDate(event.created_at)}
-                  </span>
-                  {event.undone_at ? <small>Undone {formatAuditDate(event.undone_at)}</small> : null}
-                </div>
-                <span>{canUndoAudit(event) ? 'Undo available' : 'Details'}</span>
-              </button>
-            ))}
-          </div>
-        </section>
+        <AuditTrailPanel
+          auditEvents={auditEvents}
+          auditDetail={auditDetail}
+          auditAction={auditAction}
+          auditEntityType={auditEntityType}
+          auditLimit={auditLimit}
+          busy={busy}
+          onSetAuditAction={setAuditAction}
+          onSetAuditEntityType={setAuditEntityType}
+          onSetAuditLimit={setAuditLimit}
+          onSetAuditDetail={setAuditDetail}
+          onUndo={(auditId) => run(() => undoAudit(auditId))}
+        />
       </div>
-
-      {auditDetail ? (
-        <div className="modal-overlay">
-          <div className="modal audit-detail-modal" role="dialog" aria-modal="true" aria-label="Audit Event">
-            <h3>{auditLabel(auditDetail)}</h3>
-            <p>
-              {auditDetail.entity_type}
-              {auditDetail.entity_id ? ` · ${auditDetail.entity_id}` : ''}
-              {' · '}
-              {formatAuditDate(auditDetail.created_at)}
-            </p>
-            {auditDiff(auditDetail).length > 0 ? (
-              <section className="audit-diff">
-                <h4>Changed Fields</h4>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Field</th>
-                      <th>Before</th>
-                      <th>After</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {auditDiff(auditDetail).map((row) => (
-                      <tr key={row.field}>
-                        <td>{row.field}</td>
-                        <td>{formatAuditCell(row.before)}</td>
-                        <td>{formatAuditCell(row.after)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
-            ) : null}
-            <div className="audit-json-grid">
-              <section>
-                <h4>Before</h4>
-                <pre>{formatAuditJson(auditDetail.before)}</pre>
-              </section>
-              <section>
-                <h4>After</h4>
-                <pre>{formatAuditJson(auditDetail.after)}</pre>
-              </section>
-              <section>
-                <h4>Metadata</h4>
-                <pre>{formatAuditJson(auditDetail.metadata)}</pre>
-              </section>
-            </div>
-            <div className="modal-actions">
-              {canUndoAudit(auditDetail) ? (
-                <button
-                  type="button"
-                  className="danger"
-                  onClick={() => void run(() => undoAudit(auditDetail.id))}
-                  disabled={busy}
-                >
-                  Undo change
-                </button>
-              ) : null}
-              <button type="button" onClick={() => setAuditDetail(null)}>Close</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function AccessUserRow({
-  user,
-  me,
-  busy,
-  onChange,
-  onRevoke,
-  onReactivate,
-}: {
-  user: AccessUser
-  me: Me
-  busy: boolean
-  onChange: (data: { role?: AccessRole; can_view?: boolean; can_add?: boolean }) => Promise<void>
-  onRevoke: () => Promise<void>
-  onReactivate: () => Promise<void>
-}) {
-  const isProtectedOwner = user.telegram_user_id === user.ledger_id || me.telegram_user_id === user.telegram_user_id
-  const name = user.first_name || user.username || `Telegram ${user.telegram_user_id}`
-  const username = user.username ? `@${user.username.replace(/^@/, '')}` : null
-
-  return (
-    <div className="statement-row access-row">
-      <div>
-        <strong>
-          {name}
-          <span className={`badge badge-${user.status}`}>{user.status}</span>
-          {me.telegram_user_id === user.telegram_user_id ? <span className="badge badge-muted">you</span> : null}
-          {user.can_view ? null : <span className="badge badge-muted">hidden</span>}
-        </strong>
-        <span>
-          {user.telegram_user_id}
-          {username ? ` · ${username}` : ''}
-          {` · ${user.can_add ? 'can add' : 'view only'}`}
-          {user.last_login_at ? ` · Last login ${formatDate(user.last_login_at)}` : ''}
-        </span>
-      </div>
-      <div className="row-actions">
-        <select
-          value={user.role}
-          onChange={(e) => void onChange({ role: e.target.value as AccessRole })}
-          disabled={busy || isProtectedOwner || user.status !== 'active'}
-          aria-label={`Role for ${name}`}
-        >
-          <option value="member">Member</option>
-          <option value="owner">Owner</option>
-        </select>
-        <label className="access-toggle">
-          <input
-            type="checkbox"
-            checked={user.can_view}
-            onChange={(e) => void onChange({ can_view: e.target.checked })}
-            disabled={busy || isProtectedOwner || user.status !== 'active'}
-          />
-          View
-        </label>
-        <label className="access-toggle">
-          <input
-            type="checkbox"
-            checked={user.can_add}
-            onChange={(e) => void onChange({ can_add: e.target.checked })}
-            disabled={busy || isProtectedOwner || user.status !== 'active' || !user.can_view}
-          />
-          Add
-        </label>
-        {user.status === 'revoked' ? (
-          <button type="button" onClick={() => void onReactivate()} disabled={busy}>
-            Re-activate
-          </button>
-        ) : (
-          <button type="button" className="danger" onClick={() => void onRevoke()} disabled={busy || isProtectedOwner}>
-            Revoke
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function CategoryRow({
-  category,
-  busy,
-  onRename,
-  onDelete,
-}: {
-  category: Category
-  busy: boolean
-  onRename: (name: string) => Promise<void>
-  onDelete: () => Promise<void>
-}) {
-  const [name, setName] = useState(category.name)
-
-  useEffect(() => setName(category.name), [category.name])
-
-  return (
-    <div className="list-row">
-      <input value={name} onChange={(e) => setName(e.target.value)} />
-      <button type="button" onClick={() => void onRename(name)} disabled={busy || name.trim() === category.name}>
-        Rename
-      </button>
-      <button type="button" onClick={() => void onDelete()} disabled={busy || category.is_default}>
-        Delete
-      </button>
-    </div>
-  )
-}
-
-function StatementRowCorrection({
-  row,
-  categories,
-  accounts,
-  busy,
-  onSave,
-}: {
-  row: StatementImportRow
-  categories: Category[]
-  accounts: Account[]
-  busy: boolean
-  onSave: (data: { category_id: string | null; account_id: string | null; tag_names: string[] }) => Promise<void>
-}) {
-  const [categoryId, setCategoryId] = useState(row.category_id ?? '')
-  const [accountId, setAccountId] = useState(row.account_id ?? '')
-  const [tagText, setTagText] = useState(row.tag_names.join(', '))
-
-  useEffect(() => {
-    setCategoryId(row.category_id ?? '')
-    setAccountId(row.account_id ?? '')
-    setTagText(row.tag_names.join(', '))
-  }, [row.account_id, row.category_id, row.tag_names])
-
-  return (
-    <div className="statement-row-correction">
-      <select
-        value={categoryId}
-        onChange={(e) => setCategoryId(e.target.value)}
-        disabled={busy}
-        aria-label={`Category for ${row.description}`}
-      >
-        <option value="">Uncategorized</option>
-        {categories.map((category) => (
-          <option key={category.id} value={category.id}>{category.name}</option>
-        ))}
-      </select>
-      <select
-        value={accountId}
-        onChange={(e) => setAccountId(e.target.value)}
-        disabled={busy}
-        aria-label={`Account for ${row.description}`}
-      >
-        <option value="">No account</option>
-        {accounts.map((account) => (
-          <option key={account.id} value={account.id}>{account.name}</option>
-        ))}
-      </select>
-      <input
-        value={tagText}
-        onChange={(e) => setTagText(e.target.value)}
-        disabled={busy}
-        placeholder="tags"
-        aria-label={`Tags for ${row.description}`}
-      />
-      <button
-        type="button"
-        onClick={() => void onSave({ category_id: categoryId || null, account_id: accountId || null, tag_names: parseTagNames(tagText) })}
-        disabled={busy}
-      >
-        Save
-      </button>
     </div>
   )
 }
