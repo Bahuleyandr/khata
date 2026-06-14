@@ -792,6 +792,15 @@ export async function expensesRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Invalid occurred_at date" });
       }
 
+      // Reject malformed expectedUpdatedAt early — a NaN timestamp would fall through
+      // to the optimistic-lock comparison and always signal a misleading 409.
+      if (
+        body.expectedUpdatedAt != null &&
+        Number.isNaN(new Date(body.expectedUpdatedAt).getTime())
+      ) {
+        return reply.status(400).send({ error: "Invalid expectedUpdatedAt timestamp" });
+      }
+
       if (body.category_id && !(await categoryBelongsToUser(session.userId, body.category_id))) {
         return reply.status(400).send({ error: "Category not found" });
       }

@@ -272,4 +272,26 @@ describe("PATCH /api/expenses/:id — optimistic locking", () => {
       await app.close();
     }
   });
+
+  it("returns 400 (not 409) when expectedUpdatedAt is a malformed timestamp", async () => {
+    // No sql.begin should be called — the guard fires before the transaction.
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/expenses/${EXPENSE_ID}`,
+        payload: {
+          amount_cents: 20000,
+          expectedUpdatedAt: "not-a-date",
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ error: "Invalid expectedUpdatedAt timestamp" });
+      // The transaction must not have been entered
+      expect(sqlMock.begin).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  });
 });
