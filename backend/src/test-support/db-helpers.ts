@@ -45,9 +45,11 @@ export {
 };
 
 /**
- * TRUNCATE all money/access tables in FK-safe order, bypassing triggers via
- * session_replication_role so the month-close immutability trigger doesn't
- * block cleanup of test data.
+ * TRUNCATE all money/access tables in FK-safe order.
+ * TRUNCATE does not fire row-level triggers (only statement-level TRUNCATE
+ * triggers, which this schema has none of), so the month-close immutability
+ * trigger (which fires on INSERT/UPDATE/DELETE) does not block cleanup of
+ * closed months' expenses — no session_replication_role bypass is needed.
  */
 export async function truncateAll(): Promise<void> {
   // TRUNCATE with RESTART IDENTITY CASCADE handles FK ordering for us.
@@ -179,6 +181,18 @@ export async function seedCategory(userId: number, name = "Food"): Promise<strin
 }
 
 /**
+ * Seed a minimal account for a user and return its UUID.
+ */
+export async function seedAccount(userId: number, name = "Test Account"): Promise<string> {
+  const rows = await sql.unsafe<Array<{ id: string }>>(
+    `INSERT INTO accounts (user_id, name, type)
+     VALUES (${userId}, '${name.replace(/'/g, "''")}', 'bank')
+     RETURNING id`,
+  );
+  return rows[0]!.id;
+}
+
+/**
  * Insert a raw expense row directly (bypasses the audit-recording insertExpense helper).
  * Returns the new expense id.
  */
@@ -187,13 +201,15 @@ export async function insertRawExpense(params: {
   amountCents: number;
   occurredAt: string; // ISO8601 or YYYY-MM-DD
   categoryId?: string | null;
+  accountId?: string | null;
 }): Promise<string> {
   const catSql = params.categoryId ? `'${params.categoryId}'` : "NULL";
+  const accSql = params.accountId ? `'${params.accountId}'` : "NULL";
   const rows = await sql.unsafe<Array<{ id: string }>>(
-    `INSERT INTO expenses (user_id, amount_cents, currency, description, source, occurred_at, category_id)
+    `INSERT INTO expenses (user_id, amount_cents, currency, description, source, occurred_at, category_id, account_id)
      VALUES (${params.userId}, ${params.amountCents}, 'INR', 'test expense', 'manual',
              '${params.occurredAt}'::timestamptz,
-             ${catSql})
+             ${catSql}, ${accSql})
      RETURNING id`,
   );
   return rows[0]!.id;
@@ -222,14 +238,3 @@ export async function reopenMonth(userId: number, periodMonth: string): Promise<
   `);
 }
 
-/**
- * Call sql.end() to cleanly close the postgres.js pool.
- * Place in afterAll() of each integration test file.
- */
-export async function closePool(): Promise<void> {
-  try {
-    await sql.end({ timeout: 5 });
-  } catch {
-    // already closed or never opened — ignore
-  }
-}

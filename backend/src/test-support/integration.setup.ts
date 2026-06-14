@@ -142,11 +142,13 @@ export async function setup(): Promise<void> {
   process.env["TELEGRAM_BOT_TOKEN"] = "integration-test-token";
   // Include all test user IDs used across integration test files.
   // DB-level tests use 10001-10003, 20001-20005, route-level tests use 30001-30005.
+  // Receipt/merge uuid=text regression tests use 40001-40002.
   process.env["ALLOWED_TELEGRAM_USER_IDS"] = [
     "99999",
     "10001", "10002", "10003",
     "20001", "20002", "20003", "20004", "20005",
     "30001", "30002", "30003", "30004", "30005",
+    "40001", "40002",
   ].join(",");
   process.env["SESSION_SECRET"] = "integration-test-secret-that-is-at-least-32-chars-long";
   process.env["MINIMAX_API_KEY"] = "integration-test-minimax-key";
