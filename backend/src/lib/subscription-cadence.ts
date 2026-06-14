@@ -86,8 +86,8 @@ export function advanceNextDueAt(
         return formatDate(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate());
       }
     default: {
-      // TypeScript exhaustive check
-      const _: never = billingCycle;
+      // Exhaustiveness: fails to compile if a billing cycle is added but unhandled.
+      billingCycle satisfies never;
       return currentDueAt;
     }
   }
