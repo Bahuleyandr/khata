@@ -122,28 +122,40 @@ bounds.
 
 ### 5. Node side
 
-- New `backend/src/lib/time.ts`:
-  - `export const APP_TIME_ZONE = 'Asia/Kolkata'`
-  - `todayIst(): string` — `YYYY-MM-DD` in IST (`toLocaleDateString('en-CA', { timeZone: APP_TIME_ZONE })` or `Intl.DateTimeFormat` parts). **Immune to process TZ.**
-  - `formatIstDate(instant: Date): string` — `YYYY-MM-DD` of an instant in IST.
-  - `nowIstParts(): { year: number; month: number; day: number }` — current IST
-    calendar parts, for "which month is it now" defaults. **Immune to process TZ.**
-- Route `todayString()` (`handlers.ts:86`) → `todayIst()`. This is the **LLM "today"
-  reference** for relative-date parsing ("yesterday") — highest-value Node fix.
-- Route the `new Date()`-local-parts sites through `nowIstParts()` so they are correct
-  regardless of process TZ: `monthProgress` (`routes/expenses.ts:324`,
-  `routes/monthly-review.ts:116`), `parseCommandPeriod` (`bot/handlers.ts:122`), and the
-  `selectedMonth` query default.
+The Node **process stays on UTC**. Every wall-clock calendar derivation is routed
+through process-TZ-immune IST helpers, so correctness never depends on the process
+timezone.
+
+- New `backend/src/lib/time.ts` (all immune to process TZ via an explicit `timeZone`):
+  - `APP_TIME_ZONE = 'Asia/Kolkata'`
+  - `formatIstDate(instant): string` — `YYYY-MM-DD` of an instant in IST (`toLocaleDateString('en-CA', { timeZone })`).
+  - `todayIst(): string` — today's IST `YYYY-MM-DD`.
+  - `nowIstParts(now?): { year; month; day }` — current IST calendar parts (1-based month).
+  - `monthStartString(year, month1): string` — `YYYY-MM-01` with year rollover.
+  - `yearMonthIst(now?): string` — current IST `YYYY-MM` (for budget/subscription month keys).
+- **Do NOT pin `TZ` on the pod.** `node-cron` interprets schedules in the process
+  timezone, and `cron/budgets.ts` authors them for UTC (e.g. the nightly nudge
+  `"30 15 * * *"` = 21:00 IST). Pinning `TZ=Asia/Kolkata` would shift every cron by
+  +5:30 and break the nudge. Keeping the process on UTC preserves cron timing; IST
+  correctness comes from the explicit helpers.
 - **Keep the noon-UTC anchor on stored `occurred_at` unchanged** — do *not* switch to
   local midnight.
-- Pin `TZ=Asia/Kolkata` on the backend Deployment as **pure defense-in-depth** (covers
-  anything missed and third-party `Date` use) — with the input logic already routed
-  through explicit IST helpers, the env var is **not** the sole guarantee of correctness.
-- Display formatters that hard-code `timeZone:"UTC"` / `getUTCDate()` /
-  `toISOString().slice(0,10)` (`handlers.ts:864-865, 978, 1045, 1135`) →
-  `formatIstDate`. **Display-only and protected by the noon anchor**, so this is the
-  safe tail; included for consistency and to fix the non-noon-anchored edge cases
-  (UPI same-day fallback, statement `DATE` rows).
+
+**Full NEEDS-IST site list** (from a review-driven audit — the initial draft
+under-counted the Node side):
+- `bot/handlers.ts`: `todayString` (→`todayIst()`), `parseCommandPeriod` (→`nowIstParts(now)`)
+- `routes/expenses.ts`: `selectedMonth`, `monthProgress` (→`nowIstParts()`)
+- `routes/monthly-review.ts`: month resolver, `monthProgress` (→`nowIstParts()`)
+- `routes/settlement.ts`: `selectedMonth` (→`nowIstParts()`)
+- `routes/export.ts`: default year/month (→`nowIstParts()`)
+- `routes/budgets.ts` + `cron/budgets.ts`: `currentYearMonth` (→`yearMonthIst()`); cron also `prevYearMonth` (→`monthStartString(y, m-1)`) and `daysLeftInMonth` (→`nowIstParts()`)
+- `db/query.ts:430`: subscription `currentMonth` key (→`yearMonthIst()`)
+- `export/xlsx.ts`: `previousMonthBounds` (→ IST via `nowIstParts`+`monthStartString`); `currentMonthBounds` already takes explicit args (safe)
+- `insights/compute.ts`: this/last month bounds (→ IST) — see §4
+
+Display formatters hard-coding `timeZone:"UTC"`/`getUTCDate()`/`toISOString().slice`
+(`handlers.ts:978, 1045, 1135`) → `formatIstDate` (display-only, noon-anchor-protected
+safe tail; leave the bespoke "DD Mon" at `863-865`).
 
 ### Sites confirmed TZ-safe (no change)
 
@@ -189,7 +201,7 @@ Real-Postgres E2E is mandatory here (the unit suite mocks `sql`).
 |---|------|-----------|
 | R1 | postgres.js session-TZ option naming uncertain | Verify `SHOW TimeZone` against a real container during TDD; fall back to `options=-c timezone=Asia/Kolkata` on the connection string. |
 | R2 | `ALTER DATABASE` needs the DB name in a static `.sql` | `DO` block with `current_database()` + `format()`. |
-| R3 | Pinning pod `TZ` shifts code that assumed UTC `new Date()` parts | Audited: only `monthProgress` / `parseCommandPeriod` / `selectedMonth` use local parts (all should be IST). Explicit-UTC code (`Date.UTC`, `getUTC*`, `toISOString`) is immune and intentional. `insights/compute` is the one to convert. |
+| R3 | Pinning pod `TZ=IST` would shift `node-cron` schedules (authored for UTC) by +5:30, breaking the nightly nudge | **Drop the pod-`TZ` pin entirely.** Keep the process on UTC; route all wall-clock calendar derivations through the explicit IST helpers instead. (Found during a review-driven audit that also expanded the Node site list — see §5.) |
 | R4 | Summary ↔ trigger disagree at the boundary | Both use the IST month window; proven equivalent; E2E covers it. |
 | R5 | Existing closed months under the old (UTC) regime | None in prod (025 not live); 027 ships with 025. |
 

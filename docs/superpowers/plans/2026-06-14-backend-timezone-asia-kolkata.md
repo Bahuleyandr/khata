@@ -613,6 +613,170 @@ git -C D:/Dev/Projects/khata commit -m "fix(tz): derive Node now/today inputs + 
 
 ---
 
+## ⚠️ Plan revision (post-review audit)
+
+A code-quality review + a full `new Date()` audit corrected two things after this plan was first written:
+
+1. **Task 7 (pin pod `TZ=Asia/Kolkata`) is DROPPED — skip it.** `node-cron` interprets schedules in the process timezone, and `cron/budgets.ts` authors them for UTC (e.g. nightly nudge `"30 15 * * *"` = 21:00 IST). Pinning `TZ=IST` would shift every cron by +5:30 and break the nudge. The process stays on UTC; IST correctness comes entirely from the explicit helpers. (See updated spec §5 + risk R3.)
+2. **Task 5b (below) is added** — the initial draft under-counted the Node side; nine more wall-clock→calendar derivations must route through the IST helpers. Run Task 5b right after Task 5, before Task 6.
+
+---
+
+## Task 5b: Remaining Node IST sites (review-driven audit)
+
+**Files:**
+- Modify: `backend/src/lib/time.ts` + `backend/src/lib/time.test.ts` (add `yearMonthIst`)
+- Modify: `backend/src/cron/budgets.ts`, `backend/src/routes/budgets.ts`, `backend/src/routes/captures.ts`, `backend/src/routes/export.ts`, `backend/src/routes/settlement.ts`, `backend/src/db/query.ts`, `backend/src/export/xlsx.ts`
+
+All sites are the same mechanical transformation: a wall-clock calendar derivation (currently UTC) routed through an IST helper. **Read each file first to confirm surrounding context, then apply the exact edit.** ESM `.js` import specifiers.
+
+- [ ] **Step 1: Add `yearMonthIst` helper (TDD)**
+
+In `backend/src/lib/time.test.ts`, add to the import and add a test:
+
+```ts
+// import line becomes:
+import { APP_TIME_ZONE, formatIstDate, monthStartString, nowIstParts, todayIst, yearMonthIst } from "./time.js";
+// new test inside describe("lib/time", ...):
+  it("yearMonthIst returns IST YYYY-MM at the boundary", () => {
+    expect(yearMonthIst(new Date("2026-06-30T20:30:00Z"))).toBe("2026-07");
+  });
+```
+
+Run `cd D:/Dev/Projects/khata/backend && npx vitest run src/lib/time.test.ts` → FAIL (yearMonthIst undefined). Then add to `backend/src/lib/time.ts`:
+
+```ts
+/** Current IST year-month as YYYY-MM. */
+export function yearMonthIst(now: Date = new Date()): string {
+  const { year, month } = nowIstParts(now);
+  return `${year}-${String(month).padStart(2, "0")}`;
+}
+```
+
+Run the test again → PASS (7 tests).
+
+- [ ] **Step 2: `cron/budgets.ts`**
+
+Add import (after the existing `../config.js`/`../db/index.js` imports near the top):
+```ts
+import { yearMonthIst, monthStartString, nowIstParts } from "../lib/time.js";
+```
+Replace the three helpers (lines ~15-29):
+```ts
+function currentYearMonth(): string {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function prevYearMonth(): string {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 7);
+}
+
+function daysLeftInMonth(): number {
+  const now = new Date();
+  const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  return last.getDate() - now.getDate();
+}
+```
+with:
+```ts
+function currentYearMonth(): string {
+  return yearMonthIst();
+}
+
+function prevYearMonth(): string {
+  const { year, month } = nowIstParts();
+  return monthStartString(year, month - 1).slice(0, 7);
+}
+
+function daysLeftInMonth(): number {
+  const { year, month, day } = nowIstParts();
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return lastDay - day;
+}
+```
+
+- [ ] **Step 3: `routes/budgets.ts`**
+
+Add `import { yearMonthIst } from "../lib/time.js";`. Change the `currentYearMonth` helper body (line ~12) from `return new Date().toISOString().slice(0, 7);` to `return yearMonthIst();`.
+
+- [ ] **Step 4: `routes/captures.ts`**
+
+Add `import { todayIst } from "../lib/time.js";`. Change the `todayIso` helper body (line ~71) from `return new Date().toISOString().slice(0, 10);` to `return todayIst();`.
+
+- [ ] **Step 5: `routes/export.ts`**
+
+Add `import { nowIstParts } from "../lib/time.js";`. Replace the default-month derivation (lines ~33-35):
+```ts
+      const now = new Date();
+      const year = Number(request.query.year ?? now.getFullYear());
+      const month = Number(request.query.month ?? now.getMonth() + 1);
+```
+with:
+```ts
+      const { year: nowYear, month: nowMonth } = nowIstParts();
+      const year = Number(request.query.year ?? nowYear);
+      const month = Number(request.query.month ?? nowMonth);
+```
+
+- [ ] **Step 6: `routes/settlement.ts`**
+
+Add `import { nowIstParts } from "../lib/time.js";`. Replace the `selectedMonth` body (lines ~20-24):
+```ts
+  const now = new Date();
+  return {
+    year: query.year ?? now.getFullYear(),
+    month: query.month ?? now.getMonth() + 1,
+  };
+```
+with:
+```ts
+  const { year, month } = nowIstParts();
+  return {
+    year: query.year ?? year,
+    month: query.month ?? month,
+  };
+```
+
+- [ ] **Step 7: `db/query.ts`**
+
+Add `import { yearMonthIst } from "../lib/time.js";`. Change line ~430 from `const currentMonth = new Date().toISOString().slice(0, 7);` to `const currentMonth = yearMonthIst();`. (This is compared at line ~451 against `row.last_seen.slice(0,7)`, which is now an IST date string — so both sides must be IST.)
+
+- [ ] **Step 8: `export/xlsx.ts` — `previousMonthBounds` → IST**
+
+Add `import { nowIstParts, monthStartString } from "../lib/time.js";`. Replace the body of `previousMonthBounds` (lines ~177-190) with:
+```ts
+  const { year, month } = nowIstParts(now);
+  // `month` is the 1-based current IST month; the previous month start handles the Jan→Dec rollover.
+  const start = monthStartString(year, month - 1); // "YYYY-MM-01"
+  const [y, m] = start.split("-").map(Number) as [number, number];
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const end = `${y}-${String(m).padStart(2, "0")}-${lastDay}`;
+  const label = new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const rangeKey = `${y}-${String(m).padStart(2, "0")}`;
+  return { start, end, label, rangeKey };
+```
+(`previousMonthBounds` keeps its `now: Date = new Date()` signature. `currentMonthBounds` is unchanged — it already takes explicit `year`/`month`.) If `backend/src/export/xlsx.test.ts` exists and mocks `../db/index.js`, add: `expect(previousMonthBounds(new Date("2026-06-30T20:30:00Z"))).toMatchObject({ rangeKey: "2026-06", start: "2026-06-01" });` (IST "now" is July → previous month June; the old UTC code returned May). Otherwise rely on the `monthStartString`/`nowIstParts` unit tests.
+
+- [ ] **Step 9: Typecheck + full suite green**
+
+Run: `cd D:/Dev/Projects/khata/backend && npx tsc -p tsconfig.json && npx vitest run`
+Expected: PASS — no type errors; full suite green (incl. the new `yearMonthIst` test). Then `cd D:/Dev/Projects/khata && npx vitest run` (frontend, 12) to be safe.
+
+- [ ] **Step 10: Commit**
+```bash
+git -C D:/Dev/Projects/khata add backend/src/lib/time.ts backend/src/lib/time.test.ts backend/src/cron/budgets.ts backend/src/routes/budgets.ts backend/src/routes/captures.ts backend/src/routes/export.ts backend/src/routes/settlement.ts backend/src/db/query.ts backend/src/export/xlsx.ts
+git -C D:/Dev/Projects/khata commit -m "fix(tz): route remaining Node calendar derivations through IST helpers"
+```
+Append a second `-m` trailer: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
+
+---
+
 ## Task 6: Real-Postgres end-to-end verification (throwaway, not committed)
 
 **Files:**
