@@ -587,7 +587,7 @@ export async function expensesRoutes(app: FastifyInstance) {
             ${settlementScope}
           )
           RETURNING id, amount_cents::text, currency, description, merchant,
-                    merchant_canonical_id, category_id, account_id::text AS account_id,
+                    merchant_canonical_id, category_id, account_id,
                     source, occurred_at, updated_at, image_key,
                     review_status, confidence,
                     paid_by_user_id::text AS paid_by_user_id, settlement_scope
@@ -856,7 +856,7 @@ export async function expensesRoutes(app: FastifyInstance) {
           WHERE e.id = ${request.params.id}
             AND e.user_id = ${session.userId}
           LIMIT 1
-          FOR UPDATE
+          FOR UPDATE OF e
         `;
         if (!current) return null;
 
@@ -924,7 +924,7 @@ export async function expensesRoutes(app: FastifyInstance) {
             WHERE id = ${request.params.id}
               AND user_id = ${session.userId}
             RETURNING id, amount_cents::text, currency, description, merchant,
-                      merchant_canonical_id, category_id, account_id::text AS account_id,
+                      merchant_canonical_id, category_id, account_id,
                       source, occurred_at, updated_at, image_key,
                       review_status, confidence,
                       paid_by_user_id::text AS paid_by_user_id, settlement_scope
@@ -1008,7 +1008,7 @@ export async function expensesRoutes(app: FastifyInstance) {
           WHERE id = ${request.params.id}
             AND user_id = ${session.userId}
           RETURNING id, amount_cents::text, currency, description, merchant,
-                    merchant_canonical_id, category_id, account_id::text AS account_id,
+                    merchant_canonical_id, category_id, account_id,
                     source, occurred_at, updated_at, image_key,
                     review_status, confidence,
                     paid_by_user_id::text AS paid_by_user_id, settlement_scope
@@ -1153,7 +1153,7 @@ export async function expensesRoutes(app: FastifyInstance) {
             WHERE id = ${keeper.id}
               AND user_id = ${session.userId}
             RETURNING id, amount_cents::text, currency, description, merchant,
-                      merchant_canonical_id, category_id, account_id::text AS account_id,
+                      merchant_canonical_id, category_id, account_id,
                       source, occurred_at, updated_at, image_key,
                       review_status, confidence,
                       paid_by_user_id::text AS paid_by_user_id, settlement_scope
