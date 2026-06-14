@@ -14,10 +14,10 @@ export default function SubscriptionsPanel({
 }: {
   subscriptions: SubscriptionCandidate[]
   busy: boolean
-  onConfirm: (subscription: SubscriptionCandidate) => Promise<void>
-  onIgnore: (subscription: SubscriptionCandidate) => Promise<void>
-  onInactive: (subscription: SubscriptionCandidate) => Promise<void>
-  onClearPreference: (subscription: SubscriptionCandidate) => Promise<void>
+  onConfirm: (subscription: SubscriptionCandidate) => Promise<boolean>
+  onIgnore: (subscription: SubscriptionCandidate) => Promise<boolean>
+  onInactive: (subscription: SubscriptionCandidate) => Promise<boolean>
+  onClearPreference: (subscription: SubscriptionCandidate) => Promise<boolean>
 }) {
   const [subscriptionFilter, setSubscriptionFilter] = useState<SubscriptionFilter>('active')
 

@@ -42,11 +42,11 @@ export default function SmartRulesPanel({
     account_id: string | null
     tag_names: string[]
     review_status: 'needs_review' | 'reviewed' | 'ignored' | null
-  }) => Promise<void>
-  onToggleEnabled: (ruleId: string, enabled: boolean) => Promise<void>
-  onDelete: (ruleId: string) => Promise<void>
-  onAcceptSuggestion: (suggestionId: string) => Promise<void>
-  onDismissSuggestion: (suggestionId: string) => Promise<void>
+  }) => Promise<boolean>
+  onToggleEnabled: (ruleId: string, enabled: boolean) => Promise<boolean>
+  onDelete: (ruleId: string) => Promise<boolean>
+  onAcceptSuggestion: (suggestionId: string) => Promise<boolean>
+  onDismissSuggestion: (suggestionId: string) => Promise<boolean>
 }) {
   const [newRuleName, setNewRuleName] = useState('')
   const [newRulePattern, setNewRulePattern] = useState('')
@@ -70,7 +70,7 @@ export default function SmartRulesPanel({
 
   async function createNewRule() {
     if (!newRuleName.trim() || !newRulePattern.trim()) return
-    await onAdd({
+    const ok = await onAdd({
       name: newRuleName,
       pattern: newRulePattern,
       match_scope: newRuleScope,
@@ -80,9 +80,11 @@ export default function SmartRulesPanel({
       tag_names: parseTagNames(newRuleTags),
       review_status: newRuleReviewStatus ? (newRuleReviewStatus as 'needs_review' | 'reviewed' | 'ignored') : null,
     })
-    setNewRuleName('')
-    setNewRulePattern('')
-    setNewRuleTags('')
+    if (ok) {
+      setNewRuleName('')
+      setNewRulePattern('')
+      setNewRuleTags('')
+    }
   }
 
   return (

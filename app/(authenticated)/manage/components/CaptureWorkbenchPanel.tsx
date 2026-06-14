@@ -36,8 +36,8 @@ export default function CaptureWorkbenchPanel({
   onSetCaptureSource: (value: string) => void
   onSetCaptureFailureKind: (value: string) => void
   onSetCaptureSearch: (value: string) => void
-  onReplay: (captureId: string) => Promise<void>
-  onIgnore: (captureId: string) => Promise<void>
+  onReplay: (captureId: string) => Promise<boolean>
+  onIgnore: (captureId: string) => Promise<boolean>
   onMakeRule: (draft: RuleDraft) => void
 }) {
   const [captureActionResult, setCaptureActionResult] = useState<string | null>(null)

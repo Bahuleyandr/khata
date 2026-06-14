@@ -12,9 +12,9 @@ export default function AccountsPanel({
 }: {
   accounts: Account[]
   busy: boolean
-  onAdd: (data: { name: string; type: AccountType; institution: string | null; last_four: string | null; is_default: boolean }) => Promise<void>
-  onSetDefault: (accountId: string) => Promise<void>
-  onArchive: (accountId: string) => Promise<void>
+  onAdd: (data: { name: string; type: AccountType; institution: string | null; last_four: string | null; is_default: boolean }) => Promise<boolean>
+  onSetDefault: (accountId: string) => Promise<boolean>
+  onArchive: (accountId: string) => Promise<boolean>
 }) {
   const [newAccountName, setNewAccountName] = useState('')
   const [newAccountType, setNewAccountType] = useState<AccountType>('card')
@@ -23,16 +23,18 @@ export default function AccountsPanel({
 
   async function createNewAccount() {
     if (!newAccountName.trim()) return
-    await onAdd({
+    const ok = await onAdd({
       name: newAccountName,
       type: newAccountType,
       institution: newAccountInstitution.trim() || null,
       last_four: newAccountLastFour.trim() || null,
       is_default: accounts.length === 0,
     })
-    setNewAccountName('')
-    setNewAccountInstitution('')
-    setNewAccountLastFour('')
+    if (ok) {
+      setNewAccountName('')
+      setNewAccountInstitution('')
+      setNewAccountLastFour('')
+    }
   }
 
   return (

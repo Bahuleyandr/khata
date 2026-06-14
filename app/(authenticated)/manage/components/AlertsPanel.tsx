@@ -9,7 +9,7 @@ export default function AlertsPanel({
 }: {
   alerts: UserAlert[]
   busy: boolean
-  onDismiss: (alertId: string) => Promise<void>
+  onDismiss: (alertId: string) => Promise<boolean>
 }) {
   return (
     <section className="card workspace-card" id="alerts">

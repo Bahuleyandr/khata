@@ -201,14 +201,16 @@ export default function ManagePage() {
     refresh().catch((e: Error) => setError(e.message))
   }, [refresh])
 
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void>): Promise<boolean> {
     setBusy(true)
     setError(null)
     try {
       await action()
       await refresh()
+      return true
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed')
+      return false
     } finally {
       setBusy(false)
     }
@@ -365,7 +367,7 @@ export default function ManagePage() {
           categories={categories}
           accounts={accounts}
           busy={busy}
-          onRefresh={refresh}
+          onRun={run}
           onError={(msg) => setError(msg)}
         />
 

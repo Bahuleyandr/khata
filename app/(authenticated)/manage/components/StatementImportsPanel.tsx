@@ -27,7 +27,7 @@ function StatementRowCorrection({
   categories: Category[]
   accounts: Account[]
   busy: boolean
-  onSave: (data: { category_id: string | null; account_id: string | null; tag_names: string[] }) => Promise<void>
+  onSave: (data: { category_id: string | null; account_id: string | null; tag_names: string[] }) => Promise<boolean>
 }) {
   const [categoryId, setCategoryId] = useState(row.category_id ?? '')
   const [accountId, setAccountId] = useState(row.account_id ?? '')
@@ -86,14 +86,14 @@ export default function StatementImportsPanel({
   categories,
   accounts,
   busy,
-  onRefresh,
+  onRun,
   onError,
 }: {
   statements: StatementImport[]
   categories: Category[]
   accounts: Account[]
   busy: boolean
-  onRefresh: () => Promise<void>
+  onRun: (action: () => Promise<void>) => Promise<boolean>
   onError: (msg: string) => void
 }) {
   // Statement row state is owned locally (loaded on-demand, not in refresh())
@@ -113,6 +113,9 @@ export default function StatementImportsPanel({
     pendingStatementRows.some((row) => row.id === id),
   )
 
+  // loadStatementReview loads rows into panel-local state (not coordinator data).
+  // It is called via run() (matching original) so it sets busy, surfaces errors via the
+  // coordinator error banner, and calls refresh() after (which updates imported_count badge).
   async function loadStatementReview(statementId: string) {
     const res = await getStatementRows(statementId)
     setSelectedStatementId(statementId)
@@ -200,7 +203,6 @@ export default function StatementImportsPanel({
     setSelectedStatementRowIds(result.rows.filter((row) => row.status === 'pending').map((row) => row.id))
     setStatementFile(null)
     setStatementInputKey((key) => key + 1)
-    await onRefresh()
   }
 
   return (
@@ -230,7 +232,7 @@ export default function StatementImportsPanel({
         <button
           type="button"
           className="button-primary"
-          onClick={() => void uploadSelectedStatement()}
+          onClick={() => void onRun(uploadSelectedStatement)}
           disabled={busy || !statementFile}
         >
           Upload
@@ -251,14 +253,14 @@ export default function StatementImportsPanel({
             <div className="row-actions">
               <button
                 type="button"
-                onClick={() => void loadStatementReview(statement.id)}
+                onClick={() => void onRun(() => loadStatementReview(statement.id))}
                 disabled={busy}
               >
                 Review
               </button>
               <button
                 type="button"
-                onClick={() => void reparseStatement(statement.id)}
+                onClick={() => void onRun(() => reparseStatement(statement.id))}
                 disabled={busy || !['failed', 'parsed'].includes(statement.status)}
               >
                 Re-parse
@@ -284,21 +286,21 @@ export default function StatementImportsPanel({
               </button>
               <button
                 type="button"
-                onClick={() => void importSelectedRows(selectedPendingRowIds)}
+                onClick={() => void onRun(() => importSelectedRows(selectedPendingRowIds))}
                 disabled={busy || selectedPendingRowIds.length === 0}
               >
                 Import selected
               </button>
               <button
                 type="button"
-                onClick={() => void importSelectedRows()}
+                onClick={() => void onRun(() => importSelectedRows())}
                 disabled={busy || pendingStatementRows.length === 0}
               >
                 Import all
               </button>
               <button
                 type="button"
-                onClick={() => void ignoreSelectedRows()}
+                onClick={() => void onRun(ignoreSelectedRows)}
                 disabled={busy || selectedPendingRowIds.length === 0}
               >
                 Ignore selected
@@ -336,7 +338,7 @@ export default function StatementImportsPanel({
             </select>
             <button
               type="button"
-              onClick={() => void applyCorrectionsToSelected()}
+              onClick={() => void onRun(applyCorrectionsToSelected)}
               disabled={busy || selectedPendingRowIds.length === 0}
             >
               Apply to selected
@@ -388,13 +390,13 @@ export default function StatementImportsPanel({
                             categories={categories}
                             accounts={accounts}
                             busy={busy}
-                            onSave={(data) => saveStatementRowCorrection(row.id, data)}
+                            onSave={(data) => onRun(() => saveStatementRowCorrection(row.id, data))}
                           />
                         ) : null}
                         {row.status === 'ignored' ? (
                           <button
                             type="button"
-                            onClick={() => void restoreStatementRow(row.id)}
+                            onClick={() => void onRun(() => restoreStatementRow(row.id))}
                             disabled={busy}
                           >
                             Restore

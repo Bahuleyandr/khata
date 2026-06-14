@@ -27,7 +27,7 @@ export default function AuditTrailPanel({
   onSetAuditEntityType: (value: string) => void
   onSetAuditLimit: (value: number) => void
   onSetAuditDetail: (event: AuditEvent | null) => void
-  onUndo: (auditId: string) => Promise<void>
+  onUndo: (auditId: string) => Promise<boolean>
 }) {
   const auditActions = useMemo(
     () => Array.from(new Set([...AUDIT_ACTION_OPTIONS, ...auditEvents.map((event) => event.action)])).sort(),

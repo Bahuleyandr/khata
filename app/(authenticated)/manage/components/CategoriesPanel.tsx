@@ -11,8 +11,8 @@ function CategoryRow({
 }: {
   category: Category
   busy: boolean
-  onRename: (name: string) => Promise<void>
-  onDelete: () => Promise<void>
+  onRename: (name: string) => Promise<boolean>
+  onDelete: () => Promise<boolean>
 }) {
   const [name, setName] = useState(category.name)
 
@@ -40,17 +40,17 @@ export default function CategoriesPanel({
 }: {
   categories: Category[]
   busy: boolean
-  onAdd: (name: string) => Promise<void>
-  onRename: (categoryId: string, name: string) => Promise<void>
-  onDelete: (categoryId: string) => Promise<void>
+  onAdd: (name: string) => Promise<boolean>
+  onRename: (categoryId: string, name: string) => Promise<boolean>
+  onDelete: (categoryId: string) => Promise<boolean>
 }) {
   const [newCategory, setNewCategory] = useState('')
 
   async function addCategory() {
     const name = newCategory.trim()
     if (!name) return
-    await onAdd(name)
-    setNewCategory('')
+    const ok = await onAdd(name)
+    if (ok) setNewCategory('')
   }
 
   return (

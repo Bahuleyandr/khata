@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { formatDate, grantAccessUser, type AccessRole, type AccessUser, type Ledger, type Me } from '../../../../lib/api'
+import { formatDate, type AccessRole, type AccessUser, type Ledger, type Me } from '../../../../lib/api'
 import { ledgerDisplayName, ledgerPermissionSummary, type AccessPreset } from './helpers'
 
 function AccessUserRow({
@@ -15,9 +15,9 @@ function AccessUserRow({
   user: AccessUser
   me: Me
   busy: boolean
-  onChange: (data: { role?: AccessRole; can_view?: boolean; can_add?: boolean }) => Promise<void>
-  onRevoke: () => Promise<void>
-  onReactivate: () => Promise<void>
+  onChange: (data: { role?: AccessRole; can_view?: boolean; can_add?: boolean }) => Promise<boolean>
+  onRevoke: () => Promise<boolean>
+  onReactivate: () => Promise<boolean>
 }) {
   const isProtectedOwner = user.telegram_user_id === user.ledger_id || me.telegram_user_id === user.telegram_user_id
   const name = user.first_name || user.username || `Telegram ${user.telegram_user_id}`
@@ -104,10 +104,10 @@ export default function LedgerAccessPanel({
     role: AccessRole
     can_view: boolean
     can_add: boolean
-  }) => Promise<void>
-  onChangeUser: (user: AccessUser, data: { role?: AccessRole; can_view?: boolean; can_add?: boolean }) => Promise<void>
-  onRevokeUser: (user: AccessUser) => Promise<void>
-  onReactivateUser: (user: AccessUser) => Promise<void>
+  }) => Promise<boolean>
+  onChangeUser: (user: AccessUser, data: { role?: AccessRole; can_view?: boolean; can_add?: boolean }) => Promise<boolean>
+  onRevokeUser: (user: AccessUser) => Promise<boolean>
+  onReactivateUser: (user: AccessUser) => Promise<boolean>
 }) {
   const [newAccessTelegramId, setNewAccessTelegramId] = useState('')
   const [newAccessName, setNewAccessName] = useState('')
@@ -136,7 +136,7 @@ export default function LedgerAccessPanel({
   async function addAccessUser() {
     const telegramId = newAccessTelegramId.trim()
     if (!telegramId) return
-    await onAddUser({
+    const ok = await onAddUser({
       telegram_user_id: telegramId,
       first_name: newAccessName.trim() || undefined,
       username: newAccessUsername.trim().replace(/^@/, '') || undefined,
@@ -144,10 +144,12 @@ export default function LedgerAccessPanel({
       can_view: newAccessCanView,
       can_add: newAccessCanView && newAccessCanAdd,
     })
-    setNewAccessTelegramId('')
-    setNewAccessName('')
-    setNewAccessUsername('')
-    applyAccessPreset('partner')
+    if (ok) {
+      setNewAccessTelegramId('')
+      setNewAccessName('')
+      setNewAccessUsername('')
+      applyAccessPreset('partner')
+    }
   }
 
   return (

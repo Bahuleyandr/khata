@@ -17,8 +17,8 @@ export default function BudgetsPanel({
   budgets: BudgetVariance[]
   busy: boolean
   defaultCategoryId: string
-  onSetBudget: (categoryId: string, cents: number) => Promise<void>
-  onClearBudget: (categoryId: string) => Promise<void>
+  onSetBudget: (categoryId: string, cents: number) => Promise<boolean>
+  onClearBudget: (categoryId: string) => Promise<boolean>
   onError: (msg: string) => void
 }) {
   const [budgetCategory, setBudgetCategory] = useState(defaultCategoryId)
@@ -35,8 +35,8 @@ export default function BudgetsPanel({
       onError('Choose a category and enter a valid amount.')
       return
     }
-    await onSetBudget(effectiveBudgetCategory, cents)
-    setBudgetAmount('')
+    const ok = await onSetBudget(effectiveBudgetCategory, cents)
+    if (ok) setBudgetAmount('')
   }
 
   return (

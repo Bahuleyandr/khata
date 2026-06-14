@@ -19,7 +19,7 @@ export default function ReconciliationPanel({
   busy: boolean
   onSetMonth: (value: string) => void
   onSetReconcileAccount: (value: string) => void
-  onRefresh: () => Promise<void>
+  onRefresh: () => Promise<boolean>
 }) {
   return (
     <section className="card workspace-card wide-card">
