@@ -193,17 +193,22 @@ export async function computeAndStoreInsightsForUser(userId: number): Promise<vo
   const mtd = thisMonthBoundsIst();
   const last = lastMonthBoundsIst();
 
-  const [mtdVsLast, topMerchants, recurring] = await Promise.all([
+  const [mtdVsLastRaw, topMerchantsRaw, recurringRaw] = await Promise.all([
     computeMtdVsLastMonth(userId),
     computeTopMerchantsMtd(userId),
     computeRecurring(userId),
   ]);
 
+  // Pass payloads as plain objects so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const mtdVsLast = JSON.parse(JSON.stringify(mtdVsLastRaw));
+  const topMerchants = JSON.parse(JSON.stringify(topMerchantsRaw));
+  const recurring = JSON.parse(JSON.stringify(recurringRaw));
+
   await sql`
     INSERT INTO insights (user_id, kind, payload, period_start, period_end)
     VALUES
-      (${userId}, 'mtd_vs_last_month', ${JSON.stringify(mtdVsLast)}::jsonb, ${mtd.start}, ${mtd.end}),
-      (${userId}, 'top_merchants_mtd', ${JSON.stringify(topMerchants)}::jsonb, ${mtd.start}, ${mtd.end}),
-      (${userId}, 'recurring',         ${JSON.stringify(recurring)}::jsonb,   ${last.start}, ${mtd.end})
+      (${userId}, 'mtd_vs_last_month', ${mtdVsLast}, ${mtd.start}, ${mtd.end}),
+      (${userId}, 'top_merchants_mtd', ${topMerchants}, ${mtd.start}, ${mtd.end}),
+      (${userId}, 'recurring',         ${recurring},   ${last.start}, ${mtd.end})
   `;
 }

@@ -72,7 +72,8 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
   // Zomato?" works even when the raw `merchant` text is "ZOMATO IN" /
   // "Zomato Order"). Best-effort — null merchant just yields null.
   const merchantCanonicalId = await getOrCreateMerchantCanonical(data.userId, data.merchant);
-  const confidenceJson = JSON.stringify(data.confidence ?? {});
+  // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+  const confidence = JSON.parse(JSON.stringify(data.confidence ?? {}));
 
   return sql.begin(async (tx) => {
     const [created] = await tx<DeletedExpenseData[]>`
@@ -89,7 +90,7 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
          ${data.upi_reference_id ?? null}, ${data.review_status ?? "reviewed"},
          ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null},
          ${data.account_id ?? null}, ${data.capture_event_id ?? null},
-         ${confidenceJson}::jsonb, ${data.paid_by_user_id ?? null}, ${data.settlement_scope ?? "personal"})
+         ${confidence}, ${data.paid_by_user_id ?? null}, ${data.settlement_scope ?? "personal"})
       RETURNING ${AUDIT_COLUMNS}
     `;
     await recordAuditEvent(

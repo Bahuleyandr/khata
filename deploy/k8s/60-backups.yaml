@@ -9,6 +9,28 @@ spec:
     requests:
       storage: 5Gi
 ---
+# ─────────────────────────────────────────────────────────────────────────────
+# CronJob: khata-postgres-backup
+#
+# Nightly Postgres dump with:
+#   • dump-sanity check  (pg_restore --list on the just-written file)
+#   • inert offsite upload (Change 3 — enabled only when Secret is present)
+#
+# Offsite Secret (optional):
+#   Create the Secret when you want encrypted S3-compatible uploads:
+#
+#   kubectl create secret generic khata-backup-offsite -n khata \
+#     --from-literal=ENDPOINT=https://s3.example.com \
+#     --from-literal=BUCKET=khata-backups \
+#     --from-literal=ACCESS_KEY_ID=<id> \
+#     --from-literal=SECRET_ACCESS_KEY=<key> \
+#     --from-literal=PASSPHRASE=<strong-random-passphrase>
+#
+#   When absent (all keys missing / empty), the offsite-upload container
+#   prints "offsite disabled" and exits 0  — the on-box dump is still kept.
+#   PASSPHRASE is mandatory for the upload to proceed; if only ENDPOINT/BUCKET
+#   are set but PASSPHRASE is empty the container will also exit 0 (no upload).
+# ─────────────────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -28,10 +50,13 @@ spec:
           securityContext:
             seccompProfile:
               type: RuntimeDefault
-          containers:
+          # pg-dump runs first as an initContainer so the dump file is on the
+          # shared volume before offsite-upload tries to read it.
+          initContainers:
             - name: pg-dump
               image: postgres:16.8-alpine
               securityContext:
+                runAsNonRoot: true
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: ["ALL"]
@@ -46,6 +71,7 @@ spec:
                 - |
                   set -eu
                   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  outfile="/backups/khata-postgres-${stamp}.dump"
                   pg_dump \
                     --host=khata-postgres.khata.svc.cluster.local \
                     --username=khata \
@@ -53,8 +79,90 @@ spec:
                     --format=custom \
                     --no-owner \
                     --no-acl \
-                    --file="/backups/khata-postgres-${stamp}.dump"
+                    --file="${outfile}"
+                  # Change 1: dump sanity — fail the job immediately if the
+                  # custom-format file cannot be parsed (corrupt / truncated).
+                  pg_restore --list "${outfile}" >/dev/null
                   find /backups -type f -name 'khata-postgres-*.dump' -mtime +14 -delete
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          containers:
+            # Change 3: inert offsite upload.
+            # Reads the newest dump from /backups, encrypts it with openssl
+            # AES-256-CBC (pbkdf2) and uploads to an S3-compatible endpoint.
+            # All behaviour is gated on the khata-backup-offsite Secret; if the
+            # Secret does not exist or any key is empty the container exits 0.
+            - name: offsite-upload
+              image: amazon/aws-cli:2.24.0
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: ENDPOINT
+                      optional: true
+                - name: BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: BUCKET
+                      optional: true
+                - name: ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: ACCESS_KEY_ID
+                      optional: true
+                - name: SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: SECRET_ACCESS_KEY
+                      optional: true
+                - name: PASSPHRASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: PASSPHRASE
+                      optional: true
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # All three must be non-empty for an upload to happen.
+                  if [ -z "${ENDPOINT:-}" ] || [ -z "${BUCKET:-}" ] || [ -z "${PASSPHRASE:-}" ]; then
+                    echo "offsite disabled (no khata-backup-offsite secret) — on-box backup only"
+                    exit 0
+                  fi
+                  if ! command -v openssl >/dev/null 2>&1; then
+                    echo "WARNING: openssl not found in this image; skipping offsite upload"
+                    exit 0
+                  fi
+                  dump="$(ls -1t /backups/khata-postgres-*.dump 2>/dev/null | head -n 1 || true)"
+                  if [ -z "$dump" ]; then
+                    echo "ERROR: no dump found in /backups — cannot upload offsite"
+                    exit 1
+                  fi
+                  encrypted="/tmp/$(basename "${dump}").enc"
+                  openssl enc -aes-256-cbc -pbkdf2 -salt \
+                    -pass env:PASSPHRASE \
+                    -in "${dump}" \
+                    -out "${encrypted}"
+                  AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
+                  AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
+                    aws s3 cp \
+                      --endpoint-url "${ENDPOINT}" \
+                      --no-progress \
+                      "${encrypted}" \
+                      "s3://${BUCKET}/postgres/$(basename "${encrypted}")"
+                  rm -f "${encrypted}"
+                  echo "offsite upload complete: s3://${BUCKET}/postgres/$(basename "${encrypted}")"
               volumeMounts:
                 - name: backups
                   mountPath: /backups
@@ -123,6 +231,12 @@ spec:
               persistentVolumeClaim:
                 claimName: khata-backups-data
 ---
+# Change 2: restore-drill hardening
+#   • set -eu (was set -u)
+#   • freshness check: newest dump must be < 26 h old
+#   • pg_restore --exit-on-error: abort on first object error
+#   • row-count assertion: expenses table must have ≥ 1 row
+#   • preserved: scratch DB lifecycle, INSERT INTO restore_drills, final test
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -158,7 +272,7 @@ spec:
               command: ["/bin/sh", "-c"]
               args:
                 - |
-                  set -u
+                  set -eu
                   host="khata-postgres.khata.svc.cluster.local"
                   db="khata"
                   user="khata"
@@ -167,25 +281,66 @@ spec:
                   started="$(date +%s%3N)"
                   status="passed"
                   error=""
+
                   if [ -z "$backup" ]; then
                     status="failed"
                     error="No postgres dump found in backup PVC"
                   else
-                    createdb --host="$host" --username="$user" "$drill_db" 2>/tmp/restore-drill.err || status="failed"
-                    if [ "$status" = "passed" ]; then
-                      pg_restore --host="$host" --username="$user" --dbname="$drill_db" --no-owner --no-acl "$backup" 2>/tmp/restore-drill.err || status="failed"
-                    fi
-                    dropdb --if-exists --host="$host" --username="$user" "$drill_db" >/dev/null 2>&1 || true
-                    if [ "$status" = "failed" ]; then
-                      error="$(cat /tmp/restore-drill.err 2>/dev/null | tail -c 500 | tr '\n' ' ')"
+                    # Freshness check: fail if newest dump is older than 26 h
+                    dump_mtime="$(stat -c %Y "$backup")"
+                    now="$(date +%s)"
+                    age_s="$((now - dump_mtime))"
+                    if [ "$age_s" -gt 93600 ]; then
+                      status="failed"
+                      error="Newest dump is ${age_s}s old (> 26 h); backup may be stale"
                     fi
                   fi
+
+                  if [ "$status" = "passed" ]; then
+                    createdb --host="$host" --username="$user" "$drill_db" 2>/tmp/restore-drill.err \
+                      || { status="failed"; error="$(cat /tmp/restore-drill.err 2>/dev/null | tail -c 500 | tr '\n' ' ')"; }
+                  fi
+
+                  if [ "$status" = "passed" ]; then
+                    # --exit-on-error: abort on first object-level error instead of skipping
+                    pg_restore \
+                      --host="$host" \
+                      --username="$user" \
+                      --dbname="$drill_db" \
+                      --no-owner \
+                      --no-acl \
+                      --exit-on-error \
+                      "$backup" 2>/tmp/restore-drill.err \
+                      || { status="failed"; error="$(cat /tmp/restore-drill.err 2>/dev/null | tail -c 500 | tr '\n' ' ')"; }
+                  fi
+
+                  if [ "$status" = "passed" ]; then
+                    # Row-count assertion: expenses must have ≥ 1 row
+                    # A DDL-only or empty restore must FAIL the drill.
+                    row_count="$(psql \
+                      --host="$host" \
+                      --username="$user" \
+                      --dbname="$drill_db" \
+                      --tuples-only \
+                      --no-align \
+                      -c "SELECT COUNT(*) FROM expenses;" 2>/tmp/restore-drill.err | tr -d '[:space:]')"
+                    if [ -z "$row_count" ] || [ "$row_count" -lt 1 ]; then
+                      status="failed"
+                      error="Row-count assertion failed: expenses has ${row_count:-0} rows (want ≥ 1)"
+                    fi
+                  fi
+
+                  # Unconditional cleanup — always drop the scratch DB
+                  dropdb --if-exists --host="$host" --username="$user" "$drill_db" >/dev/null 2>&1 || true
+
                   ended="$(date +%s%3N)"
                   duration="$((ended - started))"
                   backup_b64="$(printf '%s' "$backup" | base64 | tr -d '\n')"
                   error_b64="$(printf '%s' "$error" | base64 | tr -d '\n')"
                   drill_db_b64="$(printf '%s' "$drill_db" | base64 | tr -d '\n')"
-                  pod_b64="$(printf '%s' "${HOSTNAME:-unknown}" | base64 | tr -d '\n')"
+                  # shellcheck disable=SC3028  # HOSTNAME always set by kubelet in k8s pods
+                  pod_name="${HOSTNAME:-unknown}"
+                  pod_b64="$(printf '%s' "$pod_name" | base64 | tr -d '\n')"
                   psql --host="$host" --username="$user" --dbname="$db" \
                     --set=ON_ERROR_STOP=1 \
                     --command="INSERT INTO restore_drills (status, backup_key, checked_at, duration_ms, detail, error_reason)

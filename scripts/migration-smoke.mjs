@@ -169,6 +169,196 @@ async function assertTimezoneBucketing() {
   console.log("Timezone default + IST bucketing verified.");
 }
 
+/**
+ * Migration 029: confidence jsonb decode.
+ *
+ * Migration 029 already ran during migrate:dev above, so we can no longer test
+ * that it decoded existing rows at startup. Instead we:
+ *  1. Insert a deliberately double-encoded row (the OLD broken way) using
+ *     to_jsonb('...'::text) which stores a jsonb STRING node.
+ *  2. Assert that it is indeed broken (jsonb_typeof = 'string').
+ *  3. Run the same decode UPDATE the migration applies.
+ *  4. Assert jsonb_typeof = 'object' and the value reads correctly.
+ *
+ * Uses user_id 996 to avoid colliding with 997/998/999.
+ */
+async function assertConfidenceDecode() {
+  console.log("Verifying confidence jsonb decode (migration 029)...");
+
+  // Insert a double-encoded row the old broken way.
+  await psql(
+    `INSERT INTO expenses (user_id, amount_cents, occurred_at, confidence)
+     VALUES (996, 1000, '2026-06-01T10:00:00Z', to_jsonb('{"overall":85,"amount":100,"date":95,"merchant":95,"category":96,"account":92,"source":98,"reasons":[]}'::text))`,
+  );
+
+  // Confirm it's broken (jsonb_typeof = 'string').
+  const typeBefore = await psql(
+    "SELECT jsonb_typeof(confidence) FROM expenses WHERE user_id = 996",
+  );
+  if (typeBefore !== "string") {
+    throw new Error(`Expected double-encoded row to have jsonb_typeof 'string', got '${typeBefore}'`);
+  }
+
+  // Run the decode the migration applies.
+  await psql(
+    "UPDATE expenses SET confidence = (confidence #>> '{}')::jsonb WHERE jsonb_typeof(confidence) = 'string' AND user_id = 996",
+  );
+
+  // Assert it decoded to an object.
+  const typeAfter = await psql(
+    "SELECT jsonb_typeof(confidence) FROM expenses WHERE user_id = 996",
+  );
+  if (typeAfter !== "object") {
+    throw new Error(`Expected decoded confidence to be jsonb 'object', got '${typeAfter}'`);
+  }
+
+  // Assert the value reads correctly.
+  const overall = await psql(
+    "SELECT confidence->>'overall' FROM expenses WHERE user_id = 996",
+  );
+  if (overall !== "85") {
+    throw new Error(`Expected confidence->>'overall' = '85', got '${overall}'`);
+  }
+
+  console.log("Confidence jsonb decode verified.");
+}
+
+/**
+ * Migration 030: remaining jsonb double-encoding decode.
+ *
+ * Covers capture_events.confidence (029), capture_events.diagnosis (030),
+ * and monthly_closes.snapshot (030). Uses user_id 995 to avoid collisions.
+ *
+ * For each column:
+ *  1. Insert a deliberately double-encoded row via to_jsonb('...'::text).
+ *  2. Assert jsonb_typeof = 'string' (broken).
+ *  3. Run the decode UPDATE from the migration.
+ *  4. Assert jsonb_typeof = 'object' and a field reads correctly.
+ */
+async function assertRemainingJsonbDecode() {
+  console.log("Verifying remaining jsonb decode (migration 030)...");
+
+  // --- capture_events.confidence (already fixed by 029, confirm still correct) ---
+  await psql(
+    `INSERT INTO capture_events (user_id, source, confidence)
+     VALUES (995, 'telegram_text', to_jsonb('{"overall":72,"amount":80,"date":90,"merchant":70,"category":60,"account":65,"source":95,"reasons":["low_merchant"]}'::text))`,
+  );
+  const confTypeBefore = await psql(
+    "SELECT jsonb_typeof(confidence) FROM capture_events WHERE user_id = 995",
+  );
+  if (confTypeBefore !== "string") {
+    throw new Error(`Expected double-encoded capture confidence to be 'string', got '${confTypeBefore}'`);
+  }
+  await psql(
+    "UPDATE capture_events SET confidence = (confidence #>> '{}')::jsonb WHERE jsonb_typeof(confidence) = 'string' AND user_id = 995",
+  );
+  const confTypeAfter = await psql(
+    "SELECT jsonb_typeof(confidence) FROM capture_events WHERE user_id = 995",
+  );
+  if (confTypeAfter !== "object") {
+    throw new Error(`Expected decoded capture confidence to be 'object', got '${confTypeAfter}'`);
+  }
+  const confOverall = await psql(
+    "SELECT confidence->>'overall' FROM capture_events WHERE user_id = 995",
+  );
+  if (confOverall !== "72") {
+    throw new Error(`Expected capture confidence->>'overall' = '72', got '${confOverall}'`);
+  }
+
+  // --- capture_events.diagnosis (030) ---
+  await psql(
+    `UPDATE capture_events
+     SET diagnosis = to_jsonb('{"title":"Parse error","detail":"LLM returned empty","next_action":"retry","replayable":true}'::text)
+     WHERE user_id = 995`,
+  );
+  const diagTypeBefore = await psql(
+    "SELECT jsonb_typeof(diagnosis) FROM capture_events WHERE user_id = 995",
+  );
+  if (diagTypeBefore !== "string") {
+    throw new Error(`Expected double-encoded diagnosis to be 'string', got '${diagTypeBefore}'`);
+  }
+  await psql(
+    "UPDATE capture_events SET diagnosis = (diagnosis #>> '{}')::jsonb WHERE jsonb_typeof(diagnosis) = 'string' AND user_id = 995",
+  );
+  const diagTypeAfter = await psql(
+    "SELECT jsonb_typeof(diagnosis) FROM capture_events WHERE user_id = 995",
+  );
+  if (diagTypeAfter !== "object") {
+    throw new Error(`Expected decoded diagnosis to be 'object', got '${diagTypeAfter}'`);
+  }
+  const diagTitle = await psql(
+    "SELECT diagnosis->>'title' FROM capture_events WHERE user_id = 995",
+  );
+  if (diagTitle !== "Parse error") {
+    throw new Error(`Expected diagnosis->>'title' = 'Parse error', got '${diagTitle}'`);
+  }
+
+  // --- monthly_closes.snapshot (030) ---
+  await psql(
+    `INSERT INTO monthly_closes (user_id, period_month, status, snapshot)
+     VALUES (995, '2026-05-01', 'closed',
+             to_jsonb('{"total_cents":450000,"transaction_count":18,"readiness_score":100}'::text))`,
+  );
+  const snapTypeBefore = await psql(
+    "SELECT jsonb_typeof(snapshot) FROM monthly_closes WHERE user_id = 995",
+  );
+  if (snapTypeBefore !== "string") {
+    throw new Error(`Expected double-encoded snapshot to be 'string', got '${snapTypeBefore}'`);
+  }
+  await psql(
+    "UPDATE monthly_closes SET snapshot = (snapshot #>> '{}')::jsonb WHERE jsonb_typeof(snapshot) = 'string' AND user_id = 995",
+  );
+  const snapTypeAfter = await psql(
+    "SELECT jsonb_typeof(snapshot) FROM monthly_closes WHERE user_id = 995",
+  );
+  if (snapTypeAfter !== "object") {
+    throw new Error(`Expected decoded snapshot to be 'object', got '${snapTypeAfter}'`);
+  }
+  const snapTotal = await psql(
+    "SELECT snapshot->>'total_cents' FROM monthly_closes WHERE user_id = 995",
+  );
+  if (snapTotal !== "450000") {
+    throw new Error(`Expected snapshot->>'total_cents' = '450000', got '${snapTotal}'`);
+  }
+
+  console.log("Remaining jsonb decode verified (diagnosis + snapshot + capture confidence).");
+}
+
+/**
+ * Migration 028: updated_at trigger must fire on UPDATE, stamping a strictly
+ * greater timestamp than the inserted value. Uses user_id 997 to avoid
+ * colliding with 998/999 used by other assertions.
+ */
+async function assertUpdatedAtTrigger() {
+  console.log("Verifying updated_at trigger on expenses...");
+
+  await psql(
+    "INSERT INTO expenses (user_id, amount_cents, occurred_at) VALUES (997, 5000, '2026-05-01T10:00:00Z')",
+  );
+  const insertedUpdatedAt = await psql(
+    "SELECT updated_at FROM expenses WHERE user_id = 997",
+  );
+  if (!insertedUpdatedAt) {
+    throw new Error("updated_at not populated after insert");
+  }
+
+  // Small sleep so the DB clock advances at least 1 ms before the UPDATE.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await psql("UPDATE expenses SET amount_cents = 6000 WHERE user_id = 997");
+  const afterUpdateUpdatedAt = await psql(
+    "SELECT updated_at FROM expenses WHERE user_id = 997",
+  );
+
+  const inserted = new Date(insertedUpdatedAt).getTime();
+  const afterUpdate = new Date(afterUpdateUpdatedAt).getTime();
+  if (afterUpdate <= inserted) {
+    throw new Error(
+      `updated_at trigger did not advance: inserted=${insertedUpdatedAt} afterUpdate=${afterUpdateUpdatedAt}`,
+    );
+  }
+  console.log("updated_at trigger verified.");
+}
+
 async function main() {
   console.log(`Starting disposable Postgres container ${container}`);
   await detectDocker();
@@ -214,6 +404,9 @@ async function main() {
 
   await assertMonthCloseImmutability();
   await assertTimezoneBucketing();
+  await assertUpdatedAtTrigger();
+  await assertConfidenceDecode();
+  await assertRemainingJsonbDecode();
 
   console.log("Migration smoke passed.");
 }

@@ -25,6 +25,7 @@ import { classifyMessage } from "../ai/parse.js";
 import { tryParseUpi } from "../upi/parse.js";
 import { getSession } from "./auth.js";
 import { todayIst } from "../lib/time.js";
+import { replayLimiter } from "../lib/rate-limit.js";
 
 const uuidPattern =
   "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
@@ -102,6 +103,7 @@ export async function capturesRoutes(app: FastifyInstance) {
           failureKind: request.query.failure_kind,
           q: request.query.q,
           limit: request.query.limit ?? 50,
+          actorUserId: session.canManage ? undefined : session.actorUserId,
         }),
       };
     },
@@ -110,10 +112,11 @@ export async function capturesRoutes(app: FastifyInstance) {
   app.get("/api/captures/summary", async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
+    const scopedActorUserId = session.canManage ? undefined : session.actorUserId;
     const [failures, statuses, sources] = await Promise.all([
-      summarizeCaptureFailures(session.userId),
-      summarizeCaptureStatuses(session.userId),
-      summarizeCaptureSources(session.userId),
+      summarizeCaptureFailures(session.userId, scopedActorUserId),
+      summarizeCaptureStatuses(session.userId, scopedActorUserId),
+      summarizeCaptureSources(session.userId, scopedActorUserId),
     ]);
     return { failures, statuses, sources };
   });
@@ -124,6 +127,12 @@ export async function capturesRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
+      // Fetch first so we can enforce own-scope authz before mutating.
+      const existing = await getCaptureEvent(session.userId, request.params.id);
+      if (!existing) return reply.status(404).send({ error: "Capture not found" });
+      if (!session.canManage && String(existing.actor_user_id) !== String(session.actorUserId)) {
+        return reply.status(403).send({ error: "Access denied" });
+      }
       const capture = await markCaptureIgnored(session.userId, request.params.id);
       if (!capture) return reply.status(404).send({ error: "Capture not found" });
       await recordAuditEvent({
@@ -147,12 +156,23 @@ export async function capturesRoutes(app: FastifyInstance) {
 
       const capture = await getCaptureEvent(session.userId, request.params.id);
       if (!capture) return reply.status(404).send({ error: "Capture not found" });
+      if (!session.canManage && String(capture.actor_user_id) !== String(session.actorUserId)) {
+        return reply.status(403).send({ error: "Access denied" });
+      }
       if (!capture.raw_text) return reply.status(422).send({ error: "Only text captures can be replayed here" });
       if (capture.status === "processed" || capture.status === "ignored") {
         return reply.status(409).send({ error: `Cannot replay ${capture.status} captures` });
       }
       if (!capture.diagnosis.replayable) {
         return reply.status(409).send({ error: "This failure is not replayable" });
+      }
+
+      // Rate-limit LLM replay calls by actor (the person clicking replay).
+      const rl = replayLimiter.allow(`replay:${session.actorUserId}`);
+      if (!rl.ok) {
+        const retryAfterSec = Math.ceil(rl.retryAfterMs / 1000);
+        reply.header("Retry-After", String(retryAfterSec));
+        return reply.status(429).send({ error: "Rate limit exceeded, try again shortly" });
       }
 
       try {

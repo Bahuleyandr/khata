@@ -54,6 +54,7 @@ type ExpenseUpdateBody = {
   review_status?: "needs_review" | "reviewed" | "ignored";
   paid_by_user_id?: number | null;
   settlement_scope?: "personal" | "shared" | "reimbursable";
+  expectedUpdatedAt?: string;
 };
 
 type ExpenseCreateBody = {
@@ -96,6 +97,7 @@ type ExpenseRow = {
   account: string | null;
   source: string;
   occurred_at: Date;
+  updated_at: Date;
   image_key: string | null;
   review_status: string;
   confidence: CaptureConfidence;
@@ -177,6 +179,7 @@ const expenseUpdateSchema = {
     review_status: { type: "string", enum: ["needs_review", "reviewed", "ignored"] },
     paid_by_user_id: { anyOf: [{ type: "integer" }, { type: "null" }] },
     settlement_scope: { type: "string", enum: ["personal", "shared", "reimbursable"] },
+    expectedUpdatedAt: { anyOf: [{ type: "string" }, { type: "null" }] },
   },
 } as const;
 
@@ -410,6 +413,7 @@ export async function expensesRoutes(app: FastifyInstance) {
                a.name AS account,
                e.source,
                e.occurred_at,
+               e.updated_at,
                e.image_key,
                e.review_status,
                e.confidence,
@@ -541,6 +545,8 @@ export async function expensesRoutes(app: FastifyInstance) {
       const settlementScope =
         body.settlement_scope ?? (session.selectedLedgerKind === "household" ? "shared" : "personal");
       const paidByUserId = body.paid_by_user_id ?? session.actorUserId;
+      // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+      const confidenceObj = JSON.parse(JSON.stringify(confidence));
 
       const rows = await sql<ExpenseRow[]>`
         WITH inserted AS (
@@ -576,13 +582,13 @@ export async function expensesRoutes(app: FastifyInstance) {
             NULL,
             ${reviewStatus},
             CASE WHEN ${reviewStatus} = 'reviewed' THEN NOW() ELSE NULL END,
-            ${JSON.stringify(confidence)}::jsonb,
+            ${confidenceObj},
             ${paidByUserId},
             ${settlementScope}
           )
           RETURNING id, amount_cents::text, currency, description, merchant,
                     merchant_canonical_id, category_id, account_id::text AS account_id,
-                    source, occurred_at, image_key,
+                    source, occurred_at, updated_at, image_key,
                     review_status, confidence,
                     paid_by_user_id::text AS paid_by_user_id, settlement_scope
         )
@@ -749,6 +755,7 @@ export async function expensesRoutes(app: FastifyInstance) {
                a.name AS account,
                e.source,
                e.occurred_at,
+               e.updated_at,
                e.image_key,
                e.review_status,
                e.confidence,
@@ -785,6 +792,15 @@ export async function expensesRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Invalid occurred_at date" });
       }
 
+      // Reject malformed expectedUpdatedAt early — a NaN timestamp would fall through
+      // to the optimistic-lock comparison and always signal a misleading 409.
+      if (
+        body.expectedUpdatedAt != null &&
+        Number.isNaN(new Date(body.expectedUpdatedAt).getTime())
+      ) {
+        return reply.status(400).send({ error: "Invalid expectedUpdatedAt timestamp" });
+      }
+
       if (body.category_id && !(await categoryBelongsToUser(session.userId, body.category_id))) {
         return reply.status(400).send({ error: "Category not found" });
       }
@@ -797,33 +813,6 @@ export async function expensesRoutes(app: FastifyInstance) {
       ) {
         return reply.status(400).send({ error: "Payer must be a member of this ledger" });
       }
-
-      const [before] = await sql<ExpenseRow[]>`
-        SELECT e.id,
-               e.amount_cents::text,
-               e.currency,
-               e.description,
-               e.merchant,
-               e.merchant_canonical_id,
-               e.category_id,
-               COALESCE(c.name, 'Uncategorized') AS category,
-               e.account_id::text AS account_id,
-               a.name AS account,
-               e.source,
-               e.occurred_at,
-               e.image_key,
-               e.review_status,
-               e.confidence,
-               e.paid_by_user_id::text AS paid_by_user_id,
-               e.settlement_scope
-        FROM expenses e
-        LEFT JOIN categories c ON e.category_id = c.id
-        LEFT JOIN accounts a ON a.id = e.account_id AND a.user_id = e.user_id
-        WHERE e.id = ${request.params.id}
-          AND e.user_id = ${session.userId}
-        LIMIT 1
-      `;
-      if (!before) return reply.status(404).send({ error: "Transaction not found" });
 
       const merchant =
         body.merchant !== undefined ? normalizeNullableText(body.merchant) ?? null : undefined;
@@ -840,76 +829,123 @@ export async function expensesRoutes(app: FastifyInstance) {
       const paidByUserIdParam = body.paid_by_user_id ?? null;
       const settlementScopeParam = body.settlement_scope ?? "personal";
 
-      const rows = await sql<ExpenseRow[]>`
-        WITH updated AS (
-          UPDATE expenses
-          SET amount_cents = CASE
-                WHEN ${body.amount_cents !== undefined} THEN ${body.amount_cents ?? 0}
-                ELSE amount_cents
-              END,
-              currency = CASE
-                WHEN ${body.currency !== undefined} THEN ${body.currency ?? "INR"}
-                ELSE currency
-              END,
-              description = CASE
-                WHEN ${description !== undefined} THEN ${descriptionParam}
-                ELSE description
-              END,
-              merchant = CASE
-                WHEN ${merchant !== undefined} THEN ${merchantParam}
-                ELSE merchant
-              END,
-              merchant_canonical_id = CASE
-                WHEN ${merchant !== undefined} THEN ${merchantCanonicalId}
-                ELSE merchant_canonical_id
-              END,
-              category_id = CASE
-                WHEN ${body.category_id !== undefined} THEN ${categoryIdParam}
-                ELSE category_id
-              END,
-              account_id = CASE
-                WHEN ${body.account_id !== undefined} THEN ${accountIdParam}
-                ELSE account_id
-              END,
-              occurred_at = CASE
-                WHEN ${occurredAt !== undefined} THEN ${occurredAtParam}
-                ELSE occurred_at
-              END,
-              review_status = CASE
-                WHEN ${body.review_status !== undefined} THEN ${reviewStatusParam}
-                ELSE review_status
-              END,
-              paid_by_user_id = CASE
-                WHEN ${body.paid_by_user_id !== undefined} THEN ${paidByUserIdParam}
-                ELSE paid_by_user_id
-              END,
-              settlement_scope = CASE
-                WHEN ${body.settlement_scope !== undefined} THEN ${settlementScopeParam}
-                ELSE settlement_scope
-              END,
-              reviewed_at = CASE
-                WHEN ${body.review_status === "reviewed"} THEN NOW()
-                WHEN ${body.review_status !== undefined} THEN NULL
-                ELSE reviewed_at
-              END
-          WHERE id = ${request.params.id}
-            AND user_id = ${session.userId}
-          RETURNING id, amount_cents::text, currency, description, merchant,
-                    merchant_canonical_id, category_id, account_id::text AS account_id,
-                    source, occurred_at, image_key,
-                    review_status, confidence,
-                    paid_by_user_id::text AS paid_by_user_id, settlement_scope
-        )
-        SELECT updated.*,
-               COALESCE(c.name, 'Uncategorized') AS category,
-               a.name AS account
-        FROM updated
-        LEFT JOIN categories c ON c.id = updated.category_id
-        LEFT JOIN accounts a ON a.id = updated.account_id
-      `;
+      const patchResult = await sql.begin(async (tx) => {
+        // Lock the row so concurrent PATCHes see each other's writes.
+        const [current] = await tx<ExpenseRow[]>`
+          SELECT e.id,
+                 e.amount_cents::text,
+                 e.currency,
+                 e.description,
+                 e.merchant,
+                 e.merchant_canonical_id,
+                 e.category_id,
+                 COALESCE(c.name, 'Uncategorized') AS category,
+                 e.account_id::text AS account_id,
+                 a.name AS account,
+                 e.source,
+                 e.occurred_at,
+                 e.updated_at,
+                 e.image_key,
+                 e.review_status,
+                 e.confidence,
+                 e.paid_by_user_id::text AS paid_by_user_id,
+                 e.settlement_scope
+          FROM expenses e
+          LEFT JOIN categories c ON e.category_id = c.id
+          LEFT JOIN accounts a ON a.id = e.account_id AND a.user_id = e.user_id
+          WHERE e.id = ${request.params.id}
+            AND e.user_id = ${session.userId}
+          LIMIT 1
+          FOR UPDATE
+        `;
+        if (!current) return null;
 
-      const updated = rows[0];
-      if (!updated) return reply.status(404).send({ error: "Transaction not found" });
+        // Optimistic-lock check: if caller supplied the version they read, verify
+        // it still matches. Mismatch → signal 409 without updating.
+        if (
+          body.expectedUpdatedAt != null &&
+          current.updated_at.getTime() !== new Date(body.expectedUpdatedAt).getTime()
+        ) {
+          return "conflict" as const;
+        }
+
+        const rows = await tx<ExpenseRow[]>`
+          WITH updated AS (
+            UPDATE expenses
+            SET amount_cents = CASE
+                  WHEN ${body.amount_cents !== undefined} THEN ${body.amount_cents ?? 0}
+                  ELSE amount_cents
+                END,
+                currency = CASE
+                  WHEN ${body.currency !== undefined} THEN ${body.currency ?? "INR"}
+                  ELSE currency
+                END,
+                description = CASE
+                  WHEN ${description !== undefined} THEN ${descriptionParam}
+                  ELSE description
+                END,
+                merchant = CASE
+                  WHEN ${merchant !== undefined} THEN ${merchantParam}
+                  ELSE merchant
+                END,
+                merchant_canonical_id = CASE
+                  WHEN ${merchant !== undefined} THEN ${merchantCanonicalId}
+                  ELSE merchant_canonical_id
+                END,
+                category_id = CASE
+                  WHEN ${body.category_id !== undefined} THEN ${categoryIdParam}
+                  ELSE category_id
+                END,
+                account_id = CASE
+                  WHEN ${body.account_id !== undefined} THEN ${accountIdParam}
+                  ELSE account_id
+                END,
+                occurred_at = CASE
+                  WHEN ${occurredAt !== undefined} THEN ${occurredAtParam}
+                  ELSE occurred_at
+                END,
+                review_status = CASE
+                  WHEN ${body.review_status !== undefined} THEN ${reviewStatusParam}
+                  ELSE review_status
+                END,
+                paid_by_user_id = CASE
+                  WHEN ${body.paid_by_user_id !== undefined} THEN ${paidByUserIdParam}
+                  ELSE paid_by_user_id
+                END,
+                settlement_scope = CASE
+                  WHEN ${body.settlement_scope !== undefined} THEN ${settlementScopeParam}
+                  ELSE settlement_scope
+                END,
+                reviewed_at = CASE
+                  WHEN ${body.review_status === "reviewed"} THEN NOW()
+                  WHEN ${body.review_status !== undefined} THEN NULL
+                  ELSE reviewed_at
+                END
+            WHERE id = ${request.params.id}
+              AND user_id = ${session.userId}
+            RETURNING id, amount_cents::text, currency, description, merchant,
+                      merchant_canonical_id, category_id, account_id::text AS account_id,
+                      source, occurred_at, updated_at, image_key,
+                      review_status, confidence,
+                      paid_by_user_id::text AS paid_by_user_id, settlement_scope
+          )
+          SELECT updated.*,
+                 COALESCE(c.name, 'Uncategorized') AS category,
+                 a.name AS account
+          FROM updated
+          LEFT JOIN categories c ON c.id = updated.category_id
+          LEFT JOIN accounts a ON a.id = updated.account_id
+        `;
+        return { updated: rows[0] ?? null, before: current };
+      });
+
+      if (patchResult === "conflict") {
+        return reply.status(409).send({ error: "Expense was modified by another request" });
+      }
+      if (patchResult === null || !patchResult.updated) {
+        return reply.status(404).send({ error: "Transaction not found" });
+      }
+      const { updated, before } = patchResult;
 
       if (body.category_id && updated.merchant_canonical_id) {
         await setMerchantCategory(session.userId, updated.merchant_canonical_id, body.category_id);
@@ -973,7 +1009,7 @@ export async function expensesRoutes(app: FastifyInstance) {
             AND user_id = ${session.userId}
           RETURNING id, amount_cents::text, currency, description, merchant,
                     merchant_canonical_id, category_id, account_id::text AS account_id,
-                    source, occurred_at, image_key,
+                    source, occurred_at, updated_at, image_key,
                     review_status, confidence,
                     paid_by_user_id::text AS paid_by_user_id, settlement_scope
         )
@@ -1118,7 +1154,7 @@ export async function expensesRoutes(app: FastifyInstance) {
               AND user_id = ${session.userId}
             RETURNING id, amount_cents::text, currency, description, merchant,
                       merchant_canonical_id, category_id, account_id::text AS account_id,
-                      source, occurred_at, image_key,
+                      source, occurred_at, updated_at, image_key,
                       review_status, confidence,
                       paid_by_user_id::text AS paid_by_user_id, settlement_scope
           )

@@ -67,7 +67,8 @@ export async function getMonthlyClose(userId: number, periodMonth: string): Prom
 }
 
 export async function markMonthlyCloseExported(input: MonthlyCloseSnapshotInput): Promise<MonthlyCloseRow> {
-  const snapshotJson = JSON.stringify(input.snapshot);
+  // Pass snapshot as a plain object so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const snapshot = JSON.parse(JSON.stringify(input.snapshot));
   const status = derivedStatus(input.openTaskCount);
   const [row] = await sql<MonthlyCloseRow[]>`
     INSERT INTO monthly_closes (
@@ -92,7 +93,7 @@ export async function markMonthlyCloseExported(input: MonthlyCloseSnapshotInput)
       ${input.transactionCount},
       NOW(),
       ${input.actorUserId},
-      ${snapshotJson}::jsonb
+      ${snapshot}
     )
     ON CONFLICT (user_id, period_month)
     DO UPDATE SET
@@ -132,7 +133,8 @@ export async function markMonthlyCloseExported(input: MonthlyCloseSnapshotInput)
 export async function closeMonthlyPeriod(
   input: MonthlyCloseSnapshotInput & { note?: string | null },
 ): Promise<MonthlyCloseRow> {
-  const snapshotJson = JSON.stringify(input.snapshot);
+  // Pass snapshot as a plain object so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const snapshot = JSON.parse(JSON.stringify(input.snapshot));
   const note = input.note?.trim() || null;
   const [row] = await sql<MonthlyCloseRow[]>`
     INSERT INTO monthly_closes (
@@ -159,7 +161,7 @@ export async function closeMonthlyPeriod(
       NOW(),
       ${input.actorUserId},
       ${note},
-      ${snapshotJson}::jsonb
+      ${snapshot}
     )
     ON CONFLICT (user_id, period_month)
     DO UPDATE SET

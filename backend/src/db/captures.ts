@@ -59,6 +59,7 @@ export interface CaptureFilters {
   failureKind?: CaptureFailureKind;
   q?: string;
   limit?: number;
+  actorUserId?: number;
 }
 
 export interface CaptureFailureSummaryRow {
@@ -95,8 +96,9 @@ function normalizeCaptureRow(row: CaptureEventRow): CaptureEventRow {
 }
 
 export async function recordCaptureEvent(input: CaptureEventInput): Promise<string> {
-  const metadataJson = JSON.stringify(input.metadata ?? {});
-  const confidenceJson = JSON.stringify(input.confidence ?? {});
+  // Pass both metadata and confidence as plain objects so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const metadata = JSON.parse(JSON.stringify(input.metadata ?? {}));
+  const confidence = JSON.parse(JSON.stringify(input.confidence ?? {}));
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO capture_events (
       user_id,
@@ -117,8 +119,8 @@ export async function recordCaptureEvent(input: CaptureEventInput): Promise<stri
       ${input.fileKey ?? null},
       ${input.contentHash ?? null},
       ${input.mimeType ?? null},
-      ${metadataJson}::jsonb,
-      ${confidenceJson}::jsonb
+      ${metadata},
+      ${confidence}
     )
     RETURNING id
   `;
@@ -133,7 +135,8 @@ export async function markCaptureProcessed(
   confidence?: CaptureConfidence,
 ): Promise<void> {
   if (!captureEventId) return;
-  const confidenceJson = confidence ? JSON.stringify(confidence) : null;
+  // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+  const confidenceObj = confidence ? JSON.parse(JSON.stringify(confidence)) : null;
   await sql`
     UPDATE capture_events
     SET status = 'processed',
@@ -141,7 +144,7 @@ export async function markCaptureProcessed(
         error_reason = NULL,
         failure_kind = NULL,
         diagnosis = '{}'::jsonb,
-        confidence = CASE WHEN ${confidenceJson !== null} THEN ${confidenceJson ?? "{}"}::jsonb ELSE confidence END,
+        confidence = CASE WHEN ${confidenceObj !== null} THEN ${confidenceObj} ELSE confidence END,
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
@@ -171,13 +174,14 @@ export async function markCaptureFailed(
 ): Promise<void> {
   if (!captureEventId) return;
   const failureKind = classifyCaptureFailure(errorReason);
-  const diagnosisJson = JSON.stringify(diagnoseCaptureFailure(failureKind, errorReason));
+  // Pass diagnosis as a plain object so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const diagnosis = JSON.parse(JSON.stringify(diagnoseCaptureFailure(failureKind, errorReason)));
   await sql`
     UPDATE capture_events
     SET status = 'failed',
         error_reason = ${errorReason.slice(0, 500)},
         failure_kind = ${failureKind},
-        diagnosis = ${diagnosisJson}::jsonb,
+        diagnosis = ${diagnosis},
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
@@ -247,6 +251,7 @@ export async function listCaptureEvents(
   const source = filters.source ?? null;
   const failureKind = filters.failureKind ?? null;
   const q = filters.q?.trim() ? `%${filters.q.trim()}%` : null;
+  const actorUserId = filters.actorUserId ?? null;
 
   const rows = await sql<CaptureEventRow[]>`
     SELECT ce.id,
@@ -284,6 +289,7 @@ export async function listCaptureEvents(
         OR ce.error_reason ILIKE ${q}
         OR COALESCE(e.merchant, e.description) ILIKE ${q}
       )
+      AND (${actorUserId}::bigint IS NULL OR ce.actor_user_id = ${actorUserId}::bigint)
     ORDER BY ce.created_at DESC
     LIMIT ${limit}
   `;
@@ -327,7 +333,8 @@ export async function getCaptureEvent(
   return row ? normalizeCaptureRow(row) : null;
 }
 
-export async function summarizeCaptureFailures(userId: number): Promise<CaptureFailureSummaryRow[]> {
+export async function summarizeCaptureFailures(userId: number, actorUserId?: number): Promise<CaptureFailureSummaryRow[]> {
+  const actor = actorUserId ?? null;
   return sql<CaptureFailureSummaryRow[]>`
     WITH failed AS (
       SELECT COALESCE(failure_kind, 'unknown') AS failure_kind,
@@ -341,6 +348,7 @@ export async function summarizeCaptureFailures(userId: number): Promise<CaptureF
       WHERE user_id = ${userId}
         AND status = 'failed'
         AND created_at >= NOW() - INTERVAL '90 days'
+        AND (${actor}::bigint IS NULL OR actor_user_id = ${actor}::bigint)
     ),
     grouped AS (
       SELECT failure_kind,
@@ -361,25 +369,29 @@ export async function summarizeCaptureFailures(userId: number): Promise<CaptureF
   `;
 }
 
-export async function summarizeCaptureStatuses(userId: number): Promise<CaptureCountRow[]> {
+export async function summarizeCaptureStatuses(userId: number, actorUserId?: number): Promise<CaptureCountRow[]> {
+  const actor = actorUserId ?? null;
   return sql<CaptureCountRow[]>`
     SELECT status AS key,
            COUNT(*)::int AS count
     FROM capture_events
     WHERE user_id = ${userId}
       AND created_at >= NOW() - INTERVAL '90 days'
+      AND (${actor}::bigint IS NULL OR actor_user_id = ${actor}::bigint)
     GROUP BY status
     ORDER BY count DESC, status ASC
   `;
 }
 
-export async function summarizeCaptureSources(userId: number): Promise<CaptureCountRow[]> {
+export async function summarizeCaptureSources(userId: number, actorUserId?: number): Promise<CaptureCountRow[]> {
+  const actor = actorUserId ?? null;
   return sql<CaptureCountRow[]>`
     SELECT source AS key,
            COUNT(*)::int AS count
     FROM capture_events
     WHERE user_id = ${userId}
       AND created_at >= NOW() - INTERVAL '90 days'
+      AND (${actor}::bigint IS NULL OR actor_user_id = ${actor}::bigint)
     GROUP BY source
     ORDER BY count DESC, source ASC
   `;

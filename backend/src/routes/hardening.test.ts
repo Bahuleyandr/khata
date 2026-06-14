@@ -922,42 +922,44 @@ describe("route hardening", () => {
 
   it("updates an expense and persists merchant category memory", async () => {
     const occurredAt = new Date("2026-04-28T00:00:00.000Z");
-    sqlMock
-      .mockResolvedValueOnce([{ id: CATEGORY_ID }])
-      .mockResolvedValueOnce([
-        {
-          id: EXPENSE_ID,
-          amount_cents: "12345",
-          currency: "INR",
-          description: "Dinner",
-          merchant: "Swiggy",
-          merchant_canonical_id: "merchant-1",
-          category_id: CATEGORY_ID,
-          category: "Food",
-          source: "telegram",
-          occurred_at: occurredAt,
-          image_key: null,
-          review_status: "needs_review",
-        },
-      ])
-      .mockResolvedValueOnce([
-        {
-          id: EXPENSE_ID,
-          amount_cents: "12345",
-          currency: "INR",
-          description: "Dinner",
-          merchant: "Swiggy",
-          merchant_canonical_id: "merchant-1",
-          category_id: CATEGORY_ID,
-          category: "Food",
-          source: "telegram",
-          occurred_at: occurredAt,
-          image_key: null,
-          review_status: "reviewed",
-        },
-      ])
-      .mockResolvedValueOnce([]);
+    const updatedAt = new Date("2026-04-28T08:00:00.000Z");
+
+    const beforeRow = {
+      id: EXPENSE_ID,
+      amount_cents: "12345",
+      currency: "INR",
+      description: "Dinner",
+      merchant: "Swiggy",
+      merchant_canonical_id: "merchant-1",
+      category_id: CATEGORY_ID,
+      category: "Food",
+      account_id: null,
+      account: null,
+      source: "telegram",
+      occurred_at: occurredAt,
+      updated_at: updatedAt,
+      image_key: null,
+      review_status: "needs_review",
+      confidence: {},
+      paid_by_user_id: null,
+      settlement_scope: "personal",
+    };
+    const afterRow = { ...beforeRow, review_status: "reviewed" };
+
+    // category_id ownership check (outside the transaction)
+    sqlMock.mockResolvedValueOnce([{ id: CATEGORY_ID }]);
+
+    // audit event INSERT (outside the transaction, after begin returns)
+    sqlMock.mockResolvedValueOnce([]);
+
     merchantMocks.getOrCreateMerchantCanonical.mockResolvedValueOnce("merchant-1");
+
+    // Inside sql.begin: tx(SELECT FOR UPDATE) + tx(UPDATE CTE)
+    const tx = vi.fn();
+    tx.mockResolvedValueOnce([beforeRow]).mockResolvedValueOnce([afterRow]);
+    sqlMock.begin.mockImplementationOnce(
+      async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
+    );
 
     const app = await buildApp();
     try {

@@ -335,6 +335,7 @@ export interface Expense {
   account: string | null
   source: string
   occurred_at: string
+  updated_at: string
   image_key: string | null
   review_status: 'needs_review' | 'reviewed' | 'ignored'
   confidence: CaptureConfidence
@@ -851,6 +852,7 @@ export interface ExpenseUpdateInput {
   review_status?: 'needs_review' | 'reviewed' | 'ignored'
   paid_by_user_id?: number | null
   settlement_scope?: 'personal' | 'shared' | 'reimbursable'
+  expectedUpdatedAt?: string
 }
 
 export interface ExpenseCreateInput {

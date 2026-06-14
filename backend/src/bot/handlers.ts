@@ -81,6 +81,7 @@ import { convertCents, getFxRatesForCurrencies } from "../fx/rates.js";
 import { ocrReceiptImage } from "../receipt/ocr.js";
 import { tryParseReceiptText } from "../receipt/parse.js";
 import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } from "./session.js";
+import { askLimiter, captureLimiter, statementLimiter } from "../lib/rate-limit.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -764,6 +765,14 @@ export async function handleAsk(ctx: Context): Promise<void> {
     return;
   }
 
+  // Rate-limit by Telegram user id — guards accidental loops, not adversaries.
+  const rl = askLimiter.allow(`ask:${userId}`);
+  if (!rl.ok) {
+    const secs = Math.ceil(rl.retryAfterMs / 1000);
+    await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
+    return;
+  }
+
   await ctx.reply("🤔 Thinking…");
 
   try {
@@ -1396,6 +1405,14 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     return;
   }
 
+  // Rate-limit LLM classify calls by Telegram user id.
+  const rlText = captureLimiter.allow(`capture:${userId}`);
+  if (!rlText.ok) {
+    const secs = Math.ceil(rlText.retryAfterMs / 1000);
+    await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
+    return;
+  }
+
   // Classify the message (expense vs spending query vs unknown)
   const captureEventId = await recordCaptureEvent({
     userId,
@@ -1793,6 +1810,15 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     metadata: { telegram_file_id: fileId },
   });
 
+  // Rate-limit LLM / vision calls by Telegram user id.
+  const rlPhoto = captureLimiter.allow(`capture:${userId}`);
+  if (!rlPhoto.ok) {
+    await markCaptureFailed(userId, captureEventId, "rate_limited");
+    const secs = Math.ceil(rlPhoto.retryAfterMs / 1000);
+    await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
+    return;
+  }
+
   // OCR via MiniMax MCP vision with a receipt-specific prompt.
   let ocrText: string;
   try {
@@ -1960,6 +1986,17 @@ export async function handleDocument(ctx: Context): Promise<void> {
     return;
   }
 
+  // Rate-limit statement LLM/vision calls before any upload or parsing work.
+  const userId = ctx.from?.id;
+  if (userId) {
+    const rlDoc = statementLimiter.allow(`statement:${userId}`);
+    if (!rlDoc.ok) {
+      const secs = Math.ceil(rlDoc.retryAfterMs / 1000);
+      await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
+      return;
+    }
+  }
+
   await runStatementPipeline(ctx, doc.file_id, mimeType, doc.file_name ?? "document");
 }
 
@@ -2008,7 +2045,20 @@ export async function handleVoice(ctx: Context): Promise<void> {
     return;
   }
 
+  // Rate-limit LLM classify calls before echoing, so the user never gets a
+  // "heard you" echo immediately followed by a throttle.
+  const rlVoice = captureLimiter.allow(`capture:${userId}`);
+  if (!rlVoice.ok) {
+    const secs = Math.ceil(rlVoice.retryAfterMs / 1000);
+    // Include the transcript so the user knows what was heard even on throttle.
+    await ctx.reply(`🎙️ _"${text}"_ — ⏳ Too many requests, try again in ${secs}s.`, {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
   await ctx.reply(`🎙️ _"${text}"_`, { parse_mode: "Markdown" });
+
   const captureEventId = await recordCaptureEvent({
     userId,
     source: "telegram_voice",

@@ -12,6 +12,7 @@ import { createStatementRecord, updateStatementStatus } from "../statement/impor
 import type { DedupeResult } from "../statement/types.js";
 import { redactError } from "../statement/redact.js";
 import { getSession } from "./auth.js";
+import { statementLimiter } from "../lib/rate-limit.js";
 
 const uuidPattern =
   "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
@@ -404,6 +405,8 @@ async function importPendingStatementRows(
         parser: "statement",
         rawText: row.description,
       });
+      // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+      const confidenceObj = JSON.parse(JSON.stringify(confidence));
       const [inserted] = await tx<Array<{ id: string }>>`
         INSERT INTO expenses (
           user_id,
@@ -431,7 +434,7 @@ async function importPendingStatementRows(
           ${row.category_id},
           ${row.account_id},
           'needs_review',
-          ${JSON.stringify(confidence)}::jsonb,
+          ${confidenceObj},
           ${actorUserId},
           ${settlementScope}
         )
@@ -516,6 +519,15 @@ export async function statementsRoutes(app: FastifyInstance) {
     async (request, reply) => {
     const session = await getSession(request, reply);
     if (!session) return;
+
+    // Rate-limit before any file download or LLM/vision work.
+    const rlUpload = statementLimiter.allow(`statement:${session.actorUserId}`);
+    if (!rlUpload.ok) {
+      const secs = Math.ceil(rlUpload.retryAfterMs / 1000);
+      reply.header("Retry-After", String(secs));
+      return reply.status(429).send({ error: "Rate limit exceeded, try again shortly" });
+    }
+
     const accountId = request.query.account_id ?? null;
     if (accountId && !(await accountBelongsToUser(session.userId, accountId))) {
       return reply.status(400).send({ error: "Account not found" });
@@ -785,6 +797,14 @@ export async function statementsRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
+
+      // Rate-limit before re-downloading and re-parsing (LLM/vision heavy).
+      const rlRetry = statementLimiter.allow(`statement:${session.actorUserId}`);
+      if (!rlRetry.ok) {
+        const secs = Math.ceil(rlRetry.retryAfterMs / 1000);
+        reply.header("Retry-After", String(secs));
+        return reply.status(429).send({ error: "Rate limit exceeded, try again shortly" });
+      }
 
       const [statement] = await sql<StatementRow[]>`
         SELECT s.id, s.file_key, s.mime_type, s.status, s.parsed_count, s.imported_count,
