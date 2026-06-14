@@ -81,6 +81,15 @@ vi.mock("../ai/parse.js", () => ({
   classifyMessage: vi.fn().mockResolvedValue({ type: "unknown" }),
 }));
 
+// Rate-limit mock — allow by default; individual tests override as needed.
+const rateLimitMocks = vi.hoisted(() => ({
+  askLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+  captureLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+  replayLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+}));
+
+vi.mock("../lib/rate-limit.js", () => rateLimitMocks);
+
 vi.mock("../upi/parse.js", () => ({
   tryParseUpi: vi.fn().mockReturnValue(null),
 }));
@@ -343,6 +352,35 @@ describe("captures authz — POST /api/captures/:id/replay", () => {
       // 422 means we passed authz and hit the "no raw_text" check
       expect(res.statusCode).toBe(422);
       expect(res.json()).toEqual({ error: "Only text captures can be replayed here" });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("rate-limit enforcement — POST /api/captures/:id/replay", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: allow; individual tests override.
+    rateLimitMocks.replayLimiter.allow.mockReturnValue({ ok: true, retryAfterMs: 0 });
+  });
+
+  it("returns 429 with Retry-After header when replayLimiter denies", async () => {
+    rateLimitMocks.replayLimiter.allow.mockReturnValueOnce({ ok: false, retryAfterMs: 8_000 });
+    sessionMock.getSession.mockResolvedValue(makeOwnerSession());
+    captureMocks.getCaptureEvent.mockResolvedValue(makeCaptureRow(1001));
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/captures/${CAPTURE_ID}/replay`,
+      });
+      expect(res.statusCode).toBe(429);
+      expect(res.json()).toEqual({ error: "Rate limit exceeded, try again shortly" });
+      // Retry-After header should be present (ceiling of 8000ms → "8")
+      expect(res.headers["retry-after"]).toBe("8");
+      // LLM and replay machinery must not be touched
+      expect(captureMocks.markCaptureReplayStarted).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

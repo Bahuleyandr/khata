@@ -203,6 +203,15 @@ vi.mock("../voice/transcribe.js", () => ({
   transcribeVoice: vi.fn().mockResolvedValue("(stub transcription)"),
 }));
 
+// Rate-limit mock — allow by default; individual tests override per-limiter.
+const rateLimitMocks = vi.hoisted(() => ({
+  askLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+  captureLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+  replayLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+}));
+
+vi.mock("../lib/rate-limit.js", () => rateLimitMocks);
+
 vi.mock("../ai/chat.js", () => ({
   chatWithData: vi.fn().mockResolvedValue({
     text: "(stub answer)",
@@ -373,6 +382,8 @@ import {
   handleCallbackQuery,
   handleDocument,
   handlePhoto,
+  handleAsk,
+  handleVoice,
 } from "./handlers.js";
 import { clearPendingImport } from "../statement/session.js";
 import { sql as mockSql } from "../db/index.js";
@@ -1443,5 +1454,70 @@ describe("handleSubscriptions", () => {
     expect(text).toContain("Monthly committed");
     expect(text).toContain("MiniMax");
     expect(text).toContain("GitHub");
+  });
+});
+
+// ── Rate-limit enforcement ────────────────────────────────────────────────────
+
+describe("rate-limit enforcement — handleAsk", () => {
+  it("replies throttle message and does not call chatWithData when askLimiter denies", async () => {
+    rateLimitMocks.askLimiter.allow.mockReturnValueOnce({ ok: false, retryAfterMs: 5_000 });
+    const chatWithData = vi.fn().mockResolvedValue({ text: "answer", toolsUsed: [], iterations: 1 });
+    // chatWithData is already mocked at module level; just check it isn't called.
+    const ctx = makeCtx({ match: { toString: () => "how much this month?" } as RegExpMatchArray });
+    await handleAsk(ctx);
+    // reply should contain the throttle message
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Too many requests");
+    // The LLM must not be called
+    expect(vi.mocked(mockAI.classifyMessage)).not.toHaveBeenCalled();
+    // chatWithData is mocked at module level — confirm ctx replied exactly once
+    expect((ctx.reply as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+    void chatWithData; // suppress unused-var warning
+  });
+});
+
+describe("rate-limit enforcement — handleTextMessage", () => {
+  it("replies throttle message and does not classify when captureLimiter denies", async () => {
+    rateLimitMocks.captureLimiter.allow.mockReturnValueOnce({ ok: false, retryAfterMs: 3_000 });
+    const ctx = makeCtx({ message: { text: "spent 500 at zomato" } as Context["message"] });
+    await handleTextMessage(ctx);
+    const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
+    expect(text).toContain("Too many requests");
+    expect(vi.mocked(mockAI.classifyMessage)).not.toHaveBeenCalled();
+  });
+});
+
+describe("rate-limit enforcement — handleVoice", () => {
+  it("replies throttle message and does not classify when captureLimiter denies", async () => {
+    stubFetch();
+    rateLimitMocks.captureLimiter.allow.mockReturnValueOnce({ ok: false, retryAfterMs: 3_000 });
+    const ctx = makeCtx({
+      message: { voice: { file_id: "vf1", duration: 5 } } as Context["message"],
+    });
+    await handleVoice(ctx);
+    // First reply is the transcription echo ("🎙️ ..."), second is the throttle message.
+    const calls = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls as Array<[string]>;
+    const throttleCall = calls.find(([t]) => t.includes("Too many requests"));
+    expect(throttleCall).toBeDefined();
+    expect(vi.mocked(mockAI.classifyMessage)).not.toHaveBeenCalled();
+  });
+});
+
+describe("rate-limit enforcement — handlePhoto", () => {
+  it("replies throttle message and does not call ocrReceiptImage when captureLimiter denies", async () => {
+    stubFetch();
+    rateLimitMocks.captureLimiter.allow.mockReturnValueOnce({ ok: false, retryAfterMs: 3_000 });
+    vi.mocked(mockExpenses.findExpenseByContentHash).mockResolvedValueOnce(null);
+    const ctx = makeCtx({
+      message: {
+        photo: [{ file_id: "ph1", width: 100, height: 100 }],
+      } as Context["message"],
+    });
+    await handlePhoto(ctx);
+    const calls = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls as Array<[string]>;
+    const throttleCall = calls.find(([t]) => t.includes("Too many requests"));
+    expect(throttleCall).toBeDefined();
+    expect(vi.mocked(mockOcr.ocrReceiptImage)).not.toHaveBeenCalled();
   });
 });

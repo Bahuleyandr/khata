@@ -25,6 +25,7 @@ import { classifyMessage } from "../ai/parse.js";
 import { tryParseUpi } from "../upi/parse.js";
 import { getSession } from "./auth.js";
 import { todayIst } from "../lib/time.js";
+import { replayLimiter } from "../lib/rate-limit.js";
 
 const uuidPattern =
   "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$";
@@ -164,6 +165,14 @@ export async function capturesRoutes(app: FastifyInstance) {
       }
       if (!capture.diagnosis.replayable) {
         return reply.status(409).send({ error: "This failure is not replayable" });
+      }
+
+      // Rate-limit LLM replay calls by actor (the person clicking replay).
+      const rl = replayLimiter.allow(`replay:${session.actorUserId}`);
+      if (!rl.ok) {
+        const retryAfterSec = Math.ceil(rl.retryAfterMs / 1000);
+        reply.header("Retry-After", String(retryAfterSec));
+        return reply.status(429).send({ error: "Rate limit exceeded, try again shortly" });
       }
 
       try {
