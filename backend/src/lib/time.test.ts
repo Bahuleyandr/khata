@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { APP_TIME_ZONE, formatIstDate, monthStartString, nowIstParts, todayIst } from "./time.js";
 
 describe("lib/time", () => {
@@ -19,8 +19,11 @@ describe("lib/time", () => {
     expect(nowIstParts(new Date("2026-06-30T20:30:00Z"))).toEqual({ year: 2026, month: 7, day: 1 });
   });
 
-  it("todayIst formats the given instant in IST", () => {
-    expect(todayIst(new Date("2026-06-30T20:30:00Z"))).toBe("2026-07-01");
+  it("todayIst returns today's IST date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-30T20:30:00Z"));
+    expect(todayIst()).toBe("2026-07-01");
+    vi.useRealTimers();
   });
 
   it("monthStartString rolls over year boundaries", () => {

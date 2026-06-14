@@ -14,14 +14,18 @@ export function formatIstDate(instant: Date): string {
 }
 
 /** Today's date as YYYY-MM-DD in IST. */
-export function todayIst(now: Date = new Date()): string {
-  return formatIstDate(now);
+export function todayIst(): string {
+  return formatIstDate(new Date());
 }
 
 /** Current IST calendar parts (1-based month). */
 export function nowIstParts(now: Date = new Date()): { year: number; month: number; day: number } {
-  const [year, month, day] = formatIstDate(now).split("-").map(Number);
-  return { year: year!, month: month!, day: day! };
+  const parts = formatIstDate(now).split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) {
+    throw new Error(`Unexpected IST date format: ${formatIstDate(now)}`);
+  }
+  const [year, month, day] = parts as [number, number, number];
+  return { year, month, day };
 }
 
 /**
