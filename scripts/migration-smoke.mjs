@@ -127,6 +127,48 @@ async function assertMonthCloseImmutability() {
   console.log("Month-close immutability trigger verified.");
 }
 
+/**
+ * Migration 027: the database default timezone must be Asia/Kolkata, and the
+ * close trigger must bucket occurred_at in IST (not the session TZ). The
+ * boundary instant 2026-06-30T20:30:00Z == 2026-07-01 02:00 IST must be treated
+ * as JULY: closing June must NOT block it, closing July MUST block it.
+ */
+async function assertTimezoneBucketing() {
+  console.log("Verifying timezone default + IST month bucketing...");
+
+  const tz = await psql("SHOW timezone");
+  if (tz !== "Asia/Kolkata") {
+    throw new Error(`Expected DB default timezone Asia/Kolkata, got '${tz}'`);
+  }
+
+  await psql(
+    "INSERT INTO expenses (user_id, amount_cents, occurred_at) VALUES (998, 10000, '2026-06-30T20:30:00Z')",
+  );
+
+  // Closing JUNE must NOT block it (the expense is July in IST).
+  await psql(
+    "INSERT INTO monthly_closes (user_id, period_month, status) VALUES (998, '2026-06-01', 'closed')",
+  );
+  await psql("UPDATE expenses SET amount_cents = 10001 WHERE user_id = 998");
+  const afterJune = await psql("SELECT amount_cents FROM expenses WHERE user_id = 998");
+  if (afterJune !== "10001") {
+    throw new Error(`June close wrongly blocked a July-IST expense (got ${afterJune})`);
+  }
+
+  // Closing JULY must block it.
+  await psql(
+    "INSERT INTO monthly_closes (user_id, period_month, status) VALUES (998, '2026-07-01', 'closed')",
+  );
+  const out = await psql("UPDATE expenses SET amount_cents = 20000 WHERE user_id = 998", {
+    expectError: true,
+  });
+  if (!/KHATA_MONTH_CLOSED/.test(out)) {
+    throw new Error("July close did NOT block a July-IST boundary expense");
+  }
+
+  console.log("Timezone default + IST bucketing verified.");
+}
+
 async function main() {
   console.log(`Starting disposable Postgres container ${container}`);
   await detectDocker();
@@ -171,6 +213,7 @@ async function main() {
   });
 
   await assertMonthCloseImmutability();
+  await assertTimezoneBucketing();
 
   console.log("Migration smoke passed.");
 }

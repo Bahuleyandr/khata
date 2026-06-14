@@ -12,7 +12,7 @@ import { config } from "../config.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function migrate() {
-  const sql = postgres(config.databaseUrl);
+  const sql = postgres(config.databaseUrl, { connection: { timezone: "Asia/Kolkata" } });
 
   await sql`
     CREATE TABLE IF NOT EXISTS schema_migrations (
