@@ -174,6 +174,35 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
        OR latest.last_seen < (NOW() - INTERVAL '45 days')::date
   `;
 
+  // Managed-record subscription alerts: dedupeKey includes next_due_at so each
+  // billing cycle re-arms automatically once next_due_at advances.
+  const subscriptionRecordAlerts = await sql<Array<{
+    id: string;
+    name: string;
+    next_due_at: string;
+    days_until: number;
+    is_overdue: boolean;
+  }>>`
+    SELECT
+      id,
+      name,
+      next_due_at::text AS next_due_at,
+      (next_due_at - CURRENT_DATE)::int AS days_until,
+      (next_due_at < CURRENT_DATE) AS is_overdue
+    FROM subscriptions
+    WHERE user_id = ${userId}
+      AND status IN ('active', 'trial')
+      AND next_due_at IS NOT NULL
+      AND (
+        -- due soon: 0–7 days ahead
+        (next_due_at - CURRENT_DATE) BETWEEN 0 AND 7
+        OR
+        -- overdue
+        next_due_at < CURRENT_DATE
+      )
+    ORDER BY next_due_at
+  `;
+
   const alerts: AlertCandidate[] = [];
   const failedCaptures = Number(captureCounts?.failed_count ?? 0);
   const pendingCaptures = Number(captureCounts?.pending_count ?? 0);
@@ -243,6 +272,29 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
       href: "/manage#subscriptions",
       dedupeKey: "subscription_overdue",
     });
+  }
+
+  // Managed-record subscription alerts (re-arm each cycle via next_due_at in key).
+  for (const sub of subscriptionRecordAlerts) {
+    if (sub.is_overdue) {
+      alerts.push({
+        kind: "subscription_overdue_record",
+        severity: "warning",
+        title: `${sub.name} is overdue`,
+        detail: `Renewal was due on ${sub.next_due_at}. Check if it auto-renewed or needs attention.`,
+        href: "/manage#subscriptions",
+        dedupeKey: `subscription_overdue_record:${sub.id}:${sub.next_due_at}`,
+      });
+    } else {
+      alerts.push({
+        kind: "subscription_due_soon_record",
+        severity: "info",
+        title: `${sub.name} renews in ${sub.days_until}d`,
+        detail: `Due on ${sub.next_due_at}.`,
+        href: "/manage#subscriptions",
+        dedupeKey: `subscription_due_soon_record:${sub.id}:${sub.next_due_at}`,
+      });
+    }
   }
   for (const subscription of subscriptionSignals.slice(0, 6)) {
     if (subscription.preference_status === null && subscription.confidence >= 75) {

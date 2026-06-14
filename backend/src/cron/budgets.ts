@@ -12,6 +12,10 @@ import { buildMonthlyXlsx, previousMonthBounds } from "../export/xlsx.js";
 import { config } from "../config.js";
 import { sql } from "../db/index.js";
 import { yearMonthIst, monthStartString, nowIstParts } from "../lib/time.js";
+import {
+  advanceOverdueSubscriptions,
+  sendSubscriptionReminders,
+} from "../db/subscription-renewal.js";
 
 function currentYearMonth(): string {
   return yearMonthIst();
@@ -171,7 +175,22 @@ export function startBudgetCrons(botApi: Api): void {
     );
   });
 
+  // Daily @03:00 UTC — advance overdue subscription next_due_at past today.
+  // Runs before reminder delivery so reminders see the freshly-advanced dates.
+  schedule("0 3 * * *", () => {
+    advanceOverdueSubscriptions()
+      .then((n) => { if (n > 0) console.log(`Subscription advance: ${n} updated.`); })
+      .catch((err) => console.error("Subscription advance cron error:", err));
+  });
+
+  // Daily @04:00 UTC — send per-reminder_days[] DMs, guarded by reminder_state.
+  schedule("0 4 * * *", () => {
+    sendSubscriptionReminders(botApi).catch((err) =>
+      console.error("Subscription reminders cron error:", err),
+    );
+  });
+
   console.log(
-    "Crons registered: budget nudge + session expiry @09:00 UTC, monthly digest + xlsx export @08:00 UTC on 1st, nightly nudge @15:30 UTC (21:00 IST).",
+    "Crons registered: budget nudge + session expiry @09:00 UTC, monthly digest + xlsx export @08:00 UTC on 1st, nightly nudge @15:30 UTC (21:00 IST), subscription advance @03:00 UTC, subscription reminders @04:00 UTC.",
   );
 }

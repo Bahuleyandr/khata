@@ -28,6 +28,7 @@ export interface SubscriptionRecordInput {
   logo_url?: string | null;
   merchant_key?: string | null;
   source?: "manual" | "detected";
+  anchor_dom?: number | null;
 }
 
 interface SanitizedSubscriptionRecordInput extends SubscriptionRecordInput {
@@ -38,6 +39,7 @@ interface SanitizedSubscriptionRecordInput extends SubscriptionRecordInput {
   interval_days: number | null;
   reminder_days: number[];
   source: "manual" | "detected";
+  anchor_dom: number | null;
 }
 
 export interface SubscriptionRecord {
@@ -48,6 +50,7 @@ export interface SubscriptionRecord {
   status: SubscriptionStatus;
   billing_cycle: BillingCycle;
   interval_days: number | null;
+  anchor_dom: number | null;
   amount_cents: string;
   currency: string;
   category_id: string | null;
@@ -84,7 +87,9 @@ export interface SubscriptionSummary {
   upcoming_30_days_total_cents?: string;
 }
 
-type SubscriptionRow = Omit<SubscriptionRecord, "monthly_estimate_cents" | "yearly_estimate_cents">;
+type SubscriptionRow = Omit<SubscriptionRecord, "monthly_estimate_cents" | "yearly_estimate_cents"> & {
+  anchor_dom: number | null;
+};
 
 export function normalizeSubscriptionMerchantKey(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
@@ -105,6 +110,22 @@ export function monthlyEstimateCents(
   return amountCents;
 }
 
+/**
+ * Derive anchor_dom from next_due_at for monthly/quarterly/yearly cycles.
+ * For others, use the caller-supplied value or null.
+ */
+function deriveAnchorDom(
+  billingCycle: BillingCycle,
+  nextDueAt: string | null | undefined,
+  suppliedAnchor: number | null | undefined,
+): number | null {
+  if (["monthly", "quarterly", "yearly"].includes(billingCycle) && nextDueAt) {
+    const day = Number(nextDueAt.split("-")[2]);
+    return Number.isFinite(day) && day >= 1 && day <= 31 ? day : null;
+  }
+  return suppliedAnchor ?? null;
+}
+
 function sanitizeInput(input: SubscriptionRecordInput): SanitizedSubscriptionRecordInput {
   const name = input.name.trim().replace(/\s+/g, " ");
   const merchantKey = input.merchant_key?.trim()
@@ -122,6 +143,7 @@ function sanitizeInput(input: SubscriptionRecordInput): SanitizedSubscriptionRec
       .filter((day, index, days) => days.indexOf(day) === index)
       .slice(0, 5),
     source: input.source ?? "manual",
+    anchor_dom: deriveAnchorDom(input.billing_cycle, input.next_due_at, input.anchor_dom),
   };
 }
 
@@ -177,6 +199,7 @@ export async function listSubscriptionRecords(userId: number): Promise<Subscript
       s.status,
       s.billing_cycle,
       s.interval_days,
+      s.anchor_dom,
       s.amount_cents::text AS amount_cents,
       s.currency,
       s.category_id,
@@ -212,18 +235,18 @@ export async function createSubscriptionRecord(
   const data = sanitizeInput(input);
   const [row] = await sql<SubscriptionRow[]>`
     INSERT INTO subscriptions (
-      user_id, merchant_key, name, status, billing_cycle, interval_days,
+      user_id, merchant_key, name, status, billing_cycle, interval_days, anchor_dom,
       amount_cents, currency, category_id, account_id, payment_method,
       started_at, next_due_at, reminder_days, notes, logo_url, source
     )
     VALUES (
-      ${userId}, ${data.merchant_key}, ${data.name}, ${data.status}, ${data.billing_cycle}, ${data.interval_days ?? null},
+      ${userId}, ${data.merchant_key}, ${data.name}, ${data.status}, ${data.billing_cycle}, ${data.interval_days ?? null}, ${data.anchor_dom ?? null},
       ${data.amount_cents}, ${data.currency}, ${data.category_id ?? null}, ${data.account_id ?? null}, ${data.payment_method ?? null},
       ${data.started_at ?? null}, ${data.next_due_at ?? null}, ${data.reminder_days}, ${data.notes ?? null}, ${data.logo_url ?? null},
       ${data.source}
     )
     RETURNING
-      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days,
+      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days, anchor_dom,
       amount_cents::text AS amount_cents, currency, category_id, NULL::text AS category,
       account_id, NULL::text AS account, payment_method, started_at::date::text AS started_at,
       next_due_at::date::text AS next_due_at,
@@ -239,6 +262,20 @@ export async function updateSubscriptionRecord(
   input: SubscriptionRecordInput,
 ): Promise<SubscriptionRecord | null> {
   const data = sanitizeInput(input);
+
+  // When next_due_at changes, clear existing reminder-state so reminders re-fire
+  // for the new due date. We do this before the UPDATE to capture the old value.
+  if (data.next_due_at !== undefined) {
+    const [current] = await sql<Array<{ next_due_at: string | null }>>`
+      SELECT next_due_at::text AS next_due_at FROM subscriptions WHERE id = ${id} AND user_id = ${userId}
+    `;
+    if (current && current.next_due_at !== (data.next_due_at ?? null)) {
+      await sql`
+        DELETE FROM subscription_reminder_state WHERE subscription_id = ${id}
+      `;
+    }
+  }
+
   const [row] = await sql<SubscriptionRow[]>`
     UPDATE subscriptions
     SET
@@ -247,6 +284,7 @@ export async function updateSubscriptionRecord(
       status = ${data.status},
       billing_cycle = ${data.billing_cycle},
       interval_days = ${data.interval_days ?? null},
+      anchor_dom = ${data.anchor_dom ?? null},
       amount_cents = ${data.amount_cents},
       currency = ${data.currency},
       category_id = ${data.category_id ?? null},
@@ -261,7 +299,7 @@ export async function updateSubscriptionRecord(
     WHERE user_id = ${userId}
       AND id = ${id}
     RETURNING
-      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days,
+      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days, anchor_dom,
       amount_cents::text AS amount_cents, currency, category_id, NULL::text AS category,
       account_id, NULL::text AS account, payment_method, started_at::date::text AS started_at,
       next_due_at::date::text AS next_due_at,
@@ -277,7 +315,7 @@ export async function deleteSubscriptionRecord(userId: number, id: string): Prom
     WHERE user_id = ${userId}
       AND id = ${id}
     RETURNING
-      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days,
+      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days, anchor_dom,
       amount_cents::text AS amount_cents, currency, category_id, NULL::text AS category,
       account_id, NULL::text AS account, payment_method, started_at::date::text AS started_at,
       next_due_at::date::text AS next_due_at,
@@ -294,12 +332,12 @@ export async function upsertDetectedSubscriptionRecord(
   const data = sanitizeInput({ ...input, source: "detected" });
   const [row] = await sql<SubscriptionRow[]>`
     INSERT INTO subscriptions (
-      user_id, merchant_key, name, status, billing_cycle, interval_days,
+      user_id, merchant_key, name, status, billing_cycle, interval_days, anchor_dom,
       amount_cents, currency, category_id, account_id, payment_method,
       started_at, next_due_at, reminder_days, notes, logo_url, source
     )
     VALUES (
-      ${userId}, ${data.merchant_key}, ${data.name}, ${data.status}, ${data.billing_cycle}, ${data.interval_days ?? null},
+      ${userId}, ${data.merchant_key}, ${data.name}, ${data.status}, ${data.billing_cycle}, ${data.interval_days ?? null}, ${data.anchor_dom ?? null},
       ${data.amount_cents}, ${data.currency}, ${data.category_id ?? null}, ${data.account_id ?? null}, ${data.payment_method ?? null},
       ${data.started_at ?? null}, ${data.next_due_at ?? null}, ${data.reminder_days}, ${data.notes ?? null}, ${data.logo_url ?? null},
       'detected'
@@ -310,6 +348,7 @@ export async function upsertDetectedSubscriptionRecord(
       status = CASE WHEN subscriptions.status = 'cancelled' THEN 'active' ELSE subscriptions.status END,
       billing_cycle = EXCLUDED.billing_cycle,
       interval_days = EXCLUDED.interval_days,
+      anchor_dom = COALESCE(EXCLUDED.anchor_dom, subscriptions.anchor_dom),
       amount_cents = EXCLUDED.amount_cents,
       currency = EXCLUDED.currency,
       category_id = COALESCE(EXCLUDED.category_id, subscriptions.category_id),
@@ -322,7 +361,7 @@ export async function upsertDetectedSubscriptionRecord(
       source = 'detected',
       updated_at = NOW()
     RETURNING
-      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days,
+      id, user_id::text AS user_id, merchant_key, name, status, billing_cycle, interval_days, anchor_dom,
       amount_cents::text AS amount_cents, currency, category_id, NULL::text AS category,
       account_id, NULL::text AS account, payment_method, started_at::date::text AS started_at,
       next_due_at::date::text AS next_due_at,
