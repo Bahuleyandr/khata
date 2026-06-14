@@ -227,6 +227,7 @@ export async function capturesRoutes(app: FastifyInstance) {
           confidence,
           paid_by_user_id: session.actorUserId,
           settlement_scope: session.userId < 0 ? "shared" : "personal",
+          actorUserId: session.actorUserId,
         });
         await addTags(session.userId, expenseId, rule.tag_names);
         await markCaptureProcessed(session.userId, capture.id, expenseId, confidence);
