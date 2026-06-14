@@ -59,6 +59,74 @@ async function waitForPostgres() {
   throw new Error("Postgres smoke container did not become ready in time");
 }
 
+async function psql(sqlText, { expectError = false } = {}) {
+  const args = [
+    ...dockerCommand.prefixArgs,
+    "exec",
+    container,
+    "psql",
+    "-U",
+    "postgres",
+    "-d",
+    dbName,
+    "-v",
+    "ON_ERROR_STOP=1",
+    "-t",
+    "-A",
+    "-c",
+    sqlText,
+  ];
+  try {
+    const { stdout } = await execFileAsync(dockerCommand.cmd, args, {
+      windowsHide: true,
+      maxBuffer: 1024 * 1024 * 10,
+    });
+    if (expectError) throw new Error(`Expected SQL to error but it succeeded: ${sqlText}`);
+    return stdout.trim();
+  } catch (err) {
+    if (expectError) return String(err.stderr ?? err.message ?? err);
+    throw err;
+  }
+}
+
+/**
+ * Behavioural check for migration 025: a 'closed' month must be immutable, and
+ * 'reopened' must restore writes. A DB trigger is the only place this can be
+ * asserted (the unit suite mocks `sql`), so it lives in the smoke gate.
+ */
+async function assertMonthCloseImmutability() {
+  console.log("Verifying month-close immutability trigger...");
+  await psql(
+    "INSERT INTO expenses (user_id, amount_cents, occurred_at) VALUES (999, 10000, '2026-04-15T12:00:00Z')",
+  );
+  await psql(
+    "INSERT INTO monthly_closes (user_id, period_month, status) VALUES (999, '2026-04-01', 'closed')",
+  );
+
+  for (const [label, stmt] of [
+    ["edit", "UPDATE expenses SET amount_cents = 99999 WHERE user_id = 999"],
+    ["delete", "DELETE FROM expenses WHERE user_id = 999"],
+    [
+      "insert",
+      "INSERT INTO expenses (user_id, amount_cents, occurred_at) VALUES (999, 500, '2026-04-20T12:00:00Z')",
+    ],
+  ]) {
+    const out = await psql(stmt, { expectError: true });
+    if (!/KHATA_MONTH_CLOSED/.test(out)) {
+      throw new Error(`Closed-month ${label} was NOT blocked by the trigger`);
+    }
+  }
+
+  // Reopening the period must restore writes.
+  await psql("UPDATE monthly_closes SET status = 'reopened' WHERE user_id = 999");
+  await psql("UPDATE expenses SET amount_cents = 77777 WHERE user_id = 999");
+  const amount = await psql("SELECT amount_cents FROM expenses WHERE user_id = 999");
+  if (amount !== "77777") {
+    throw new Error(`Reopened-month edit did not apply (got ${amount})`);
+  }
+  console.log("Month-close immutability trigger verified.");
+}
+
 async function main() {
   console.log(`Starting disposable Postgres container ${container}`);
   await detectDocker();
@@ -101,6 +169,8 @@ async function main() {
       S3_SECRET_ACCESS_KEY: "test-secret-key",
     },
   });
+
+  await assertMonthCloseImmutability();
 
   console.log("Migration smoke passed.");
 }
