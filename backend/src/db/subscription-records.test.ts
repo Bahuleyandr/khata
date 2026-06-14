@@ -20,6 +20,7 @@ function record(overrides: Partial<SubscriptionRecord>): SubscriptionRecord {
     status: "active",
     billing_cycle: "monthly",
     interval_days: null,
+    anchor_dom: null,
     amount_cents: "49900",
     currency: "INR",
     category_id: null,
