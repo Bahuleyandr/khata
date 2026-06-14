@@ -5,6 +5,7 @@ import type { Context } from "grammy";
 import { uploadStatement } from "../storage/index.js";
 import { buildMonthlyXlsx, currentMonthBounds, previousMonthBounds } from "../export/xlsx.js";
 import { sql } from "../db/index.js";
+import { todayIst, nowIstParts, formatIstDate } from "../lib/time.js";
 import { parseStatementBuffer } from "../statement/parser.js";
 import { dedupeTransactions } from "../statement/dedup.js";
 import { redactError } from "../statement/redact.js";
@@ -84,7 +85,7 @@ import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } fr
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function todayString(): string {
-  return new Date().toISOString().split("T")[0]!;
+  return todayIst();
 }
 
 interface CommandPeriod {
@@ -121,7 +122,8 @@ function isValidDateOnly(value: string): boolean {
 
 function parseCommandPeriod(args: string, now: Date = new Date()): CommandPeriod | null {
   const trimmed = args.trim().toLowerCase();
-  const current = currentMonthBounds(now.getFullYear(), now.getMonth() + 1);
+  const { year: nowYear, month: nowMonth } = nowIstParts(now);
+  const current = currentMonthBounds(nowYear, nowMonth);
   if (!trimmed || trimmed === "this" || trimmed === "this month" || trimmed === "current") {
     return toCommandPeriod(current, true);
   }
@@ -975,7 +977,7 @@ export async function handleTopExpenses(ctx: Context): Promise<void> {
   }
 
   const lines = rows.map((row, index) => {
-    const date = new Date(row.occurred_at).toISOString().slice(0, 10);
+    const date = formatIstDate(new Date(row.occurred_at));
     const name = row.merchant ?? row.description ?? "expense";
     return `${index + 1}. ${formatAmount(Number(row.amount_cents), row.currency)} - ${name} (${date}, ${row.category ?? "Uncategorized"})`;
   });
@@ -1042,7 +1044,7 @@ export async function handleNeedsReview(ctx: Context): Promise<void> {
   }
   const lines = rows.map((row) => {
     const name = row.merchant ?? row.description ?? "expense";
-    const date = new Date(row.occurred_at).toISOString().slice(0, 10);
+    const date = formatIstDate(new Date(row.occurred_at));
     return `• ${formatAmount(Number(row.amount_cents), row.currency)} ${name} — ${row.category} (${date})`;
   });
   await ctx.reply(
@@ -1132,7 +1134,7 @@ async function handleQueryIntent(
       }
       const lines = rows.map((r, i) => {
         const name = r.merchant ?? r.description;
-        const date = new Date(r.occurred_at).toISOString().split("T")[0]!;
+        const date = formatIstDate(new Date(r.occurred_at));
         return `${i + 1}. ${name} — ${formatAmount(Number(r.amount_cents), r.currency)} (${date})`;
       });
       await ctx.reply(

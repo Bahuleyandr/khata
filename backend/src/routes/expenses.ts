@@ -11,6 +11,7 @@ import { suggestionPatternFromText, upsertRuleSuggestion } from "../db/rule-sugg
 import { attachTagToExpense, getOrCreateTag, getTagsForExpenses } from "../db/tags.js";
 import { buildCaptureConfidence, reviewStatusFromConfidence, type CaptureConfidence } from "../capture/confidence.js";
 import { currentMonthBounds } from "../export/xlsx.js";
+import { nowIstParts } from "../lib/time.js";
 import { uploadStatement } from "../storage/index.js";
 import { getSession } from "./auth.js";
 import { isActiveLedgerMember } from "../db/access.js";
@@ -314,19 +315,19 @@ async function suggestRuleFromCorrection(input: {
 }
 
 function selectedMonth(query: SummaryQuery): { year: number; month: number } {
-  const now = new Date();
+  const { year, month } = nowIstParts();
   return {
-    year: query.year ?? now.getFullYear(),
-    month: query.month ?? now.getMonth() + 1,
+    year: query.year ?? year,
+    month: query.month ?? month,
   };
 }
 
 function monthProgress(year: number, month: number): { elapsedDays: number; daysInMonth: number } {
-  const now = new Date();
+  const { year: nowYear, month: nowMonth, day: nowDay } = nowIstParts();
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const isCurrentMonth = now.getFullYear() === year && now.getMonth() + 1 === month;
+  const isCurrentMonth = nowYear === year && nowMonth === month;
   return {
-    elapsedDays: isCurrentMonth ? Math.max(1, Math.min(now.getDate(), daysInMonth)) : daysInMonth,
+    elapsedDays: isCurrentMonth ? Math.max(1, Math.min(nowDay, daysInMonth)) : daysInMonth,
     daysInMonth,
   };
 }
