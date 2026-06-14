@@ -100,4 +100,21 @@ describe('ReceiptsPage', () => {
     )
     expect(await within(dialog).findByText(/Bakery/)).toBeTruthy()
   })
+
+  it('clears the needs-review flag on a saved receipt so it is not re-offered', async () => {
+    const user = userEvent.setup()
+    render(React.createElement(ReceiptsPage))
+
+    await user.click(await screen.findByRole('button', { name: /Corner Store/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Review Receipt' })
+    await user.click(within(dialog).getByRole('button', { name: 'Save & Next' }))
+    await waitFor(() => expect(updateExpense).toHaveBeenCalled())
+
+    // Close the modal and inspect the saved receipt's grid card: its server
+    // status is now 'reviewed', so its "Needs review" badge must be gone
+    // (previously the local row kept the stale 'needs_review' status).
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    const savedCard = await screen.findByRole('button', { name: /Corner Store Fixed/ })
+    expect(within(savedCard).queryByText('Needs review')).toBeNull()
+  })
 })
