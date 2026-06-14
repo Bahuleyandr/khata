@@ -33,6 +33,7 @@ describe("tryParseReceiptText", () => {
       merchant: "HMSHost Services India Pvt Ltd",
       occurred_at: "2026-04-30",
       category: "Food",
+      amountQuality: "labeled_total",
     });
   });
 
@@ -91,6 +92,9 @@ describe("tryParseReceiptText", () => {
     const parsed = tryParseReceiptText(text, categories, "2026-05-03");
     expect(parsed?.amount).toBe(160);
     expect(parsed?.merchant).toBe("HMSHost Services India Pvt Ltd");
+    // No clearly-labeled total — the amount came from the largest-number
+    // fallback, so it must be flagged weak (→ human review, not auto-commit).
+    expect(parsed?.amountQuality).toBe("weak");
   });
 
   it("parses simple retail receipts with currency-prefixed totals", () => {

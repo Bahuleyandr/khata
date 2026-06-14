@@ -25,11 +25,25 @@ export function buildCaptureConfidence(input: {
   source: string;
   ruleId?: string | null;
   parser?: "upi_regex" | "receipt_regex" | "llm" | "manual" | "statement" | "voice";
+  // How trustworthy the extracted amount is. "weak" means it came from a soft
+  // signal (a payment/tender line or the largest-number fallback) rather than a
+  // clearly labeled total. Omitted = trustworthy (preserves existing callers).
+  amountQuality?: "labeled_total" | "weak";
   rawText?: string | null;
 }): CaptureConfidence {
   const reasons: string[] = [];
-  const amount = input.amountCents && input.amountCents > 0 ? 100 : 25;
-  if (amount < 100) reasons.push("amount_missing");
+  let amount: number;
+  if (!input.amountCents || input.amountCents <= 0) {
+    amount = 25;
+    reasons.push("amount_missing");
+  } else if (input.amountQuality === "weak") {
+    // An amount we are not sure is the bill total — the one field that is
+    // actual money. Score it below the auto-review bar so a human confirms it.
+    amount = 55;
+    reasons.push("amount_uncertain");
+  } else {
+    amount = 100;
+  }
 
   const now = Date.now();
   const occurredAtTime = input.occurredAt?.getTime();
@@ -95,6 +109,9 @@ export function reviewStatusFromConfidence(
 ): ReviewStatus {
   if (requested === "ignored") return requested;
   if (requested === "needs_review") return requested;
+  // Amount is the one field that is actual money — never auto-trust a weak
+  // extraction, no matter how clean the other fields look.
+  if (confidence.amount < 80) return "needs_review";
   return confidence.overall >= 82 ? "reviewed" : "needs_review";
 }
 

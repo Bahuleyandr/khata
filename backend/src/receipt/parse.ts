@@ -145,14 +145,23 @@ function highestLabeledAmount(lines: string[], label: RegExp): number | null {
   return values.length > 0 ? Math.max(...values) : null;
 }
 
-function parseTotalAmount(lines: string[]): number | null {
-  return (
-    highestLabeledAmount(lines, STRONG_TOTAL_LABEL) ??
-    highestLabeledAmount(lines, TOTAL_LABEL) ??
-    highestLabeledAmount(lines, PAYMENT_LABEL) ??
-    highestLabeledAmount(lines, SUBTOTAL_LABEL) ??
-    highestReceiptAmount(lines)
-  );
+type AmountQuality = "labeled_total" | "weak";
+
+function parseTotalAmount(lines: string[]): { amount: number; quality: AmountQuality } | null {
+  const strong = highestLabeledAmount(lines, STRONG_TOTAL_LABEL);
+  if (strong !== null) return { amount: strong, quality: "labeled_total" };
+  const total = highestLabeledAmount(lines, TOTAL_LABEL);
+  if (total !== null) return { amount: total, quality: "labeled_total" };
+  // Below here the amount is a soft signal (a payment/tender line or the
+  // largest number on the receipt) — trustworthy enough to record, but it must
+  // be flagged "weak" so the capture pipeline routes it to human review.
+  const payment = highestLabeledAmount(lines, PAYMENT_LABEL);
+  if (payment !== null) return { amount: payment, quality: "weak" };
+  const subtotal = highestLabeledAmount(lines, SUBTOTAL_LABEL);
+  if (subtotal !== null) return { amount: subtotal, quality: "weak" };
+  const fallback = highestReceiptAmount(lines);
+  if (fallback !== null) return { amount: fallback, quality: "weak" };
+  return null;
 }
 
 function highestReceiptAmount(lines: string[]): number | null {
@@ -205,18 +214,19 @@ export function tryParseReceiptText(
     .filter(Boolean);
   if (lines.length < 3) return null;
 
-  const amount = parseTotalAmount(lines);
-  if (amount === null) return null;
+  const total = parseTotalAmount(lines);
+  if (total === null) return null;
 
   const merchant = extractMerchant(lines);
   const description = merchant ? `${merchant} receipt` : "Receipt";
 
   return {
-    amount,
+    amount: total.amount,
     currency: "INR",
     description,
     merchant,
     occurred_at: parseDate(text, today),
     category: pickCategory(text, categories),
+    amountQuality: total.quality,
   };
 }

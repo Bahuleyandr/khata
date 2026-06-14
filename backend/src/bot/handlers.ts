@@ -1880,6 +1880,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     source: "receipt",
     ruleId: rule.rule_id,
     parser: "receipt_regex",
+    amountQuality: parsed.amountQuality,
     rawText: ocrText,
   });
 

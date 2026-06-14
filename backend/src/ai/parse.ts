@@ -10,6 +10,10 @@ export interface ParsedExpense {
   merchant: string | null;
   occurred_at: string; // YYYY-MM-DD
   category: string;
+  // How the amount was extracted: "labeled_total" = a clearly labeled total,
+  // "weak" = a payment/tender line or the largest-number fallback (must be
+  // human-reviewed before it is trusted as real money).
+  amountQuality?: "labeled_total" | "weak";
 }
 
 export interface QueryIntent {

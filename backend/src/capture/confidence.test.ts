@@ -37,4 +37,41 @@ describe("capture confidence", () => {
     expect(confidence.reasons).toContain("category_missing");
     expect(reviewStatusFromConfidence(undefined, confidence)).toBe("needs_review");
   });
+
+  it("never auto-reviews a weakly-extracted amount, even when every other field is clean", () => {
+    const confidence = buildCaptureConfidence({
+      amountCents: 50000,
+      occurredAt: new Date("2026-04-30T12:00:00Z"),
+      merchant: "Some Store",
+      description: "Some Store receipt",
+      categoryId: "cat-food",
+      accountId: "acct-amex",
+      source: "receipt",
+      parser: "receipt_regex",
+      amountQuality: "weak",
+      rawText: "a fairly long raw receipt body with plenty of text",
+    });
+
+    expect(confidence.amount).toBeLessThan(80);
+    expect(confidence.reasons).toContain("amount_uncertain");
+    expect(reviewStatusFromConfidence(undefined, confidence)).toBe("needs_review");
+  });
+
+  it("auto-reviews a strong-total amount with otherwise clean fields", () => {
+    const confidence = buildCaptureConfidence({
+      amountCents: 50000,
+      occurredAt: new Date("2026-04-30T12:00:00Z"),
+      merchant: "Some Store",
+      description: "Some Store receipt",
+      categoryId: "cat-food",
+      accountId: "acct-amex",
+      source: "receipt",
+      parser: "receipt_regex",
+      amountQuality: "labeled_total",
+      rawText: "a fairly long raw receipt body with plenty of text",
+    });
+
+    expect(confidence.amount).toBe(100);
+    expect(reviewStatusFromConfidence(undefined, confidence)).toBe("reviewed");
+  });
 });
