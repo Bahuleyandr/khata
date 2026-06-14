@@ -208,6 +208,7 @@ const rateLimitMocks = vi.hoisted(() => ({
   askLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
   captureLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
   replayLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
+  statementLimiter: { allow: vi.fn().mockReturnValue({ ok: true, retryAfterMs: 0 }) },
 }));
 
 vi.mock("../lib/rate-limit.js", () => rateLimitMocks);
@@ -1519,5 +1520,26 @@ describe("rate-limit enforcement — handlePhoto", () => {
     const throttleCall = calls.find(([t]) => t.includes("Too many requests"));
     expect(throttleCall).toBeDefined();
     expect(vi.mocked(mockOcr.ocrReceiptImage)).not.toHaveBeenCalled();
+  });
+});
+
+describe("rate-limit enforcement — handleDocument (statementLimiter)", () => {
+  it("replies throttle message and does not call runStatementPipeline when statementLimiter denies", async () => {
+    rateLimitMocks.statementLimiter.allow.mockReturnValueOnce({ ok: false, retryAfterMs: 12_000 });
+    const ctx = makeCtx({
+      message: {
+        document: { file_id: "doc-id-1", mime_type: "application/pdf", file_name: "statement.pdf" },
+      } as Context["message"],
+    });
+    await handleDocument(ctx);
+    // Should reply with the throttle message (includes retry seconds)
+    const calls = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls as Array<[string]>;
+    expect(calls).toHaveLength(1);
+    const [throttleText] = calls[0]!;
+    expect(throttleText).toContain("Too many requests");
+    expect(throttleText).toContain("12s");
+    // parseStatementBuffer must not be called (no runStatementPipeline)
+    const { parseStatementBuffer } = await import("../statement/parser.js");
+    expect(vi.mocked(parseStatementBuffer)).not.toHaveBeenCalled();
   });
 });

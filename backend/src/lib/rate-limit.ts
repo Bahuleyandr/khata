@@ -114,6 +114,14 @@ const CAPTURE_WINDOW_MS = 60_000;
 const REPLAY_LIMIT = 10;
 const REPLAY_WINDOW_MS = 60_000;
 
+/**
+ * 10 statement parse/retry operations per user per minute.
+ * Statements are heavy — they invoke normalizeTransactions (HTTP LLM) and,
+ * for image statements, extractTextFromImage (MCP vision).
+ */
+const STATEMENT_LIMIT = 10;
+const STATEMENT_WINDOW_MS = 60_000;
+
 export const askLimiter: RateLimiter = createRateLimiter({
   limit: ASK_LIMIT,
   windowMs: ASK_WINDOW_MS,
@@ -127,4 +135,9 @@ export const captureLimiter: RateLimiter = createRateLimiter({
 export const replayLimiter: RateLimiter = createRateLimiter({
   limit: REPLAY_LIMIT,
   windowMs: REPLAY_WINDOW_MS,
+});
+
+export const statementLimiter: RateLimiter = createRateLimiter({
+  limit: STATEMENT_LIMIT,
+  windowMs: STATEMENT_WINDOW_MS,
 });
