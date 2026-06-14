@@ -280,7 +280,10 @@ export async function undoAuditEvent(
       throw Object.assign(new Error("This audit event cannot be undone safely"), { statusCode: 422 });
     }
 
-    const metadataJson = JSON.stringify({ undone_event_id: event.id, ...undoDetail });
+    // Normalise to plain objects so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+    const undoEventBefore = JSON.parse(JSON.stringify(event));
+    const undoEventAfter = JSON.parse(JSON.stringify(undoDetail));
+    const undoMetadata = JSON.parse(JSON.stringify({ undone_event_id: event.id, ...undoDetail }));
     const [undoEvent] = await tx<Array<{ id: string }>>`
       INSERT INTO audit_log (
         user_id,
@@ -298,9 +301,9 @@ export async function undoAuditEvent(
         'audit.undo',
         ${event.entity_type},
         ${event.entity_id},
-        ${JSON.stringify(event)}::jsonb,
-        ${JSON.stringify(undoDetail)}::jsonb,
-        ${metadataJson}::jsonb
+        ${undoEventBefore},
+        ${undoEventAfter},
+        ${undoMetadata}
       )
       RETURNING id
     `;

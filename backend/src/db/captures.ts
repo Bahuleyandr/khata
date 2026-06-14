@@ -96,8 +96,8 @@ function normalizeCaptureRow(row: CaptureEventRow): CaptureEventRow {
 }
 
 export async function recordCaptureEvent(input: CaptureEventInput): Promise<string> {
-  const metadataJson = JSON.stringify(input.metadata ?? {});
-  // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+  // Pass both metadata and confidence as plain objects so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const metadata = JSON.parse(JSON.stringify(input.metadata ?? {}));
   const confidence = JSON.parse(JSON.stringify(input.confidence ?? {}));
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO capture_events (
@@ -119,7 +119,7 @@ export async function recordCaptureEvent(input: CaptureEventInput): Promise<stri
       ${input.fileKey ?? null},
       ${input.contentHash ?? null},
       ${input.mimeType ?? null},
-      ${metadataJson}::jsonb,
+      ${metadata},
       ${confidence}
     )
     RETURNING id
@@ -144,7 +144,7 @@ export async function markCaptureProcessed(
         error_reason = NULL,
         failure_kind = NULL,
         diagnosis = '{}'::jsonb,
-        confidence = CASE WHEN ${confidenceObj !== null} THEN ${confidenceObj ?? {}} ELSE confidence END,
+        confidence = CASE WHEN ${confidenceObj !== null} THEN ${confidenceObj} ELSE confidence END,
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
@@ -174,13 +174,14 @@ export async function markCaptureFailed(
 ): Promise<void> {
   if (!captureEventId) return;
   const failureKind = classifyCaptureFailure(errorReason);
-  const diagnosisJson = JSON.stringify(diagnoseCaptureFailure(failureKind, errorReason));
+  // Pass diagnosis as a plain object so postgres.js serialises once (no ::jsonb cast = no double-encoding).
+  const diagnosis = JSON.parse(JSON.stringify(diagnoseCaptureFailure(failureKind, errorReason)));
   await sql`
     UPDATE capture_events
     SET status = 'failed',
         error_reason = ${errorReason.slice(0, 500)},
         failure_kind = ${failureKind},
-        diagnosis = ${diagnosisJson}::jsonb,
+        diagnosis = ${diagnosis},
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
