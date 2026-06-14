@@ -41,6 +41,9 @@ type EditDraft = {
   accountId: string
   reviewStatus: 'needs_review' | 'reviewed' | 'ignored'
   tags: string
+  // Optimistic-lock token: the updated_at value at the time the edit was opened.
+  // Sent back on save; backend returns 409 if the row changed in the meantime.
+  expectedUpdatedAt: string
 }
 
 function sourceBadgeClass(source: string) {
@@ -90,6 +93,7 @@ function makeDraft(expense: Expense): EditDraft {
     accountId: expense.account_id ?? '',
     reviewStatus: expense.review_status,
     tags: expense.tags.join(', '),
+    expectedUpdatedAt: expense.updated_at,
   }
 }
 
@@ -103,6 +107,8 @@ function makeCreateDraft(): EditDraft {
     accountId: '',
     reviewStatus: 'reviewed',
     tags: '',
+    // New expenses have no prior version — optimistic lock is not applicable.
+    expectedUpdatedAt: '',
   }
 }
 
@@ -339,6 +345,7 @@ export default function TransactionsPage() {
         account_id: draft.accountId || null,
         occurred_at: draft.date,
         review_status: draft.reviewStatus,
+        expectedUpdatedAt: draft.expectedUpdatedAt,
       })
       await syncTags(editing, draft.tags)
       getTags().then((res) => setAllTags(res.tags)).catch(() => {})
@@ -346,7 +353,15 @@ export default function TransactionsPage() {
       setEditing(null)
       setDraft(null)
     } catch (e) {
-      setMutationError(e instanceof Error ? e.message : 'Failed to save transaction')
+      const status = (e as { status?: number }).status
+      if (status === 409) {
+        // Another edit landed while this one was open — show the conflict and
+        // refresh so the user sees the current state before retrying.
+        setMutationError('This expense was changed elsewhere — reload and retry')
+        await refreshCurrentPage()
+      } else {
+        setMutationError(e instanceof Error ? e.message : 'Failed to save transaction')
+      }
     } finally {
       setBusyId(null)
     }

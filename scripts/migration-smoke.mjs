@@ -169,6 +169,41 @@ async function assertTimezoneBucketing() {
   console.log("Timezone default + IST bucketing verified.");
 }
 
+/**
+ * Migration 028: updated_at trigger must fire on UPDATE, stamping a strictly
+ * greater timestamp than the inserted value. Uses user_id 997 to avoid
+ * colliding with 998/999 used by other assertions.
+ */
+async function assertUpdatedAtTrigger() {
+  console.log("Verifying updated_at trigger on expenses...");
+
+  await psql(
+    "INSERT INTO expenses (user_id, amount_cents, occurred_at) VALUES (997, 5000, '2026-05-01T10:00:00Z')",
+  );
+  const insertedUpdatedAt = await psql(
+    "SELECT updated_at FROM expenses WHERE user_id = 997",
+  );
+  if (!insertedUpdatedAt) {
+    throw new Error("updated_at not populated after insert");
+  }
+
+  // Small sleep so the DB clock advances at least 1 ms before the UPDATE.
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await psql("UPDATE expenses SET amount_cents = 6000 WHERE user_id = 997");
+  const afterUpdateUpdatedAt = await psql(
+    "SELECT updated_at FROM expenses WHERE user_id = 997",
+  );
+
+  const inserted = new Date(insertedUpdatedAt).getTime();
+  const afterUpdate = new Date(afterUpdateUpdatedAt).getTime();
+  if (afterUpdate <= inserted) {
+    throw new Error(
+      `updated_at trigger did not advance: inserted=${insertedUpdatedAt} afterUpdate=${afterUpdateUpdatedAt}`,
+    );
+  }
+  console.log("updated_at trigger verified.");
+}
+
 async function main() {
   console.log(`Starting disposable Postgres container ${container}`);
   await detectDocker();
@@ -214,6 +249,7 @@ async function main() {
 
   await assertMonthCloseImmutability();
   await assertTimezoneBucketing();
+  await assertUpdatedAtTrigger();
 
   console.log("Migration smoke passed.");
 }
