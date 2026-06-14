@@ -59,6 +59,7 @@ export interface CaptureFilters {
   failureKind?: CaptureFailureKind;
   q?: string;
   limit?: number;
+  actorUserId?: number;
 }
 
 export interface CaptureFailureSummaryRow {
@@ -247,6 +248,7 @@ export async function listCaptureEvents(
   const source = filters.source ?? null;
   const failureKind = filters.failureKind ?? null;
   const q = filters.q?.trim() ? `%${filters.q.trim()}%` : null;
+  const actorUserId = filters.actorUserId ?? null;
 
   const rows = await sql<CaptureEventRow[]>`
     SELECT ce.id,
@@ -284,6 +286,7 @@ export async function listCaptureEvents(
         OR ce.error_reason ILIKE ${q}
         OR COALESCE(e.merchant, e.description) ILIKE ${q}
       )
+      AND (${actorUserId}::bigint IS NULL OR ce.actor_user_id = ${actorUserId}::bigint)
     ORDER BY ce.created_at DESC
     LIMIT ${limit}
   `;
@@ -327,7 +330,8 @@ export async function getCaptureEvent(
   return row ? normalizeCaptureRow(row) : null;
 }
 
-export async function summarizeCaptureFailures(userId: number): Promise<CaptureFailureSummaryRow[]> {
+export async function summarizeCaptureFailures(userId: number, actorUserId?: number): Promise<CaptureFailureSummaryRow[]> {
+  const actor = actorUserId ?? null;
   return sql<CaptureFailureSummaryRow[]>`
     WITH failed AS (
       SELECT COALESCE(failure_kind, 'unknown') AS failure_kind,
@@ -341,6 +345,7 @@ export async function summarizeCaptureFailures(userId: number): Promise<CaptureF
       WHERE user_id = ${userId}
         AND status = 'failed'
         AND created_at >= NOW() - INTERVAL '90 days'
+        AND (${actor}::bigint IS NULL OR actor_user_id = ${actor}::bigint)
     ),
     grouped AS (
       SELECT failure_kind,
@@ -361,25 +366,29 @@ export async function summarizeCaptureFailures(userId: number): Promise<CaptureF
   `;
 }
 
-export async function summarizeCaptureStatuses(userId: number): Promise<CaptureCountRow[]> {
+export async function summarizeCaptureStatuses(userId: number, actorUserId?: number): Promise<CaptureCountRow[]> {
+  const actor = actorUserId ?? null;
   return sql<CaptureCountRow[]>`
     SELECT status AS key,
            COUNT(*)::int AS count
     FROM capture_events
     WHERE user_id = ${userId}
       AND created_at >= NOW() - INTERVAL '90 days'
+      AND (${actor}::bigint IS NULL OR actor_user_id = ${actor}::bigint)
     GROUP BY status
     ORDER BY count DESC, status ASC
   `;
 }
 
-export async function summarizeCaptureSources(userId: number): Promise<CaptureCountRow[]> {
+export async function summarizeCaptureSources(userId: number, actorUserId?: number): Promise<CaptureCountRow[]> {
+  const actor = actorUserId ?? null;
   return sql<CaptureCountRow[]>`
     SELECT source AS key,
            COUNT(*)::int AS count
     FROM capture_events
     WHERE user_id = ${userId}
       AND created_at >= NOW() - INTERVAL '90 days'
+      AND (${actor}::bigint IS NULL OR actor_user_id = ${actor}::bigint)
     GROUP BY source
     ORDER BY count DESC, source ASC
   `;
