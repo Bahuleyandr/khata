@@ -1,5 +1,6 @@
 import { sql } from "../db/index.js";
 import { findSubscriptionCandidates } from "../db/query.js";
+import { nowIstParts, monthStartString } from "../lib/time.js";
 
 // Each insight kind has its own payload shape. The dashboard switches on the
 // row's `kind` column to know which type the payload is.
@@ -42,22 +43,18 @@ export interface RecurringPayload {
 }
 
 interface MonthRange {
-  start: Date;
-  end: Date;
+  start: string; // YYYY-MM-01 inclusive
+  end: string;   // YYYY-MM-01 exclusive (first of next month)
 }
 
-function thisMonthBoundsUtc(now: Date = new Date()): MonthRange {
-  return {
-    start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
-    end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)),
-  };
+function thisMonthBoundsIst(now: Date = new Date()): MonthRange {
+  const { year, month } = nowIstParts(now);
+  return { start: monthStartString(year, month), end: monthStartString(year, month + 1) };
 }
 
-function lastMonthBoundsUtc(now: Date = new Date()): MonthRange {
-  return {
-    start: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)),
-    end: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)),
-  };
+function lastMonthBoundsIst(now: Date = new Date()): MonthRange {
+  const { year, month } = nowIstParts(now);
+  return { start: monthStartString(year, month - 1), end: monthStartString(year, month) };
 }
 
 function pctChange(curr: number, prev: number): number | null {
@@ -66,8 +63,8 @@ function pctChange(curr: number, prev: number): number | null {
 }
 
 async function computeMtdVsLastMonth(userId: number): Promise<MtdVsLastMonthPayload> {
-  const mtd = thisMonthBoundsUtc();
-  const last = lastMonthBoundsUtc();
+  const mtd = thisMonthBoundsIst();
+  const last = lastMonthBoundsIst();
 
   type CatRow = { name: string; total_cents: string };
 
@@ -76,15 +73,15 @@ async function computeMtdVsLastMonth(userId: number): Promise<MtdVsLastMonthPayl
       SELECT COALESCE(SUM(amount_cents), 0)::text AS total_cents
       FROM expenses
       WHERE user_id = ${userId}
-        AND occurred_at >= ${mtd.start}
-        AND occurred_at < ${mtd.end}
+        AND occurred_at >= ${mtd.start}::date
+        AND occurred_at < ${mtd.end}::date
     `,
     sql<Array<{ total_cents: string }>>`
       SELECT COALESCE(SUM(amount_cents), 0)::text AS total_cents
       FROM expenses
       WHERE user_id = ${userId}
-        AND occurred_at >= ${last.start}
-        AND occurred_at < ${last.end}
+        AND occurred_at >= ${last.start}::date
+        AND occurred_at < ${last.end}::date
     `,
     sql<CatRow[]>`
       SELECT COALESCE(c.name, 'Uncategorized') AS name,
@@ -92,8 +89,8 @@ async function computeMtdVsLastMonth(userId: number): Promise<MtdVsLastMonthPayl
       FROM expenses e
       LEFT JOIN categories c ON c.id = e.category_id
       WHERE e.user_id = ${userId}
-        AND e.occurred_at >= ${mtd.start}
-        AND e.occurred_at < ${mtd.end}
+        AND e.occurred_at >= ${mtd.start}::date
+        AND e.occurred_at < ${mtd.end}::date
       GROUP BY c.name
     `,
     sql<CatRow[]>`
@@ -102,8 +99,8 @@ async function computeMtdVsLastMonth(userId: number): Promise<MtdVsLastMonthPayl
       FROM expenses e
       LEFT JOIN categories c ON c.id = e.category_id
       WHERE e.user_id = ${userId}
-        AND e.occurred_at >= ${last.start}
-        AND e.occurred_at < ${last.end}
+        AND e.occurred_at >= ${last.start}::date
+        AND e.occurred_at < ${last.end}::date
       GROUP BY c.name
     `,
   ]);
@@ -138,7 +135,7 @@ async function computeMtdVsLastMonth(userId: number): Promise<MtdVsLastMonthPayl
 }
 
 async function computeTopMerchantsMtd(userId: number): Promise<TopMerchantsMtdPayload> {
-  const mtd = thisMonthBoundsUtc();
+  const mtd = thisMonthBoundsIst();
   const rows = await sql<Array<{ name: string; total_cents: string; count: number }>>`
     SELECT
       COALESCE(mc.name, e.merchant)   AS name,
@@ -147,8 +144,8 @@ async function computeTopMerchantsMtd(userId: number): Promise<TopMerchantsMtdPa
     FROM expenses e
     LEFT JOIN merchants_canonical mc ON mc.id = e.merchant_canonical_id
     WHERE e.user_id = ${userId}
-      AND e.occurred_at >= ${mtd.start}
-      AND e.occurred_at < ${mtd.end}
+      AND e.occurred_at >= ${mtd.start}::date
+      AND e.occurred_at < ${mtd.end}::date
       AND COALESCE(mc.name, e.merchant) IS NOT NULL
     GROUP BY name
     ORDER BY SUM(e.amount_cents) DESC
@@ -193,8 +190,8 @@ async function computeRecurring(userId: number): Promise<RecurringPayload> {
  * kind via DISTINCT ON.
  */
 export async function computeAndStoreInsightsForUser(userId: number): Promise<void> {
-  const mtd = thisMonthBoundsUtc();
-  const last = lastMonthBoundsUtc();
+  const mtd = thisMonthBoundsIst();
+  const last = lastMonthBoundsIst();
 
   const [mtdVsLast, topMerchants, recurring] = await Promise.all([
     computeMtdVsLastMonth(userId),
