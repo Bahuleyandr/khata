@@ -35,6 +35,10 @@ export interface AuditEventFilters {
 }
 
 export async function recordAuditEvent(input: AuditEventInput): Promise<string> {
+  // NOTE: `${json}::jsonb` stores before/after as a double-encoded jsonb STRING
+  // (a systemic pattern in this codebase, also used for `confidence`). It keeps
+  // this consistent with every other audit event; fixing the double-encoding
+  // app-wide (so undo + audit diffs work) is tracked as a separate follow-up.
   const beforeJson = JSON.stringify(input.before ?? null);
   const afterJson = JSON.stringify(input.after ?? null);
   const metadataJson = JSON.stringify(input.metadata ?? {});

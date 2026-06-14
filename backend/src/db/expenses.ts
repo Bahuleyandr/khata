@@ -1,6 +1,19 @@
 import { sql } from "./index.js";
 import { getOrCreateMerchantCanonical } from "./merchants.js";
+import { recordAuditEvent } from "./audit.js";
 import type { CaptureConfidence } from "../capture/confidence.js";
+
+// Shared column list for audit before/after snapshots. Mirrors deleteExpense's
+// RETURNING so create/update/delete events all carry the same row shape that
+// undoAuditEvent (db/audit.ts) reads back — which is what makes bot edits
+// undoable, not just visible in the trail.
+const AUDIT_COLUMNS = sql`
+  id, amount_cents::text AS amount_cents, currency, description, merchant,
+  merchant_canonical_id, category_id, source, occurred_at, image_key,
+  review_status, account_id::text AS account_id,
+  capture_event_id::text AS capture_event_id, confidence,
+  paid_by_user_id::text AS paid_by_user_id, settlement_scope
+`;
 
 export interface InsertExpenseData {
   userId: number;
@@ -21,6 +34,9 @@ export interface InsertExpenseData {
   confidence?: CaptureConfidence;
   paid_by_user_id?: number | null;
   settlement_scope?: "personal" | "shared" | "reimbursable";
+  // Real Telegram user who initiated this (the audit actor). Distinct from
+  // userId, which is the ledger id. Defaults to userId when omitted.
+  actorUserId?: number;
 }
 
 export interface ExpenseForEdit {
@@ -58,24 +74,37 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
   const merchantCanonicalId = await getOrCreateMerchantCanonical(data.userId, data.merchant);
   const confidenceJson = JSON.stringify(data.confidence ?? {});
 
-  const [row] = await sql<Array<{ id: string }>>`
-    INSERT INTO expenses
-      (user_id, amount_cents, currency, description, merchant, merchant_canonical_id,
-       category_id, occurred_at, source, raw_text, image_key, content_hash,
-       upi_reference_id, review_status, reviewed_at, account_id, capture_event_id,
-       confidence, paid_by_user_id, settlement_scope)
-    VALUES
-      (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
-       ${data.merchant}, ${merchantCanonicalId},
-       ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text},
-       ${data.image_key ?? null}, ${data.content_hash ?? null},
-       ${data.upi_reference_id ?? null}, ${data.review_status ?? "reviewed"},
-       ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null},
-       ${data.account_id ?? null}, ${data.capture_event_id ?? null},
-       ${confidenceJson}::jsonb, ${data.paid_by_user_id ?? null}, ${data.settlement_scope ?? "personal"})
-    RETURNING id
-  `;
-  return row.id;
+  return sql.begin(async (tx) => {
+    const [created] = await tx<DeletedExpenseData[]>`
+      INSERT INTO expenses
+        (user_id, amount_cents, currency, description, merchant, merchant_canonical_id,
+         category_id, occurred_at, source, raw_text, image_key, content_hash,
+         upi_reference_id, review_status, reviewed_at, account_id, capture_event_id,
+         confidence, paid_by_user_id, settlement_scope)
+      VALUES
+        (${data.userId}, ${data.amount_cents}, ${data.currency}, ${data.description},
+         ${data.merchant}, ${merchantCanonicalId},
+         ${data.category_id}, ${data.occurred_at}, ${data.source}, ${data.raw_text},
+         ${data.image_key ?? null}, ${data.content_hash ?? null},
+         ${data.upi_reference_id ?? null}, ${data.review_status ?? "reviewed"},
+         ${data.review_status === undefined || data.review_status === "reviewed" ? new Date() : null},
+         ${data.account_id ?? null}, ${data.capture_event_id ?? null},
+         ${confidenceJson}::jsonb, ${data.paid_by_user_id ?? null}, ${data.settlement_scope ?? "personal"})
+      RETURNING ${AUDIT_COLUMNS}
+    `;
+    await recordAuditEvent(
+      {
+        userId: data.userId,
+        actorUserId: data.actorUserId ?? data.userId,
+        action: "expense.create",
+        entityType: "expense",
+        entityId: created.id,
+        after: created,
+        metadata: { source: data.source },
+      },
+    );
+    return created.id;
+  });
 }
 
 export async function getExpenseForEdit(id: string, userId: number): Promise<ExpenseForEdit | null> {
@@ -179,44 +208,113 @@ export async function attachReceiptToExpense(
   return result.length > 0;
 }
 
+// The three bot edit paths each: lock the row (FOR UPDATE, closing the
+// lost-update window), capture a full before/after snapshot, and write an
+// `expense.update` audit event -- all in one transaction. Previously these were
+// bare UPDATEs with no audit trail and no undo, despite being the primary money
+// surface. `actorUserId` is the real Telegram user; it defaults to the ledger id.
+
 export async function updateExpenseAmount(
   id: string,
   userId: number,
   amount_cents: number,
   currency: string,
+  actorUserId?: number,
 ): Promise<boolean> {
-  const result = await sql`
-    UPDATE expenses SET amount_cents = ${amount_cents}, currency = ${currency}
-    WHERE id = ${id} AND user_id = ${userId}
-    RETURNING id
-  `;
-  return result.length > 0;
+  return sql.begin(async (tx) => {
+    const [before] = await tx<DeletedExpenseData[]>`
+      SELECT ${AUDIT_COLUMNS} FROM expenses
+      WHERE id = ${id} AND user_id = ${userId}
+      FOR UPDATE
+    `;
+    if (!before) return false;
+    const [after] = await tx<DeletedExpenseData[]>`
+      UPDATE expenses SET amount_cents = ${amount_cents}, currency = ${currency}
+      WHERE id = ${id} AND user_id = ${userId}
+      RETURNING ${AUDIT_COLUMNS}
+    `;
+    await recordAuditEvent(
+      {
+        userId,
+        actorUserId: actorUserId ?? userId,
+        action: "expense.update",
+        entityType: "expense",
+        entityId: id,
+        before,
+        after,
+        metadata: { source: "telegram", field: "amount" },
+      },
+    );
+    return true;
+  });
 }
 
 export async function updateExpenseCategory(
   id: string,
   userId: number,
   category_id: string | null,
+  actorUserId?: number,
 ): Promise<boolean> {
-  const result = await sql`
-    UPDATE expenses SET category_id = ${category_id}
-    WHERE id = ${id} AND user_id = ${userId}
-    RETURNING id
-  `;
-  return result.length > 0;
+  return sql.begin(async (tx) => {
+    const [before] = await tx<DeletedExpenseData[]>`
+      SELECT ${AUDIT_COLUMNS} FROM expenses
+      WHERE id = ${id} AND user_id = ${userId}
+      FOR UPDATE
+    `;
+    if (!before) return false;
+    const [after] = await tx<DeletedExpenseData[]>`
+      UPDATE expenses SET category_id = ${category_id}
+      WHERE id = ${id} AND user_id = ${userId}
+      RETURNING ${AUDIT_COLUMNS}
+    `;
+    await recordAuditEvent(
+      {
+        userId,
+        actorUserId: actorUserId ?? userId,
+        action: "expense.update",
+        entityType: "expense",
+        entityId: id,
+        before,
+        after,
+        metadata: { source: "telegram", field: "category" },
+      },
+    );
+    return true;
+  });
 }
 
 export async function updateExpenseDate(
   id: string,
   userId: number,
   occurred_at: Date,
+  actorUserId?: number,
 ): Promise<boolean> {
-  const result = await sql`
-    UPDATE expenses SET occurred_at = ${occurred_at}
-    WHERE id = ${id} AND user_id = ${userId}
-    RETURNING id
-  `;
-  return result.length > 0;
+  return sql.begin(async (tx) => {
+    const [before] = await tx<DeletedExpenseData[]>`
+      SELECT ${AUDIT_COLUMNS} FROM expenses
+      WHERE id = ${id} AND user_id = ${userId}
+      FOR UPDATE
+    `;
+    if (!before) return false;
+    const [after] = await tx<DeletedExpenseData[]>`
+      UPDATE expenses SET occurred_at = ${occurred_at}
+      WHERE id = ${id} AND user_id = ${userId}
+      RETURNING ${AUDIT_COLUMNS}
+    `;
+    await recordAuditEvent(
+      {
+        userId,
+        actorUserId: actorUserId ?? userId,
+        action: "expense.update",
+        entityType: "expense",
+        entityId: id,
+        before,
+        after,
+        metadata: { source: "telegram", field: "date" },
+      },
+    );
+    return true;
+  });
 }
 
 export async function deleteExpense(id: string, userId: number): Promise<DeletedExpenseData | null> {

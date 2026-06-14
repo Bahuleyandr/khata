@@ -1,6 +1,7 @@
 import { Bot } from "grammy";
 import { config } from "../config.js";
 import { isAllowedUser } from "../middleware/auth.js";
+import { errorBoundary } from "./error-boundary.js";
 import {
   listLedgersForTelegramUser,
   resolveAccessForTelegramUser,
@@ -32,6 +33,10 @@ import {
 } from "./handlers.js";
 
 export const bot = new Bot(config.telegramBotToken);
+
+// FIRST middleware: wrap every downstream handler so a thrown error becomes a
+// friendly reply instead of stopping long-polling / crashing the process.
+bot.use(errorBoundary);
 
 bot.use(async (ctx, next) => {
   const from = ctx.from;
@@ -102,6 +107,13 @@ bot.on("message:text", handleTextMessage);
 bot.on("message:document", handleDocument);
 bot.on("message:photo", handlePhoto);
 bot.on("message:voice", handleVoice);
+
+// Absolute backstop for anything that escapes the errorBoundary middleware
+// (e.g. an error during update fetching). Replaces grammy's default handler,
+// which would otherwise call bot.stop() and rethrow — taking the bot down.
+bot.catch((err) => {
+  console.error("[bot] error caught by bot.catch backstop:", err.error);
+});
 
 /**
  * If MINI_APP_URL is configured, install a global chat menu button that

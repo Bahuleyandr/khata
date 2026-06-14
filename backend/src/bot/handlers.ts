@@ -704,6 +704,7 @@ async function processUpiPayment(
     confidence,
     paid_by_user_id: actorUserId(ctx),
     settlement_scope: userId < 0 ? "shared" : "personal",
+    actorUserId: actorUserId(ctx),
   });
   for (const rawName of rule.tag_names) {
     const tagId = await getOrCreateTag(userId, rawName);
@@ -1202,8 +1203,12 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     try {
       await processUpiPayment(ctx, userId, text, upi, { source: "telegram", captureEventId });
     } catch (err) {
+      // Mark the capture failed and tell the user — do NOT rethrow. A transient
+      // DB/MinIO blip on a forwarded UPI SMS must not crash the long-poll loop.
       await markCaptureFailed(userId, captureEventId, (err as Error).message);
-      throw err;
+      await ctx.reply(
+        "⚠️ Couldn't save that payment just now — it's flagged for review. Please try again.",
+      );
     }
     return;
   }
@@ -1239,6 +1244,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       editLedgerUserId,
       amount_cents,
       currency,
+      actorUserId(ctx),
     );
     if (ok) {
       await setPendingEdit(userId, { ...pendingEdit, amount_cents, currency, waitingFor: undefined });
@@ -1255,7 +1261,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       return;
     }
     const occurred_at = new Date(text + "T12:00:00Z");
-    const ok = await updateExpenseDate(pendingEdit.expenseId, editLedgerUserId, occurred_at);
+    const ok = await updateExpenseDate(pendingEdit.expenseId, editLedgerUserId, occurred_at, actorUserId(ctx));
     if (ok) {
       await setPendingEdit(userId, { ...pendingEdit, occurred_at, waitingFor: undefined });
     }
@@ -1376,7 +1382,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
       );
       return;
     }
-    const ok = await updateExpenseCategory(pendingEdit.expenseId, editLedgerUserId, cat.id);
+    const ok = await updateExpenseCategory(pendingEdit.expenseId, editLedgerUserId, cat.id, actorUserId(ctx));
     if (ok) {
       await upsertOverride(editLedgerUserId, pendingEdit.description.toLowerCase(), cat.name).catch(
         console.error,
@@ -1482,6 +1488,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     confidence,
     paid_by_user_id: actorUserId(ctx),
     settlement_scope: userId < 0 ? "shared" : "personal",
+    actorUserId: actorUserId(ctx),
   });
   for (const rawName of rule.tag_names) {
     const tagId = await getOrCreateTag(userId, rawName);
@@ -1589,7 +1596,7 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
       await ctx.answerCallbackQuery("Category not found");
       return;
     }
-    const ok = await updateExpenseCategory(pending.expenseId, ledgerUserId, cat.id);
+    const ok = await updateExpenseCategory(pending.expenseId, ledgerUserId, cat.id, actorUserId(ctx));
     if (ok) {
       if (pending.description && cat.name !== pending.category) {
         await upsertOverride(ledgerUserId, pending.description.toLowerCase(), cat.name).catch(
@@ -1880,6 +1887,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     source: "receipt",
     ruleId: rule.rule_id,
     parser: "receipt_regex",
+    amountQuality: parsed.amountQuality,
     rawText: ocrText,
   });
 
@@ -1903,6 +1911,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
       confidence,
       paid_by_user_id: actorUserId(ctx),
       settlement_scope: userId < 0 ? "shared" : "personal",
+      actorUserId: actorUserId(ctx),
     });
     for (const rawName of rule.tag_names) {
       const tagId = await getOrCreateTag(userId, rawName);
@@ -2093,6 +2102,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
     confidence,
     paid_by_user_id: actorUserId(ctx),
     settlement_scope: userId < 0 ? "shared" : "personal",
+    actorUserId: actorUserId(ctx),
   });
   for (const rawName of rule.tag_names) {
     const tagId = await getOrCreateTag(userId, rawName);

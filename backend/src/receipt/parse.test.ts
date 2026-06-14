@@ -33,6 +33,7 @@ describe("tryParseReceiptText", () => {
       merchant: "HMSHost Services India Pvt Ltd",
       occurred_at: "2026-04-30",
       category: "Food",
+      amountQuality: "labeled_total",
     });
   });
 
@@ -91,6 +92,9 @@ describe("tryParseReceiptText", () => {
     const parsed = tryParseReceiptText(text, categories, "2026-05-03");
     expect(parsed?.amount).toBe(160);
     expect(parsed?.merchant).toBe("HMSHost Services India Pvt Ltd");
+    // No clearly-labeled total — the amount came from the largest-number
+    // fallback, so it must be flagged weak (→ human review, not auto-commit).
+    expect(parsed?.amountQuality).toBe("weak");
   });
 
   it("parses simple retail receipts with currency-prefixed totals", () => {
@@ -108,6 +112,33 @@ describe("tryParseReceiptText", () => {
     expect(parsed?.amount).toBe(250);
     expect(parsed?.merchant).toBe("STARBUCKS");
     expect(parsed?.occurred_at).toBe("2026-04-27");
+  });
+
+  it("parses Indian lakh-grouped bare totals at full value", () => {
+    const text = [
+      "BIG BAZAAR",
+      "Date: 27 Apr 2026",
+      "LED TV 1,00,000.00",
+      "Refrigerator 1,50,000.00",
+      "Grand Total 2,50,000.00",
+    ].join("\n");
+
+    const parsed = tryParseReceiptText(text, categories, "2026-05-03");
+    expect(parsed?.amount).toBe(250000);
+  });
+
+  it("never treats change-due as the bill total", () => {
+    const text = [
+      "CORNER STORE",
+      "Date: 27 Apr 2026",
+      "Milk 100.00",
+      "Amount Due 100.00",
+      "Cash 500.00",
+      "Change Due 400.00",
+    ].join("\n");
+
+    const parsed = tryParseReceiptText(text, categories, "2026-05-03");
+    expect(parsed?.amount).toBe(100);
   });
 
   it("does not parse ordinary text without receipt signals", () => {

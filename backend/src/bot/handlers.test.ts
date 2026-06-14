@@ -1247,6 +1247,7 @@ describe("handleTextMessage — category: shortcut", () => {
       "exp-receipt-1",
       111111,
       "cat-food",
+      111111,
     );
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text.toLowerCase()).toContain("updated");

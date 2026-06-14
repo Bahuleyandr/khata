@@ -45,11 +45,20 @@ export async function dedupeTransactions(
       AND occurred_at BETWEEN ${minDate} AND ${maxDate}
   `;
 
+  // Each existing expense may dedupe at most ONE incoming row. Without this,
+  // N statement rows with the same amount/merchant/day all match the single
+  // existing expense and every one but the first is silently dropped — so a
+  // genuine repeat charge (two identical chai, two same-fare rides) vanishes
+  // from the ledger. Consume a candidate once it has been matched.
+  const consumed = new Set<string>();
+
   return transactions.map((tx) => {
     const txDate = new Date(tx.date).getTime();
     const txDesc = tx.description ?? "";
 
     const match = candidates.find((row) => {
+      if (consumed.has(row.id)) return false;
+
       const amountDiff = Math.abs(Number(row.amount_cents) - tx.amountCents);
       if (amountDiff > AMOUNT_TOLERANCE_CENTS) return false;
 
@@ -59,6 +68,8 @@ export async function dedupeTransactions(
       const candidateDesc = [row.description, row.merchant].filter(Boolean).join(" ");
       return wordOverlapScore(txDesc, candidateDesc) >= 0.4;
     });
+
+    if (match) consumed.add(match.id);
 
     return {
       transaction: tx,
