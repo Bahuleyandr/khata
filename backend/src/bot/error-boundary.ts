@@ -12,13 +12,21 @@ import type { Context, NextFunction } from "grammy";
  * parse failure, a transient DB blip) would otherwise become a deterministic
  * crash loop, re-processing the same bad update on every restart.
  */
+function replyForError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (message.includes("KHATA_MONTH_CLOSED")) {
+    return "🔒 That month is closed, so it can't be changed. Reopen it from the dashboard first, then make your correction.";
+  }
+  return "⚠️ Something went wrong handling that. Please try again.";
+}
+
 export async function errorBoundary(ctx: Context, next: NextFunction): Promise<void> {
   try {
     await next();
   } catch (err) {
     console.error("[bot] unhandled handler error:", err);
     try {
-      await ctx.reply("⚠️ Something went wrong handling that. Please try again.");
+      await ctx.reply(replyForError(err));
     } catch (replyErr) {
       // A failure sending the error reply (e.g. the chat is unreachable) must
       // not re-throw and defeat the whole point of the boundary.

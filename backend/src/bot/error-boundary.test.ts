@@ -28,6 +28,22 @@ describe("errorBoundary", () => {
     expect(ctx.reply).toHaveBeenCalledOnce();
   });
 
+  it("gives a clear 'month is closed' reply when the close trigger fires", async () => {
+    const ctx = fakeCtx();
+    const next = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("KHATA_MONTH_CLOSED: expense abc is in a closed month; reopen the month to change it"),
+      );
+
+    await errorBoundary(ctx, next);
+
+    expect(ctx.reply).toHaveBeenCalledOnce();
+    const msg = (ctx.reply.mock.calls[0]![0] as string).toLowerCase();
+    expect(msg).toContain("closed");
+    expect(msg).toContain("reopen");
+  });
+
   it("still resolves even if sending the error reply itself throws", async () => {
     const ctx = {
       reply: vi.fn().mockRejectedValue(new Error("can't parse entities")),
