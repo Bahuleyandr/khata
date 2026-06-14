@@ -56,6 +56,21 @@ const updatedExpense: Expense = {
   source: 'receipt',
   review_status: 'reviewed',
   tags: [],
+  account_id: null,
+  account: null,
+  updated_at: '2026-04-18T09:30:00.000Z',
+  paid_by_user_id: null,
+  settlement_scope: 'personal',
+  confidence: {
+    overall: 0.9,
+    amount: 0.9,
+    date: 0.9,
+    merchant: 0.9,
+    category: 0.5,
+    account: 0.5,
+    source: 1.0,
+    reasons: [],
+  },
 }
 
 describe('ReceiptsPage', () => {
