@@ -23,6 +23,7 @@ export interface AccessUser {
   updatedAt: Date;
   lastLoginAt: Date | null;
   revokedAt: Date | null;
+  sessionsInvalidBefore: Date | null;
 }
 
 export interface LedgerAccess {
@@ -62,6 +63,7 @@ interface AccessUserRow {
   updated_at: Date;
   last_login_at: Date | null;
   revoked_at: Date | null;
+  sessions_invalid_before: Date | null;
 }
 
 interface LedgerAccessRow {
@@ -117,6 +119,7 @@ function mapAccessUser(row: AccessUserRow): AccessUser {
     updatedAt: row.updated_at,
     lastLoginAt: row.last_login_at,
     revokedAt: row.revoked_at,
+    sessionsInvalidBefore: row.sessions_invalid_before ?? null,
   };
 }
 
@@ -165,6 +168,7 @@ function virtualBootstrapOwner(telegramUserId: number, profile: AccessProfile = 
     updatedAt: now,
     lastLoginAt: now,
     revokedAt: null,
+    sessionsInvalidBefore: null,
   };
 }
 
@@ -348,7 +352,8 @@ export async function resolveAccessForTelegramUser(
            created_at,
            updated_at,
            last_login_at,
-           revoked_at
+           revoked_at,
+           sessions_invalid_before
     FROM access_users
     WHERE telegram_user_id = ${telegramUserId}
   `;
@@ -406,7 +411,8 @@ export async function resolveAccessForTelegramUser(
               created_at,
               updated_at,
               last_login_at,
-              revoked_at
+              revoked_at,
+              sessions_invalid_before
   `;
 
   return updatedRows[0] ? mapAccessUser(updatedRows[0]) : mapAccessUser(row);
@@ -687,6 +693,15 @@ export async function updateAccessUserRole(input: {
   return users.find((user) => user.telegramUserId === input.telegramUserId) ?? null;
 }
 
+/** Invalidate every existing session for a user (logout-everywhere / revoke). */
+export async function setSessionsInvalidBefore(telegramUserId: number): Promise<void> {
+  await sql`
+    UPDATE access_users
+    SET sessions_invalid_before = NOW(), updated_at = NOW()
+    WHERE telegram_user_id = ${telegramUserId}
+  `;
+}
+
 export async function revokeAccessUser(input: {
   ledgerId: number;
   actorUserId: number;
@@ -719,5 +734,7 @@ export async function revokeAccessUser(input: {
       AND status <> 'revoked'
     RETURNING telegram_user_id::text AS telegram_user_id
   `;
-  return rows[0] ? { ...before, status: "revoked", canView: false, canAdd: false, canManage: false } : null;
+  if (!rows[0]) return null;
+  await setSessionsInvalidBefore(input.telegramUserId);
+  return { ...before, status: "revoked", canView: false, canAdd: false, canManage: false };
 }

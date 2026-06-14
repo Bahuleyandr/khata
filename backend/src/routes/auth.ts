@@ -7,6 +7,7 @@ import {
   resolveLedgerForTelegramUser,
   resolveAccessForTelegramUser,
   resolveSessionAccessForTelegramUser,
+  setSessionsInvalidBefore,
   type AccessRole,
   type LedgerKind,
 } from "../db/access.js";
@@ -22,6 +23,7 @@ export function signSession(userId: number, firstName: string, iat: number): str
 export interface VerifiedSession {
   userId: number;
   firstName: string;
+  iat: number;
 }
 
 export interface AuthenticatedSession {
@@ -122,13 +124,18 @@ function verifySessionToken(token: string): VerifiedSession | null {
   if (isNaN(iat) || iat > now + AUTH_FUTURE_SKEW_S || now - iat > SESSION_MAX_AGE_S) {
     return null;
   }
-  return { userId, firstName };
+  return { userId, firstName, iat };
 }
 
 export function verifySession(token: string): VerifiedSession | null {
   const session = verifySessionToken(token);
   if (!session || !isConfigAllowedUser(session.userId)) return null;
   return session;
+}
+
+/** A token is revoked if it was issued before the user's revocation epoch. */
+export function isSessionRevoked(iatSeconds: number, invalidBefore: Date | null): boolean {
+  return invalidBefore != null && iatSeconds * 1000 < invalidBefore.getTime();
 }
 
 export async function getSession(
@@ -150,6 +157,10 @@ export async function getSession(
   });
   if (!access || access.status !== "active" || access.ledgerUserId === null) {
     reply.status(403).send({ error: "Access not approved yet" });
+    return null;
+  }
+  if (isSessionRevoked(session.iat, access.sessionsInvalidBefore)) {
+    reply.status(401).send({ error: "Session expired" });
     return null;
   }
   const ledgerAccess = await resolveLedgerForTelegramUser({
@@ -330,7 +341,18 @@ export async function authRoutes(app: FastifyInstance) {
   });
 
   // POST /api/logout
-  app.post("/api/logout", async (_request, reply) => {
+  app.post("/api/logout", async (request, reply) => {
+    const token = request.cookies["session"];
+    if (token) {
+      const session = verifySessionToken(token);
+      if (session) {
+        try {
+          await setSessionsInvalidBefore(session.userId);
+        } catch (err) {
+          request.log.warn({ err }, "logout: failed to invalidate sessions");
+        }
+      }
+    }
     clearSessionCookie(reply);
     return { ok: true };
   });
