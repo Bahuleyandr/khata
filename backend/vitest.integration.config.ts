@@ -6,7 +6,9 @@ export default defineConfig({
     include: ["src/**/*.integration.test.ts"],
     globalSetup: ["src/test-support/integration.setup.ts"],
     pool: "forks",
-    singleFork: true,
+    poolOptions: {
+      forks: { singleFork: true },
+    },
     // All integration tests share one Postgres instance and one connection pool.
     // Force fully sequential execution across files AND within each file to
     // prevent deadlocks and pool exhaustion.
