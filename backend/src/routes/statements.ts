@@ -404,6 +404,8 @@ async function importPendingStatementRows(
         parser: "statement",
         rawText: row.description,
       });
+      // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+      const confidenceObj = JSON.parse(JSON.stringify(confidence));
       const [inserted] = await tx<Array<{ id: string }>>`
         INSERT INTO expenses (
           user_id,
@@ -431,7 +433,7 @@ async function importPendingStatementRows(
           ${row.category_id},
           ${row.account_id},
           'needs_review',
-          ${JSON.stringify(confidence)}::jsonb,
+          ${confidenceObj},
           ${actorUserId},
           ${settlementScope}
         )

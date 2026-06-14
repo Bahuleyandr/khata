@@ -178,6 +178,8 @@ export async function undoAuditEvent(
       if (!expenseId || amountCents === null || !occurredAt) {
         throw Object.assign(new Error("Previous expense state is incomplete"), { statusCode: 422 });
       }
+      // Restore confidence as a plain object so postgres.js serializes once (no double-encoding).
+      const beforeConfidenceUpdate = JSON.parse(JSON.stringify(getObject(before.confidence)));
       await tx`
         UPDATE expenses
         SET amount_cents = ${amountCents},
@@ -188,7 +190,7 @@ export async function undoAuditEvent(
             category_id = ${getString(before.category_id)},
             account_id = ${getString(before.account_id)},
             capture_event_id = ${getString(before.capture_event_id)},
-            confidence = ${JSON.stringify(getObject(before.confidence))}::jsonb,
+            confidence = ${beforeConfidenceUpdate},
             paid_by_user_id = ${getNumber(before.paid_by_user_id)},
             settlement_scope = ${getString(before.settlement_scope) ?? "personal"},
             occurred_at = ${occurredAt},
@@ -210,6 +212,8 @@ export async function undoAuditEvent(
       if (!expenseId || amountCents === null || !occurredAt) {
         throw Object.assign(new Error("Deleted expense state is incomplete"), { statusCode: 422 });
       }
+      // Restore confidence as a plain object so postgres.js serializes once (no double-encoding).
+      const beforeConfidenceInsert = JSON.parse(JSON.stringify(getObject(before.confidence)));
       await tx`
         INSERT INTO expenses (
           id,
@@ -242,7 +246,7 @@ export async function undoAuditEvent(
           ${getString(before.category_id)},
           ${getString(before.account_id)},
           ${getString(before.capture_event_id)},
-          ${JSON.stringify(getObject(before.confidence))}::jsonb,
+          ${beforeConfidenceInsert},
           ${getNumber(before.paid_by_user_id)},
           ${getString(before.settlement_scope) ?? "personal"},
           ${occurredAt},

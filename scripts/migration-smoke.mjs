@@ -170,6 +170,60 @@ async function assertTimezoneBucketing() {
 }
 
 /**
+ * Migration 029: confidence jsonb decode.
+ *
+ * Migration 029 already ran during migrate:dev above, so we can no longer test
+ * that it decoded existing rows at startup. Instead we:
+ *  1. Insert a deliberately double-encoded row (the OLD broken way) using
+ *     to_jsonb('...'::text) which stores a jsonb STRING node.
+ *  2. Assert that it is indeed broken (jsonb_typeof = 'string').
+ *  3. Run the same decode UPDATE the migration applies.
+ *  4. Assert jsonb_typeof = 'object' and the value reads correctly.
+ *
+ * Uses user_id 996 to avoid colliding with 997/998/999.
+ */
+async function assertConfidenceDecode() {
+  console.log("Verifying confidence jsonb decode (migration 029)...");
+
+  // Insert a double-encoded row the old broken way.
+  await psql(
+    `INSERT INTO expenses (user_id, amount_cents, occurred_at, confidence)
+     VALUES (996, 1000, '2026-06-01T10:00:00Z', to_jsonb('{"overall":85,"amount":100,"date":95,"merchant":95,"category":96,"account":92,"source":98,"reasons":[]}'::text))`,
+  );
+
+  // Confirm it's broken (jsonb_typeof = 'string').
+  const typeBefore = await psql(
+    "SELECT jsonb_typeof(confidence) FROM expenses WHERE user_id = 996",
+  );
+  if (typeBefore !== "string") {
+    throw new Error(`Expected double-encoded row to have jsonb_typeof 'string', got '${typeBefore}'`);
+  }
+
+  // Run the decode the migration applies.
+  await psql(
+    "UPDATE expenses SET confidence = (confidence #>> '{}')::jsonb WHERE jsonb_typeof(confidence) = 'string' AND user_id = 996",
+  );
+
+  // Assert it decoded to an object.
+  const typeAfter = await psql(
+    "SELECT jsonb_typeof(confidence) FROM expenses WHERE user_id = 996",
+  );
+  if (typeAfter !== "object") {
+    throw new Error(`Expected decoded confidence to be jsonb 'object', got '${typeAfter}'`);
+  }
+
+  // Assert the value reads correctly.
+  const overall = await psql(
+    "SELECT confidence->>'overall' FROM expenses WHERE user_id = 996",
+  );
+  if (overall !== "85") {
+    throw new Error(`Expected confidence->>'overall' = '85', got '${overall}'`);
+  }
+
+  console.log("Confidence jsonb decode verified.");
+}
+
+/**
  * Migration 028: updated_at trigger must fire on UPDATE, stamping a strictly
  * greater timestamp than the inserted value. Uses user_id 997 to avoid
  * colliding with 998/999 used by other assertions.
@@ -250,6 +304,7 @@ async function main() {
   await assertMonthCloseImmutability();
   await assertTimezoneBucketing();
   await assertUpdatedAtTrigger();
+  await assertConfidenceDecode();
 
   console.log("Migration smoke passed.");
 }

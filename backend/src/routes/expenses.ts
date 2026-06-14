@@ -545,6 +545,8 @@ export async function expensesRoutes(app: FastifyInstance) {
       const settlementScope =
         body.settlement_scope ?? (session.selectedLedgerKind === "household" ? "shared" : "personal");
       const paidByUserId = body.paid_by_user_id ?? session.actorUserId;
+      // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+      const confidenceObj = JSON.parse(JSON.stringify(confidence));
 
       const rows = await sql<ExpenseRow[]>`
         WITH inserted AS (
@@ -580,7 +582,7 @@ export async function expensesRoutes(app: FastifyInstance) {
             NULL,
             ${reviewStatus},
             CASE WHEN ${reviewStatus} = 'reviewed' THEN NOW() ELSE NULL END,
-            ${JSON.stringify(confidence)}::jsonb,
+            ${confidenceObj},
             ${paidByUserId},
             ${settlementScope}
           )

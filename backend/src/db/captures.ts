@@ -97,7 +97,8 @@ function normalizeCaptureRow(row: CaptureEventRow): CaptureEventRow {
 
 export async function recordCaptureEvent(input: CaptureEventInput): Promise<string> {
   const metadataJson = JSON.stringify(input.metadata ?? {});
-  const confidenceJson = JSON.stringify(input.confidence ?? {});
+  // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+  const confidence = JSON.parse(JSON.stringify(input.confidence ?? {}));
   const [row] = await sql<Array<{ id: string }>>`
     INSERT INTO capture_events (
       user_id,
@@ -119,7 +120,7 @@ export async function recordCaptureEvent(input: CaptureEventInput): Promise<stri
       ${input.contentHash ?? null},
       ${input.mimeType ?? null},
       ${metadataJson}::jsonb,
-      ${confidenceJson}::jsonb
+      ${confidence}
     )
     RETURNING id
   `;
@@ -134,7 +135,8 @@ export async function markCaptureProcessed(
   confidence?: CaptureConfidence,
 ): Promise<void> {
   if (!captureEventId) return;
-  const confidenceJson = confidence ? JSON.stringify(confidence) : null;
+  // Pass confidence as a plain object so postgres.js serializes once (no double-encoding).
+  const confidenceObj = confidence ? JSON.parse(JSON.stringify(confidence)) : null;
   await sql`
     UPDATE capture_events
     SET status = 'processed',
@@ -142,7 +144,7 @@ export async function markCaptureProcessed(
         error_reason = NULL,
         failure_kind = NULL,
         diagnosis = '{}'::jsonb,
-        confidence = CASE WHEN ${confidenceJson !== null} THEN ${confidenceJson ?? "{}"}::jsonb ELSE confidence END,
+        confidence = CASE WHEN ${confidenceObj !== null} THEN ${confidenceObj ?? {}} ELSE confidence END,
         processed_at = NOW(),
         updated_at = NOW()
     WHERE id = ${captureEventId}
