@@ -52,13 +52,17 @@ describe("understandImage", () => {
       understandImage({ imagePath: "/tmp/receipt.jpg", prompt: "read receipt" }),
     ).resolves.toBe("extracted receipt text");
 
-    expect(mocks.callTool).toHaveBeenCalledWith({
-      name: "understand_image",
-      arguments: {
-        image_source: "/tmp/receipt.jpg",
-        prompt: "read receipt",
+    expect(mocks.callTool).toHaveBeenCalledWith(
+      {
+        name: "understand_image",
+        arguments: {
+          image_source: "/tmp/receipt.jpg",
+          prompt: "read receipt",
+        },
       },
-    });
+      undefined,
+      { timeout: 60_000 },
+    );
 
     await shutdownMcp();
   });

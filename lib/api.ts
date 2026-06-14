@@ -36,6 +36,17 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     credentials: 'include',
   })
   if (!res.ok) {
+    if (
+      res.status === 401 &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      // Session expired mid-use. Clear the stale ledger selection and bounce to
+      // login so an in-progress correction can't silently fail with a cryptic
+      // inline error the user mistakes for "saved".
+      setSelectedLedgerId(null)
+      window.location.assign('/login')
+    }
     const err = await res.json().catch(() => ({}))
     throw Object.assign(new Error((err as { error?: string }).error ?? res.statusText), {
       status: res.status,

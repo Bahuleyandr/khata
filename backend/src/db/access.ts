@@ -489,6 +489,27 @@ export async function resolveLedgerForTelegramUser(input: {
   return access;
 }
 
+/**
+ * True iff `telegramUserId` is an active member of `ledgerId`. Used to reject
+ * client-supplied payer attribution (`paid_by_user_id`) that points at someone
+ * who is not actually in the ledger — otherwise a lower-privilege member could
+ * misattribute shared-expense payments or drop them out of settlement totals.
+ */
+export async function isActiveLedgerMember(
+  ledgerId: number,
+  telegramUserId: number,
+): Promise<boolean> {
+  const [row] = await sql<Array<{ telegram_user_id: string }>>`
+    SELECT telegram_user_id
+    FROM ledger_members
+    WHERE ledger_id = ${ledgerId}
+      AND telegram_user_id = ${telegramUserId}
+      AND status = 'active'
+    LIMIT 1
+  `;
+  return !!row;
+}
+
 export async function listAccessUsers(ledgerId: number): Promise<LedgerMember[]> {
   const rows = await sql<LedgerMemberRow[]>`
     SELECT m.ledger_id::text AS ledger_id,

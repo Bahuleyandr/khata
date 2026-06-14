@@ -68,13 +68,20 @@ export async function understandImage(input: UnderstandImageInput): Promise<stri
 
   let result;
   try {
-    result = await client.callTool({
-      name: "understand_image",
-      arguments: {
-        image_source: input.imagePath,
-        prompt: input.prompt,
+    result = await client.callTool(
+      {
+        name: "understand_image",
+        arguments: {
+          image_source: input.imagePath,
+          prompt: input.prompt,
+        },
       },
-    });
+      // Explicit 60s ceiling so a wedged uvx subprocess fails fast (-> the
+      // capture is marked failed and surfaced) instead of hanging on a pending
+      // capture forever. (The SDK default is also 60s; make it intentional.)
+      undefined,
+      { timeout: 60_000 },
+    );
   } catch (err) {
     // Drop the client so we reconnect next time (in case the subprocess died)
     await shutdownMcp();

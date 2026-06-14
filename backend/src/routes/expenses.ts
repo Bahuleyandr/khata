@@ -13,6 +13,7 @@ import { buildCaptureConfidence, reviewStatusFromConfidence, type CaptureConfide
 import { currentMonthBounds } from "../export/xlsx.js";
 import { uploadStatement } from "../storage/index.js";
 import { getSession } from "./auth.js";
+import { isActiveLedgerMember } from "../db/access.js";
 
 type ExpensesQuery = {
   page?: number;
@@ -496,6 +497,12 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
         return reply.status(400).send({ error: "Account not found" });
       }
+      if (
+        body.paid_by_user_id != null &&
+        !(await isActiveLedgerMember(session.userId, body.paid_by_user_id))
+      ) {
+        return reply.status(400).send({ error: "Payer must be a member of this ledger" });
+      }
 
       const merchant = normalizeNullableText(body.merchant) ?? null;
       const description = normalizeNullableText(body.description) ?? null;
@@ -782,6 +789,12 @@ export async function expensesRoutes(app: FastifyInstance) {
       }
       if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
         return reply.status(400).send({ error: "Account not found" });
+      }
+      if (
+        body.paid_by_user_id != null &&
+        !(await isActiveLedgerMember(session.userId, body.paid_by_user_id))
+      ) {
+        return reply.status(400).send({ error: "Payer must be a member of this ledger" });
       }
 
       const [before] = await sql<ExpenseRow[]>`
