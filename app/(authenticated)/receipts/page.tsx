@@ -329,6 +329,10 @@ export default function ReceiptsPage() {
         category: updated.category,
         occurred_at: updated.occurred_at,
         image_key: updated.image_key ?? selected.image_key,
+        // Carry the server's review status so a saved receipt actually leaves
+        // the needs-review state locally (it was kept stale, so the row stayed
+        // flagged and nextReviewReceipt re-offered it).
+        review_status: updated.review_status,
       }
       setReceipts((rows) => rows.map((row) => (row.id === nextReceipt.id ? nextReceipt : row)))
       setSelected(nextReceipt)
