@@ -1202,8 +1202,12 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     try {
       await processUpiPayment(ctx, userId, text, upi, { source: "telegram", captureEventId });
     } catch (err) {
+      // Mark the capture failed and tell the user — do NOT rethrow. A transient
+      // DB/MinIO blip on a forwarded UPI SMS must not crash the long-poll loop.
       await markCaptureFailed(userId, captureEventId, (err as Error).message);
-      throw err;
+      await ctx.reply(
+        "⚠️ Couldn't save that payment just now — it's flagged for review. Please try again.",
+      );
     }
     return;
   }
