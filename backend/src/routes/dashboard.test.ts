@@ -69,18 +69,20 @@ describe("verifyTelegramHash", () => {
 
 describe("signSession / verifySession", () => {
   it("round-trips userId and firstName", () => {
-    const token = signSession(42, "Bob", now());
-    expect(verifySession(token)).toEqual({ userId: 42, firstName: "Bob" });
+    const iat = now();
+    const token = signSession(42, "Bob", iat);
+    expect(verifySession(token)).toEqual({ userId: 42, firstName: "Bob", iat });
   });
 
   it("round-trips a firstName with UTF-8 characters", () => {
-    const token = signSession(99, "Ján Novák", now());
-    expect(verifySession(token)).toEqual({ userId: 99, firstName: "Ján Novák" });
+    const iat = now();
+    const token = signSession(99, "Ján Novák", iat);
+    expect(verifySession(token)).toEqual({ userId: 99, firstName: "Ján Novák", iat });
   });
 
   it("accepts a token issued 6 days ago (within the 7-day window)", () => {
     const iat = now() - 6 * 24 * 3600;
-    expect(verifySession(signSession(1, "Alice", iat))).toEqual({ userId: 1, firstName: "Alice" });
+    expect(verifySession(signSession(1, "Alice", iat))).toEqual({ userId: 1, firstName: "Alice", iat });
   });
 
   it("rejects a token issued 7 days + 1 second ago (expired)", () => {
