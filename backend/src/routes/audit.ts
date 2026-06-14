@@ -42,6 +42,9 @@ export async function auditRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
+      // The full forensic edit history (before/after of every money change) is
+      // owner-only; a lower-privilege household member must not read it.
+      if (!session.canManage) return reply.status(403).send({ error: "Owner access required" });
 
       return {
         events: await listAuditEvents(session.userId, {
@@ -60,6 +63,7 @@ export async function auditRoutes(app: FastifyInstance) {
     async (request, reply) => {
       const session = await getSession(request, reply);
       if (!session) return;
+      if (!session.canManage) return reply.status(403).send({ error: "Owner access required" });
       try {
         const event = await undoAuditEvent(
           session.userId,
