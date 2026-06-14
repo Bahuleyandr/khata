@@ -124,6 +124,29 @@ describe("dedupeTransactions", () => {
     expect(result[1]!.alreadyLogged).toBe(false);
   });
 
+  it("matches each existing expense at most once (1:1), so genuine repeat charges still import", async () => {
+    // A bank statement legitimately lists the SAME amount/merchant twice on the
+    // same day (e.g. two identical chai or two Uber rides). Khata already has
+    // ONE of them logged. Only the first incoming row should dedupe against it;
+    // the second is a real, not-yet-logged charge and MUST import (not silently
+    // collapse into the one existing expense).
+    sqlMock.mockResolvedValue([row()]); // exactly one existing expense
+    const result = await dedupeTransactions(1, [tx(), tx()]);
+    expect(result[0]!.alreadyLogged).toBe(true);
+    expect(result[0]!.matchedExpenseId).toBe("exp-1");
+    expect(result[1]!.alreadyLogged).toBe(false);
+    expect(result[1]!.matchedExpenseId).toBeUndefined();
+  });
+
+  it("pairs two incoming rows with two existing expenses one-to-one", async () => {
+    sqlMock.mockResolvedValue([row({ id: "exp-1" }), row({ id: "exp-2" })]);
+    const result = await dedupeTransactions(1, [tx(), tx()]);
+    expect(result.every((r) => r.alreadyLogged)).toBe(true);
+    expect(new Set(result.map((r) => r.matchedExpenseId))).toEqual(
+      new Set(["exp-1", "exp-2"]),
+    );
+  });
+
   it("queries with a ±2-day window covering the widest input date range", async () => {
     sqlMock.mockResolvedValue([]);
     await dedupeTransactions(1, [
