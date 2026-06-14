@@ -1,11 +1,16 @@
 import { execFile } from "node:child_process";
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 
+const skipIntegration = !!process.env["KHATA_SKIP_INTEGRATION"];
+
 const commands = [
   [npmCmd, ["run", "verify"]],
   [npmCmd, ["--prefix", "backend", "run", "verify"]],
   [npmCmd, ["--prefix", "backend", "run", "parser:evaluate"]],
   [npmCmd, ["run", "migration:smoke"]],
+  ...(!skipIntegration
+    ? [[npmCmd, ["--prefix", "backend", "run", "test:integration"]]]
+    : []),
   [npmCmd, ["run", "e2e"]],
 ];
 

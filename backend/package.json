@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "audit:all": "npm audit --audit-level=moderate",
-    "parser:evaluate": "tsx src/parser/evaluate.ts"
+    "parser:evaluate": "tsx src/parser/evaluate.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1038.0",
