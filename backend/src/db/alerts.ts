@@ -292,7 +292,7 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
         title: `${sub.name} renews in ${sub.days_until}d`,
         detail: `Due on ${sub.next_due_at}.`,
         href: "/manage#subscriptions",
-        dedupeKey: `subscription_due_soon:${sub.id}:${sub.next_due_at}`,
+        dedupeKey: `subscription_due_soon_record:${sub.id}:${sub.next_due_at}`,
       });
     }
   }

@@ -54,6 +54,10 @@ export async function advanceOverdueSubscriptions(): Promise<number> {
       updatedCount++;
     }
   }
+
+  // Prune stale per-cycle guard rows so they don't accumulate forever.
+  await sql`DELETE FROM subscription_reminder_state WHERE cycle_due_date < CURRENT_DATE - INTERVAL '90 days'`;
+
   return updatedCount;
 }
 
@@ -91,7 +95,8 @@ export async function sendSubscriptionReminders(botApi: Api): Promise<void> {
     FROM subscriptions s
     WHERE s.status IN ('active', 'trial')
       AND s.next_due_at IS NOT NULL
-      AND (s.next_due_at - CURRENT_DATE) BETWEEN 0 AND 90
+      -- upper bound just limits the scan; the per-threshold (days_until <= r) check below is authoritative
+      AND (s.next_due_at - CURRENT_DATE) BETWEEN 0 AND 366
       AND cardinality(s.reminder_days) > 0
     ORDER BY s.next_due_at, s.user_id
   `;
@@ -102,7 +107,8 @@ export async function sendSubscriptionReminders(botApi: Api): Promise<void> {
 
     for (const r of sub.reminder_days) {
       // Only fire for this reminder threshold if we're within the window.
-      if (daysUntil < 0 || daysUntil > r) continue;
+      // SQL guarantees daysUntil >= 0, so the only check needed is the upper bound.
+      if (daysUntil > r) continue;
 
       // Guard: skip if we've already sent this reminder for this cycle/day.
       const [existing] = await sql<Array<{ subscription_id: string }>>`
