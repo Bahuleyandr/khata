@@ -3,15 +3,21 @@ import type { ParsedExpense } from "../ai/parse.js";
 const RECEIPT_SIGNAL =
   /\b(?:receipt|tax\s+invoice|invoice|gstin|cgst|sgst|subtotal|sub\s*total|grand\s+total|payment\s+due|amount\s+due|check\s+closed|credit\s+card|cash|take[-\s]?out|hms\s*host|change\s+due|chk)\b/i;
 
+// NB: "change due" is deliberately NOT a total label — it is money handed back
+// to the customer, not the bill amount. Treating it as a total (combined with
+// Math.max / next-line bleed) was recording the change as the expense.
 const STRONG_TOTAL_LABEL =
-  /\b(?:payment\s+due|amount\s+due|grand\s+total|net\s+amount|total\s+amount|total\s+payable|balance\s+due|change\s+due)\b/i;
+  /\b(?:payment\s+due|amount\s+due|grand\s+total|net\s+amount|total\s+amount|total\s+payable|balance\s+due)\b/i;
 const TOTAL_LABEL = /\btotal\b/i;
 const PAYMENT_LABEL = /\b(?:paid|payment|credit\s+card|debit\s+card|cash|upi)\b/i;
 const SUBTOTAL_LABEL = /\b(?:subtotal|sub\s*total)\b/i;
 
 const AMOUNT_RE =
   /(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)|([\d,]+(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹)/gi;
-const BARE_AMOUNT_RE = /\b(\d{1,6}(?:,\d{3})*(?:\.\d{1,2}))\b/g;
+// Accepts both Indian lakh grouping (2,50,000.00) and plain/Western grouping
+// (123456.00 / 50,000.00). A decimal part is required so we don't match bare
+// integers like years, quantities or phone fragments.
+const BARE_AMOUNT_RE = /\b(\d{1,3}(?:,\d{2,3})+\.\d{1,2}|\d+\.\d{1,2})\b/g;
 
 const MONTHS = new Map<string, number>([
   ["jan", 1],
@@ -117,9 +123,15 @@ function parseLabeledAmounts(lines: string[], label: RegExp): number[] {
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
     if (!label.test(line)) continue;
-    values.push(...parseCurrencyAmounts(line), ...parseBareAmounts(line));
+    const onLine = [...parseCurrencyAmounts(line), ...parseBareAmounts(line)];
+    if (onLine.length > 0) {
+      values.push(...onLine);
+      continue;
+    }
 
-    // OCR often splits "Payment Due" and "INR160.00" onto separate lines.
+    // OCR often splits "Payment Due" and "INR160.00" onto separate lines. Only
+    // consult the next line when the labeled line carries no amount of its own
+    // — otherwise an adjacent tender/change line bleeds into the total.
     const next = lines[i + 1];
     if (next) {
       values.push(...parseCurrencyAmounts(next), ...parseBareAmounts(next));
