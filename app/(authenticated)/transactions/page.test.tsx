@@ -51,9 +51,24 @@ const baseExpense: Expense = {
   category: 'Food',
   source: 'receipt',
   occurred_at: '2026-04-20T10:00:00.000Z',
+  updated_at: '2026-04-20T10:00:00.000Z',
   image_key: 'receipt.jpg',
   review_status: 'needs_review',
   tags: ['team'],
+  account_id: null,
+  account: null,
+  paid_by_user_id: null,
+  settlement_scope: 'personal',
+  confidence: {
+    overall: 0.9,
+    amount: 0.9,
+    date: 0.9,
+    merchant: 0.9,
+    category: 0.5,
+    account: 0.5,
+    source: 1.0,
+    reasons: [],
+  },
 }
 
 const duplicateExpense: Expense = {
