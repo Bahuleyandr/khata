@@ -83,6 +83,13 @@ spec:
                   # Change 1: dump sanity — fail the job immediately if the
                   # custom-format file cannot be parsed (corrupt / truncated).
                   pg_restore --list "${outfile}" >/dev/null
+                  # Heartbeat: record successful postgres backup in backup_runs.
+                  psql \
+                    --host=khata-postgres.khata.svc.cluster.local \
+                    --username=khata \
+                    --dbname=khata \
+                    --set=ON_ERROR_STOP=1 \
+                    --command="INSERT INTO backup_runs (kind, status, detail) VALUES ('postgres', 'ok', '${stamp}');"
                   find /backups -type f -name 'khata-postgres-*.dump' -mtime +14 -delete
               volumeMounts:
                 - name: backups
@@ -190,7 +197,9 @@ spec:
           securityContext:
             seccompProfile:
               type: RuntimeDefault
-          containers:
+          # minio-mirror runs first as an initContainer; only after it succeeds
+          # does minio-heartbeat insert the backup_runs row via psql.
+          initContainers:
             - name: minio-mirror
               image: minio/minio:RELEASE.2025-04-22T22-12-26Z
               securityContext:
@@ -226,6 +235,32 @@ spec:
               volumeMounts:
                 - name: backups
                   mountPath: /backups
+          containers:
+            # Heartbeat: insert successful minio backup row after mirror completes.
+            - name: minio-heartbeat
+              image: postgres:16-alpine
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-secrets
+                      key: POSTGRES_PASSWORD
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  psql \
+                    --host=khata-postgres.khata.svc.cluster.local \
+                    --username=khata \
+                    --dbname=khata \
+                    --set=ON_ERROR_STOP=1 \
+                    --command="INSERT INTO backup_runs (kind, status, detail) VALUES ('minio', 'ok', '${stamp}');"
           volumes:
             - name: backups
               persistentVolumeClaim:
