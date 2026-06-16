@@ -16,7 +16,7 @@ spec:
 #   • dump-sanity check  (pg_restore --list on the just-written file)
 #   • inert offsite upload (Change 3 — enabled only when Secret is present)
 #
-# Offsite Secret (optional):
+# Offsite Secret (optional — ONE Secret drives BOTH postgres + minio offsite):
 #   Create the Secret when you want encrypted S3-compatible uploads:
 #
 #   kubectl create secret generic khata-backup-offsite -n khata \
@@ -26,10 +26,14 @@ spec:
 #     --from-literal=SECRET_ACCESS_KEY=<key> \
 #     --from-literal=PASSPHRASE=<strong-random-passphrase>
 #
-#   When absent (all keys missing / empty), the offsite-upload container
-#   prints "offsite disabled" and exits 0  — the on-box dump is still kept.
-#   PASSPHRASE is mandatory for the upload to proceed; if only ENDPOINT/BUCKET
-#   are set but PASSPHRASE is empty the container will also exit 0 (no upload).
+#   When absent (all keys missing / empty), the offsite-upload containers
+#   in BOTH CronJobs print "offsite disabled" and exit 0 — on-box copies
+#   are still kept.  PASSPHRASE is mandatory; if only ENDPOINT/BUCKET are
+#   set but PASSPHRASE is empty both containers also exit 0 (no upload).
+#
+#   Upload paths:
+#     s3://$BUCKET/postgres/<filename>.dump.enc   — Postgres dump
+#     s3://$BUCKET/minio/<filename>.tar.gz.enc    — MinIO blob mirror
 # ─────────────────────────────────────────────────────────────────────────────
 apiVersion: batch/v1
 kind: CronJob
@@ -261,6 +265,89 @@ spec:
                     --dbname=khata \
                     --set=ON_ERROR_STOP=1 \
                     --command="INSERT INTO backup_runs (kind, status, detail) VALUES ('minio', 'ok', '${stamp}');"
+            # Offsite upload: runs in parallel with minio-heartbeat (both are main
+            # containers, after minio-mirror initContainer completes).
+            # Tars + AES-256-CBC encrypts the newest khata-minio-* mirror dir and
+            # uploads to s3://$BUCKET/minio/. Inert until khata-backup-offsite
+            # Secret is present (same Secret used by postgres offsite-upload).
+            - name: minio-offsite-upload
+              image: amazon/aws-cli:2.24.0
+              securityContext:
+                runAsNonRoot: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: ENDPOINT
+                      optional: true
+                - name: BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: BUCKET
+                      optional: true
+                - name: ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: ACCESS_KEY_ID
+                      optional: true
+                - name: SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: SECRET_ACCESS_KEY
+                      optional: true
+                - name: PASSPHRASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: khata-backup-offsite
+                      key: PASSPHRASE
+                      optional: true
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # All three must be non-empty for an upload to happen.
+                  if [ -z "${ENDPOINT:-}" ] || [ -z "${BUCKET:-}" ] || [ -z "${PASSPHRASE:-}" ]; then
+                    echo "minio offsite disabled (no khata-backup-offsite secret) — on-box mirror only"
+                    exit 0
+                  fi
+                  if ! command -v openssl >/dev/null 2>&1; then
+                    echo "WARNING: openssl not found in this image; skipping minio offsite upload"
+                    exit 0
+                  fi
+                  # Find the newest khata-minio-* stamped dir written by minio-mirror.
+                  # minio-mirror writes: /backups/khata-minio-<stamp>/<S3_BUCKET>/
+                  # We tar the whole khata-minio-<stamp> parent so the bucket subdir
+                  # is preserved inside the archive.
+                  mirror_dir="$(ls -1dt /backups/khata-minio-* 2>/dev/null | head -n 1 || true)"
+                  if [ -z "$mirror_dir" ]; then
+                    echo "ERROR: no khata-minio-* mirror dir found in /backups — cannot upload offsite"
+                    exit 1
+                  fi
+                  stamp="$(basename "${mirror_dir}")"
+                  encrypted="/tmp/${stamp}.tar.gz.enc"
+                  tar czf - -C /backups "$(basename "${mirror_dir}")" \
+                    | openssl enc -aes-256-cbc -pbkdf2 -salt \
+                        -pass env:PASSPHRASE \
+                        -out "${encrypted}"
+                  AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
+                  AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
+                    aws s3 cp \
+                      --endpoint-url "${ENDPOINT}" \
+                      --no-progress \
+                      "${encrypted}" \
+                      "s3://${BUCKET}/minio/$(basename "${encrypted}")"
+                  rm -f "${encrypted}"
+                  echo "minio offsite upload complete: s3://${BUCKET}/minio/$(basename "${encrypted}")"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
           volumes:
             - name: backups
               persistentVolumeClaim:
