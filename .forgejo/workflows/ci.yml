@@ -1,0 +1,93 @@
+# Forgejo Actions CI — Khata monorepo
+#
+# GitHub Actions is billing-blocked on the GitHub mirror; this workflow is the
+# real CI gate and runs only on the self-hosted Forgejo act_runner at
+# hippocampus-monitor.ts.net. The `if: contains(github.server_url, …)` guard on
+# every job ensures it is skipped silently on GitHub (the job never even starts
+# there, so no billing is consumed).
+#
+# Jobs:
+#   verify       — root + backend non-Docker gate: secrets:scan, audit, lint,
+#                  unit tests, build, parser:evaluate. No network services needed.
+#   integration  — backend real-PG suite using a Postgres 16 service container.
+#                  INTEGRATION_USE_EXISTING_DB=1 tells integration.setup.ts to
+#                  use the service DB instead of spinning its own docker container.
+#
+# Runner label:  ubuntu-latest  (the label registered for the act_runner;
+#                change here and in Settings → Actions → Runners if different).
+# Container:     node:22        (ships Node + npm; no apt installs needed).
+
+name: Forgejo CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # verify: lint / type-check / unit tests / build / parser sanity
+  # Mirrors `premerge.mjs` minus Docker-dependent and browser steps.
+  # ---------------------------------------------------------------------------
+  verify:
+    if: ${{ contains(github.server_url, 'hippocampus-monitor') }}
+    runs-on: ubuntu-latest
+    container: node:22
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Root verify (secrets:scan + audit + lint + test + build)
+        run: npm run verify
+
+      - name: Backend verify (secrets:scan + audit + lint + test + build)
+        run: npm --prefix backend run verify
+
+      - name: Backend parser evaluate
+        run: npm --prefix backend run parser:evaluate
+
+  # ---------------------------------------------------------------------------
+  # integration: real Postgres via service container
+  # The `postgres` service is reachable at hostname `postgres` inside the job.
+  # INTEGRATION_USE_EXISTING_DB=1 bypasses docker-spin in integration.setup.ts.
+  # ---------------------------------------------------------------------------
+  integration:
+    if: ${{ contains(github.server_url, 'hippocampus-monitor') }}
+    runs-on: ubuntu-latest
+    container: node:22
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: khata_integration
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend
+
+      - name: Run integration tests (use service Postgres)
+        run: npm --prefix backend run test:integration
+        env:
+          INTEGRATION_USE_EXISTING_DB: "1"
+          DATABASE_URL: postgres://postgres@postgres:5432/khata_integration
+          TELEGRAM_BOT_TOKEN: t
+          # Superset of all user IDs used across integration test files
+          ALLOWED_TELEGRAM_USER_IDS: "99999,10001,10002,10003,20001,20002,20003,20004,20005,30001,30002,30003,30004,30005,40001,40002"
+          SESSION_SECRET: test-secret-that-is-at-least-32-chars-long
+          MINIMAX_API_KEY: k
+          S3_ENDPOINT: http://localhost:9000
+          S3_BUCKET: b
+          S3_REGION: us-east-1
+          S3_ACCESS_KEY_ID: a
+          S3_SECRET_ACCESS_KEY: s
+          ALLOWED_ORIGINS: http://localhost:3000

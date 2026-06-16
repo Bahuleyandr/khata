@@ -86,6 +86,62 @@ async function waitForPostgres(port: string): Promise<void> {
 }
 
 export async function setup(): Promise<void> {
+  // ---------------------------------------------------------------------------
+  // CI fast-path: use an externally-provided Postgres (e.g. a Forgejo Actions
+  // service container) instead of spinning our own Docker container.
+  // Set INTEGRATION_USE_EXISTING_DB=1 and DATABASE_URL=<connection string>.
+  // ---------------------------------------------------------------------------
+  if (process.env["INTEGRATION_USE_EXISTING_DB"] === "1") {
+    const dbUrl = process.env["DATABASE_URL"];
+    if (!dbUrl) {
+      throw new Error(
+        "[integration] INTEGRATION_USE_EXISTING_DB=1 requires DATABASE_URL to be set",
+      );
+    }
+    console.log(`[integration] Using existing DB: ${dbUrl}`);
+
+    // Set all env vars that the docker-spin path sets so config.ts is satisfied.
+    // DATABASE_URL is already set by the caller — preserve it.
+    process.env["TELEGRAM_BOT_TOKEN"] ??= "integration-test-token";
+    process.env["ALLOWED_TELEGRAM_USER_IDS"] ??= [
+      "99999",
+      "10001", "10002", "10003",
+      "20001", "20002", "20003", "20004", "20005",
+      "30001", "30002", "30003", "30004", "30005",
+      "40001", "40002",
+    ].join(",");
+    process.env["SESSION_SECRET"] ??= "integration-test-secret-that-is-at-least-32-chars-long";
+    process.env["MINIMAX_API_KEY"] ??= "integration-test-minimax-key";
+    process.env["S3_ENDPOINT"] ??= "http://localhost:9000";
+    process.env["S3_BUCKET"] ??= "khata-integration";
+    process.env["S3_REGION"] ??= "us-east-1";
+    process.env["S3_ACCESS_KEY_ID"] ??= "test-access-key";
+    process.env["S3_SECRET_ACCESS_KEY"] ??= "test-secret-key";
+    process.env["ALLOWED_ORIGINS"] ??= "http://localhost:3000";
+
+    console.log("[integration] Running migrations against existing DB...");
+    const { stderr: migrateErr } = await execFileAsync(
+      npmCmd,
+      ["--prefix", "backend", "run", "migrate:dev"],
+      {
+        shell: process.platform === "win32",
+        windowsHide: true,
+        maxBuffer: 1024 * 1024 * 20,
+        env: { ...process.env },
+        cwd: process.cwd().replace(/[\\/]backend$/, ""),
+      },
+    );
+    if (migrateErr?.trim()) process.stderr.write(migrateErr);
+    console.log("[integration] Migrations complete (existing DB).");
+
+    // Signal teardown to skip container removal.
+    process.env["_INTEGRATION_CONTAINER"] = "";
+    return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Local path: detect Docker and spin a disposable container (unchanged).
+  // ---------------------------------------------------------------------------
   const hasDocker = await detectDocker();
   if (!hasDocker) {
     console.warn("[integration] Docker not available — skipping integration tests.");
@@ -181,6 +237,8 @@ export async function setup(): Promise<void> {
 
 export async function teardown(): Promise<void> {
   const c = process.env["_INTEGRATION_CONTAINER"];
+  // When using an existing DB (INTEGRATION_USE_EXISTING_DB=1), _INTEGRATION_CONTAINER
+  // is set to "" — skip removal. When docker-spin path was used, it holds a container name.
   if (c) {
     console.log(`[integration] Removing container ${c}`);
     await execFileAsync(
