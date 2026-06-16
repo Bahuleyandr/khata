@@ -6,6 +6,7 @@ import { sql } from "./db/index.js";
 import { bot, installMiniAppMenuButton } from "./bot/index.js";
 import { startBudgetCrons } from "./cron/budgets.js";
 import { startInsightsCron } from "./cron/insights.js";
+import { startHealthCron } from "./cron/health.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { shutdownMcp } from "./ai/mcp.js";
 import { dashboardCorsOptions } from "./http/cors.js";
@@ -31,6 +32,7 @@ await app.register(dashboardRoutes);
 
 startBudgetCrons(bot.api);
 startInsightsCron();
+startHealthCron(bot.api);
 
 // Bot runs in long-polling mode (no public webhook needed → works behind NAT
 // and on Tailscale-only deployments). Drop any leftover webhook registration
