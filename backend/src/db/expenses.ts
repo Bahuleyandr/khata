@@ -103,6 +103,7 @@ export async function insertExpense(data: InsertExpenseData): Promise<string> {
         after: created,
         metadata: { source: data.source },
       },
+      tx,
     );
     return created.id;
   });
@@ -245,6 +246,7 @@ export async function updateExpenseAmount(
         after,
         metadata: { source: "telegram", field: "amount" },
       },
+      tx,
     );
     return true;
   });
@@ -279,6 +281,7 @@ export async function updateExpenseCategory(
         after,
         metadata: { source: "telegram", field: "category" },
       },
+      tx,
     );
     return true;
   });
@@ -313,21 +316,45 @@ export async function updateExpenseDate(
         after,
         metadata: { source: "telegram", field: "date" },
       },
+      tx,
     );
     return true;
   });
 }
 
-export async function deleteExpense(id: string, userId: number): Promise<DeletedExpenseData | null> {
-  const [row] = await sql<DeletedExpenseData[]>`
-    DELETE FROM expenses
-    WHERE id = ${id}
-      AND user_id = ${userId}
-    RETURNING id, amount_cents::text AS amount_cents, currency, description, merchant,
-              merchant_canonical_id, category_id, source, occurred_at, image_key,
-              review_status, account_id::text AS account_id,
-              capture_event_id::text AS capture_event_id, confidence,
-              paid_by_user_id::text AS paid_by_user_id, settlement_scope
-  `;
-  return row ?? null;
+export async function deleteExpense(
+  id: string,
+  userId: number,
+  // When provided, the delete and its audit row commit in ONE transaction so a
+  // crash can't leave a deleted row with no undo history (audit 2026-06-19 M10).
+  audit?: { actorUserId: number; source: string },
+): Promise<DeletedExpenseData | null> {
+  return sql.begin(async (tx) => {
+    const [row] = await tx<DeletedExpenseData[]>`
+      DELETE FROM expenses
+      WHERE id = ${id}
+        AND user_id = ${userId}
+      RETURNING id, amount_cents::text AS amount_cents, currency, description, merchant,
+                merchant_canonical_id, category_id, source, occurred_at, image_key,
+                review_status, account_id::text AS account_id,
+                capture_event_id::text AS capture_event_id, confidence,
+                paid_by_user_id::text AS paid_by_user_id, settlement_scope
+    `;
+    if (!row) return null;
+    if (audit) {
+      await recordAuditEvent(
+        {
+          userId,
+          actorUserId: audit.actorUserId,
+          action: "expense.delete",
+          entityType: "expense",
+          entityId: row.id,
+          before: row,
+          metadata: { source: audit.source },
+        },
+        tx,
+      );
+    }
+    return row;
+  });
 }

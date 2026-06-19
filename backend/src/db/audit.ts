@@ -1,4 +1,5 @@
 import { sql } from "./index.js";
+import type postgres from "postgres";
 
 export interface AuditEventInput {
   userId: number;
@@ -34,7 +35,13 @@ export interface AuditEventFilters {
   entityId?: string;
 }
 
-export async function recordAuditEvent(input: AuditEventInput): Promise<string> {
+export async function recordAuditEvent(
+  input: AuditEventInput,
+  // Pass the caller's transaction (tx) to write the audit row in the SAME
+  // transaction as the money mutation, so the two commit or roll back together
+  // (audit 2026-06-19 M10). Defaults to the pool for non-transactional callers.
+  executor: postgres.Sql | postgres.TransactionSql = sql,
+): Promise<string> {
   // Normalise to plain JSON (Date -> ISO string, drop undefined) and let
   // postgres.js serialize ONCE into the jsonb columns. The previous
   // `${JSON.stringify(x)}::jsonb` double-encoded the value into a jsonb STRING,
@@ -44,7 +51,7 @@ export async function recordAuditEvent(input: AuditEventInput): Promise<string> 
   const after = input.after == null ? null : JSON.parse(JSON.stringify(input.after));
   const metadata = JSON.parse(JSON.stringify(input.metadata ?? {}));
 
-  const rows = await sql<Array<{ id: string }>>`
+  const rows = await executor<Array<{ id: string }>>`
     INSERT INTO audit_log (
       user_id,
       actor_user_id,

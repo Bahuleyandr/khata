@@ -106,9 +106,12 @@ export async function sendSubscriptionReminders(botApi: Api): Promise<void> {
     const daysUntil = sub.days_until;
 
     for (const r of sub.reminder_days) {
-      // Only fire for this reminder threshold if we're within the window.
-      // SQL guarantees daysUntil >= 0, so the only check needed is the upper bound.
-      if (daysUntil > r) continue;
+      // Fire only on the EXACT threshold day, so a sub already within several
+      // thresholds (created/seen at days_until below the highest reminder day)
+      // sends one DM, not one per crossed threshold (audit 2026-06-19 H7).
+      // A daily cron hits each threshold exactly; the per-(sub,cycle,r) guard
+      // below still protects against a same-day double-run.
+      if (daysUntil !== r) continue;
 
       // Guard: skip if we've already sent this reminder for this cycle/day.
       const [existing] = await sql<Array<{ subscription_id: string }>>`

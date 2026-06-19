@@ -7,6 +7,7 @@ import { llm } from "../ai/client.js";
 import { understandImage } from "../ai/mcp.js";
 import { withHttpUsage, withMcpUsage } from "../ai/usage.js";
 import type { ParsedTransaction } from "./types.js";
+import { sanitizeParsedTransactions } from "./sanitize.js";
 
 const NORMALIZATION_SYSTEM = `You are a financial data extractor. Extract all debit/credit transactions from bank or credit card statement text.
 
@@ -86,7 +87,7 @@ export async function normalizeTransactions(rawText: string): Promise<ParsedTran
     parsed = JSON.parse(match[1]!);
   }
   if (!Array.isArray(parsed)) throw new Error("Expected JSON array from normalization");
-  return parsed as ParsedTransaction[];
+  return sanitizeParsedTransactions(parsed);
 }
 
 export async function parseStatementBuffer(
