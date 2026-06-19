@@ -4,6 +4,7 @@
  * Safe to re-run (idempotent — skips already-applied migrations).
  */
 import { readdir, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
@@ -20,6 +21,11 @@ async function migrate() {
       applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  // Track a content checksum so an already-applied migration that is later
+  // edited is caught instead of silently diverging from the live schema
+  // (audit 2026-06-19 M6). Added via ALTER so existing DBs upgrade in place;
+  // rows applied before this change have NULL checksum and skip the check.
+  await sql`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT`;
 
   // One-time rename guard: update old filenames to new filenames if present
   const renames: Array<[string, string]> = [
@@ -43,17 +49,24 @@ async function migrate() {
     .sort();
 
   for (const file of files) {
-    const [existing] = await sql`
-      SELECT filename FROM schema_migrations WHERE filename = ${file}
+    const body = await readFile(join(migrationsDir, file), "utf8");
+    const checksum = createHash("sha256").update(body).digest("hex");
+    const [existing] = await sql<Array<{ checksum: string | null }>>`
+      SELECT checksum FROM schema_migrations WHERE filename = ${file}
     `;
     if (existing) {
+      if (existing.checksum && existing.checksum !== checksum) {
+        throw new Error(
+          `Migration ${file} was modified after being applied (checksum mismatch). ` +
+            `Migrations are append-only — create a new migration instead of editing this one.`,
+        );
+      }
       console.log(`  skip  ${file}`);
       continue;
     }
-    const body = await readFile(join(migrationsDir, file), "utf8");
     await sql.begin(async (tx) => {
       await tx.unsafe(body);
-      await tx`INSERT INTO schema_migrations (filename) VALUES (${file})`;
+      await tx`INSERT INTO schema_migrations (filename, checksum) VALUES (${file}, ${checksum})`;
     });
     console.log(`  apply ${file}`);
   }
