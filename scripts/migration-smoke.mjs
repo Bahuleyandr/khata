@@ -85,7 +85,11 @@ async function psql(sqlText, { expectError = false } = {}) {
     return stdout.trim();
   } catch (err) {
     if (expectError) return String(err.stderr ?? err.message ?? err);
-    throw err;
+    // Surface psql's stderr on an unexpected failure. execFile's err.message is
+    // only "Command failed: …" and hides the real SQL error, so the gate would
+    // otherwise mask the actual cause (audit 2026-06-19).
+    const stderr = err.stderr ? `\n${String(err.stderr).trim()}` : "";
+    throw new Error(`psql failed for: ${sqlText}${stderr}`, { cause: err });
   }
 }
 
