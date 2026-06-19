@@ -1765,6 +1765,16 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
 async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string): Promise<void> {
   const userId = ctx.from!.id;
 
+  // Rate-limit BEFORE downloading/hashing/uploading — otherwise the limiter only
+  // guards the LLM/vision call, leaving the expensive media work unthrottled
+  // (audit 2026-06-19 L1).
+  const rlPhoto = captureLimiter.allow(`capture:${userId}`);
+  if (!rlPhoto.ok) {
+    const secs = Math.ceil(rlPhoto.retryAfterMs / 1000);
+    await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
+    return;
+  }
+
   await ctx.reply("📷 Reading receipt…");
 
   let buffer: Buffer;
@@ -1803,15 +1813,6 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
     mimeType,
     metadata: { telegram_file_id: fileId },
   });
-
-  // Rate-limit LLM / vision calls by Telegram user id.
-  const rlPhoto = captureLimiter.allow(`capture:${userId}`);
-  if (!rlPhoto.ok) {
-    await markCaptureFailed(userId, captureEventId, "rate_limited");
-    const secs = Math.ceil(rlPhoto.retryAfterMs / 1000);
-    await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
-    return;
-  }
 
   // OCR via MiniMax MCP vision with a receipt-specific prompt.
   let ocrText: string;
@@ -2014,6 +2015,15 @@ export async function handleVoice(ctx: Context): Promise<void> {
   const voice = ctx.message?.voice;
   if (!userId || !voice) return;
 
+  // Rate-limit before downloading + running Whisper — otherwise each voice note
+  // is fully downloaded and transcribed before the limiter applies (audit L1).
+  const rlVoice = captureLimiter.allow(`capture:${userId}`);
+  if (!rlVoice.ok) {
+    const secs = Math.ceil(rlVoice.retryAfterMs / 1000);
+    await ctx.reply(`⏳ Too many requests — try again in ${secs}s.`);
+    return;
+  }
+
   await ctx.reply("🎙️ Transcribing…");
 
   let buffer: Buffer;
@@ -2036,18 +2046,6 @@ export async function handleVoice(ctx: Context): Promise<void> {
 
   if (text.length < 3) {
     await ctx.reply("⚠️ Couldn't make out any speech. Try again — speak clearly?");
-    return;
-  }
-
-  // Rate-limit LLM classify calls before echoing, so the user never gets a
-  // "heard you" echo immediately followed by a throttle.
-  const rlVoice = captureLimiter.allow(`capture:${userId}`);
-  if (!rlVoice.ok) {
-    const secs = Math.ceil(rlVoice.retryAfterMs / 1000);
-    // Include the transcript so the user knows what was heard even on throttle.
-    await ctx.reply(`🎙️ _"${text}"_ — ⏳ Too many requests, try again in ${secs}s.`, {
-      parse_mode: "Markdown",
-    });
     return;
   }
 
