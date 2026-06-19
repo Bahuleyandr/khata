@@ -18,6 +18,10 @@ import {
   isActiveLedgerMember,
   advanceOverdueSubscriptions,
 } from "../test-support/db-helpers.js";
+import {
+  resolveSessionAccessForTelegramUser,
+  setSessionsInvalidBefore,
+} from "../db/access.js";
 
 const skip = process.env["INTEGRATION_SKIP"] === "1";
 
@@ -207,5 +211,45 @@ describe.skipIf(skip)("F: subscription advance + reminder dedup (db-level)", () 
       SELECT subscription_id FROM subscription_reminder_state WHERE subscription_id = '${subId}'
     `);
     expect(row).toBeDefined();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Group H — Bootstrap owner session revocation (audit 2026-06-19 H4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(skip)("H: bootstrap owner session revocation", () => {
+  const OWNER_H = 30001;
+
+  beforeEach(async () => {
+    await truncateAll();
+    await seedBootstrapOwner(OWNER_H);
+  });
+
+  afterAll(async () => {
+    // Pool stays open for subsequent test files sharing this fork process.
+  });
+
+  it("H1: bootstrap-owner session path honors setSessionsInvalidBefore", async () => {
+    // Freshly seeded: no revocation epoch yet.
+    const before = await resolveSessionAccessForTelegramUser(OWNER_H);
+    expect(before?.sessionsInvalidBefore).toBeNull();
+
+    // "Log out everywhere" / revoke writes the epoch to the access_users row.
+    await setSessionsInvalidBefore(OWNER_H);
+
+    // The bootstrap-owner session path must reflect the real epoch, otherwise a
+    // stolen owner cookie survives logout until the 7-day max age (H4). The
+    // resolved value must match the DB column, not be hardcoded null.
+    const after = await resolveSessionAccessForTelegramUser(OWNER_H);
+    expect(after?.sessionsInvalidBefore).toBeInstanceOf(Date);
+
+    const [row] = await sql<Array<{ sib: Date | null }>>`
+      SELECT sessions_invalid_before AS sib
+      FROM access_users
+      WHERE telegram_user_id = ${OWNER_H}
+    `;
+    expect(row?.sib).toBeInstanceOf(Date);
+    expect(after?.sessionsInvalidBefore?.getTime()).toBe(row?.sib?.getTime());
   });
 });
