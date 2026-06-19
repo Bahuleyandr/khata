@@ -107,6 +107,8 @@ type ExpenseRow = {
 
 type ExpenseInternalRow = {
   id: string;
+  amount_cents: string;
+  occurred_at: Date;
   description: string | null;
   merchant: string | null;
   merchant_canonical_id: string | null;
@@ -1083,7 +1085,8 @@ export async function expensesRoutes(app: FastifyInstance) {
       const session = await getSession(request, reply);
       if (!session) return;
 
-      const result = await sql<Array<{
+      const deleted = await sql.begin(async (tx) => {
+        const [row] = await tx<Array<{
         id: string;
         amount_cents: string;
         currency: string;
@@ -1108,15 +1111,21 @@ export async function expensesRoutes(app: FastifyInstance) {
                   source, occurred_at, image_key, review_status, confidence,
                   paid_by_user_id::text AS paid_by_user_id, settlement_scope
       `;
-      if (!result[0]) return reply.status(404).send({ error: "Transaction not found" });
-      await recordAuditEvent({
-        userId: session.userId,
-        actorUserId: session.actorUserId,
-        action: "expense.delete",
-        entityType: "expense",
-        entityId: result[0].id,
-        before: result[0],
+        if (!row) return null;
+        await recordAuditEvent(
+          {
+            userId: session.userId,
+            actorUserId: session.actorUserId,
+            action: "expense.delete",
+            entityType: "expense",
+            entityId: row.id,
+            before: row,
+          },
+          tx,
+        );
+        return row;
       });
+      if (!deleted) return reply.status(404).send({ error: "Transaction not found" });
       return { ok: true };
     },
   );
@@ -1136,7 +1145,8 @@ export async function expensesRoutes(app: FastifyInstance) {
 
       const mergeResult = await sql.begin(async (tx) => {
         const [keeper] = await tx<ExpenseInternalRow[]>`
-          SELECT id, description, merchant, merchant_canonical_id, category_id, raw_text,
+          SELECT id, amount_cents::text AS amount_cents, occurred_at,
+                 description, merchant, merchant_canonical_id, category_id, raw_text,
                  statement_id, image_key, content_hash, upi_reference_id, account_id,
                  capture_event_id
           FROM expenses
@@ -1145,7 +1155,8 @@ export async function expensesRoutes(app: FastifyInstance) {
           FOR UPDATE
         `;
         const [duplicate] = await tx<ExpenseInternalRow[]>`
-          SELECT id, description, merchant, merchant_canonical_id, category_id, raw_text,
+          SELECT id, amount_cents::text AS amount_cents, occurred_at,
+                 description, merchant, merchant_canonical_id, category_id, raw_text,
                  statement_id, image_key, content_hash, upi_reference_id, account_id,
                  capture_event_id
           FROM expenses
@@ -1154,6 +1165,15 @@ export async function expensesRoutes(app: FastifyInstance) {
           FOR UPDATE
         `;
         if (!keeper || !duplicate) return null;
+
+        // Only merge genuine duplicates — same amount and within 48h — so
+        // /merge cannot be used to delete an arbitrary unrelated expense
+        // (audit 2026-06-19 M11). Mirrors the /duplicates candidate rule.
+        const within48h =
+          Math.abs(keeper.occurred_at.getTime() - duplicate.occurred_at.getTime()) <= 172_800_000;
+        if (keeper.amount_cents !== duplicate.amount_cents || !within48h) {
+          return "not_duplicate" as const;
+        }
 
         const nextDescription = keeper.description ?? duplicate.description;
         const nextMerchant = keeper.merchant ?? duplicate.merchant;
@@ -1206,6 +1226,11 @@ export async function expensesRoutes(app: FastifyInstance) {
         return { merged: rows[0] ?? null, keeper, duplicate };
       });
 
+      if (mergeResult === "not_duplicate") {
+        return reply.status(400).send({
+          error: "These transactions don't look like duplicates (different amount or over 48h apart)",
+        });
+      }
       if (!mergeResult?.merged) return reply.status(404).send({ error: "Transaction not found" });
       await recordAuditEvent({
         userId: session.userId,

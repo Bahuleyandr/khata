@@ -1004,17 +1004,15 @@ describe("handleCallbackQuery", () => {
     });
     const ctx = makeCtx({ callbackQuery: { data: "confirmdel:exp-1" } } as Partial<Context>);
     await handleCallbackQuery(ctx);
-    expect(vi.mocked(mockExpenses.deleteExpense)).toHaveBeenCalledWith("exp-1", 111111);
-    expect(vi.mocked(mockAudit.recordAuditEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 111111,
-        actorUserId: 111111,
-        action: "expense.delete",
-        entityType: "expense",
-        entityId: "exp-1",
-        metadata: { source: "telegram" },
-      }),
-    );
+    // deleteExpense now records its own audit row inside its transaction (M10),
+    // so the bot passes the audit context instead of auditing separately.
+    expect(vi.mocked(mockExpenses.deleteExpense)).toHaveBeenCalledWith("exp-1", 111111, {
+      actorUserId: 111111,
+      source: "telegram",
+    });
+    // The bot delegates the audit write to deleteExpense's transaction (M10),
+    // so it no longer records the audit event itself.
+    expect(vi.mocked(mockAudit.recordAuditEvent)).not.toHaveBeenCalled();
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text).toContain("Entry deleted");
     expect(editStore.has(111111)).toBe(false);

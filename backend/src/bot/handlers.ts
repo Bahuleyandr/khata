@@ -40,7 +40,6 @@ import {
   deleteExpense,
   getExpenseForEdit,
 } from "../db/expenses.js";
-import { recordAuditEvent } from "../db/audit.js";
 import { guessAccountFromText } from "../db/accounts.js";
 import {
   markCaptureFailed,
@@ -1715,20 +1714,15 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
       await ctx.answerCallbackQuery("You do not have permission to edit this ledger");
       return;
     }
-    const deleted = await deleteExpense(payload.expenseId, ledgerUserId);
+    const deleted = await deleteExpense(payload.expenseId, ledgerUserId, {
+      actorUserId: userId,
+      source: "telegram",
+    });
     if (!deleted) {
       await ctx.answerCallbackQuery("Transaction not found");
       return;
     }
-    await recordAuditEvent({
-      userId: ledgerUserId,
-      actorUserId: userId,
-      action: "expense.delete",
-      entityType: "expense",
-      entityId: deleted.id,
-      before: deleted,
-      metadata: { source: "telegram" },
-    });
+    // The audit row is written inside deleteExpense's transaction (M10).
     if (pending?.expenseId === payload.expenseId) {
       await clearPendingEdit(userId);
     }

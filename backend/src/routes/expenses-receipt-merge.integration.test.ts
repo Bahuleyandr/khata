@@ -24,6 +24,7 @@ vi.mock("../storage/index.js", () => ({
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import {
+  sql,
   truncateAll,
   seedBootstrapOwner,
   seedAccount,
@@ -162,6 +163,33 @@ describe.skipIf(skip)("M: merge uuid=text regression", () => {
     expect(body.ok).toBe(true);
     expect(body.expense?.account_id).toBe(accountId);
     expect(body.expense?.account).toBe("HDFC Card");
+  });
+
+  it("M2: rejects merging two non-duplicate expenses and deletes nothing (audit M11)", async () => {
+    const cookie = makeSessionCookie(OWNER_M, "Owner");
+    // Clearly NOT a duplicate of the 2500 keeper — different amount.
+    const unrelatedId = await insertRawExpense({
+      userId: OWNER_M,
+      amountCents: 9999,
+      occurredAt: "2026-05-21T09:00:00Z",
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/expenses/${keeperId}/merge`,
+      headers: {
+        "Cookie": `session=${cookie}`,
+        "Origin": "http://localhost:3000",
+        "Content-Type": "application/json",
+        "x-khata-ledger-id": String(OWNER_M),
+      },
+      payload: { duplicateId: unrelatedId },
+    });
+    expect(res.statusCode).toBe(400);
+    // /merge must not be usable as an arbitrary delete: the unrelated row stays.
+    const [row] = await sql.unsafe<Array<{ id: string }>>(
+      `SELECT id FROM expenses WHERE id = '${unrelatedId}'`,
+    );
+    expect(row).toBeDefined();
   });
 });
 

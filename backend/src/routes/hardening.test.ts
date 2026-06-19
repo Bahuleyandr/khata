@@ -1013,7 +1013,12 @@ describe("route hardening", () => {
   });
 
   it("deletes an owned expense", async () => {
-    sqlMock.mockResolvedValueOnce([{ id: EXPENSE_ID }]).mockResolvedValueOnce([]);
+    // Route delete now runs in sql.begin: tx does the DELETE then the audit INSERT (M10).
+    const tx = vi.fn();
+    tx.mockResolvedValueOnce([{ id: EXPENSE_ID }]).mockResolvedValueOnce([{ id: "audit-1" }]);
+    sqlMock.begin.mockImplementationOnce(
+      async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
+    );
     const app = await buildApp();
     try {
       const res = await app.inject({
@@ -1033,6 +1038,8 @@ describe("route hardening", () => {
     tx.mockResolvedValueOnce([
       {
         id: EXPENSE_ID,
+        amount_cents: "22000",
+        occurred_at: new Date("2026-04-28T00:00:00.000Z"),
         description: "Coffee",
         merchant: "Blue Tokai",
         merchant_canonical_id: "merchant-1",
@@ -1047,6 +1054,8 @@ describe("route hardening", () => {
       .mockResolvedValueOnce([
         {
           id: DUPLICATE_ID,
+          amount_cents: "22000",
+          occurred_at: new Date("2026-04-28T00:30:00.000Z"),
           description: "Coffee duplicate",
           merchant: "Blue Tokai",
           merchant_canonical_id: "merchant-1",
