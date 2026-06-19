@@ -43,36 +43,25 @@ export async function computeHouseholdSettlement(
   month: number,
 ): Promise<HouseholdSettlement> {
   const bounds = monthBounds(year, month);
-  const [summary] = await sql<Array<{ total_cents: string; member_count: number }>>`
-    WITH members AS (
-      SELECT telegram_user_id
-      FROM ledger_members
-      WHERE ledger_id = ${ledgerId}
-        AND status = 'active'
-        AND can_view = TRUE
-    ),
-    expenses_in_month AS (
-      SELECT amount_cents
-      FROM expenses
-      WHERE user_id = ${ledgerId}
-        AND settlement_scope IN ('shared', 'reimbursable')
-        AND occurred_at >= ${bounds.start}::date
-        AND occurred_at < (${bounds.end}::date + INTERVAL '1 day')
-    )
-    SELECT COALESCE(SUM(amount_cents), 0)::text AS total_cents,
-           GREATEST((SELECT COUNT(*) FROM members), 1)::int AS member_count
-    FROM expenses_in_month
-  `;
+  const ownerTelegramId = Math.abs(ledgerId);
 
-  const total = Number(summary?.total_cents ?? 0);
-  const memberCount = summary?.member_count ?? 1;
-  const fairShare = Math.round(total / Math.max(memberCount, 1));
-
-  const payers = await sql<HouseholdSettlementPayer[]>`
+  // One query: current members (the participants) with their paid totals. Any
+  // payment whose paid_by_user_id is NULL or points at a non-member (e.g. a
+  // since-revoked member) is attributed to the ledger owner — who can never be
+  // revoked from their own household — so every shared payment is credited to a
+  // participant and the credited total equals the shared-expense total.
+  // Otherwise dropped payments would make balances fail to net to zero
+  // (audit 2026-06-19 H3).
+  const rows = await sql<Array<{
+    telegram_user_id: string;
+    first_name: string | null;
+    username: string | null;
+    paid_cents: string;
+  }>>`
     WITH members AS (
       SELECT lm.telegram_user_id,
-             COALESCE(au.first_name, NULL) AS first_name,
-             COALESCE(au.username, NULL) AS username
+             au.first_name,
+             au.username
       FROM ledger_members lm
       LEFT JOIN access_users au ON au.telegram_user_id = lm.telegram_user_id
       WHERE lm.ledger_id = ${ledgerId}
@@ -80,25 +69,52 @@ export async function computeHouseholdSettlement(
         AND lm.can_view = TRUE
     ),
     paid AS (
-      SELECT COALESCE(paid_by_user_id, ${Math.abs(ledgerId)}) AS telegram_user_id,
+      SELECT CASE
+               WHEN paid_by_user_id IN (SELECT telegram_user_id FROM members)
+                 THEN paid_by_user_id
+               ELSE ${ownerTelegramId}
+             END AS telegram_user_id,
              SUM(amount_cents) AS paid_cents
       FROM expenses
       WHERE user_id = ${ledgerId}
         AND settlement_scope IN ('shared', 'reimbursable')
         AND occurred_at >= ${bounds.start}::date
         AND occurred_at < (${bounds.end}::date + INTERVAL '1 day')
-      GROUP BY COALESCE(paid_by_user_id, ${Math.abs(ledgerId)})
+      GROUP BY 1
     )
     SELECT members.telegram_user_id::text AS telegram_user_id,
            members.first_name,
            members.username,
-           COALESCE(paid.paid_cents, 0)::text AS paid_cents,
-           ${fairShare}::bigint::text AS fair_share_cents,
-           (COALESCE(paid.paid_cents, 0) - ${fairShare})::bigint::text AS balance_cents
+           COALESCE(paid.paid_cents, 0)::text AS paid_cents
     FROM members
     LEFT JOIN paid ON paid.telegram_user_id = members.telegram_user_id
-    ORDER BY balance_cents::bigint DESC
+    ORDER BY members.telegram_user_id ASC
   `;
+
+  const memberCount = Math.max(rows.length, 1);
+  const total = rows.reduce((sum, r) => sum + Number(r.paid_cents), 0);
+
+  // Equal split with deterministic remainder distribution: the fair shares sum
+  // EXACTLY to `total` (no Math.round residual that would leave balances un-net).
+  // Members are in stable telegram_user_id order; the first `remainder` of them
+  // each carry one extra cent.
+  const base = Math.floor(total / memberCount);
+  const remainder = total - base * memberCount;
+
+  const payers: HouseholdSettlementPayer[] = rows
+    .map((r, i) => {
+      const fairShare = base + (i < remainder ? 1 : 0);
+      const paid = Number(r.paid_cents);
+      return {
+        telegram_user_id: r.telegram_user_id,
+        first_name: r.first_name,
+        username: r.username,
+        paid_cents: String(paid),
+        fair_share_cents: String(fairShare),
+        balance_cents: String(paid - fairShare),
+      };
+    })
+    .sort((a, b) => Number(b.balance_cents) - Number(a.balance_cents));
 
   const debtors = payers
     .map((payer) => ({ id: payer.telegram_user_id, cents: -Number(payer.balance_cents) }))
