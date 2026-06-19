@@ -27,7 +27,15 @@ spec:
       labels:
         app: khata-minio
     spec:
+      # Run non-root (audit 2026-06-19 M13). MinIO runs as any uid; fsGroup 1000
+      # chowns the PVC so it can write /data. OPERATOR: a FRESH PVC initializes
+      # cleanly; if this PVC was previously written as root, chown /data to
+      # 1000:1000 (or recreate) before applying, and confirm Ready on first apply.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:

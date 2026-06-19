@@ -28,12 +28,26 @@ spec:
       labels:
         app: khata-postgres
     spec:
+      # Run non-root (audit 2026-06-19 M13). uid 70 = 'postgres' in the alpine
+      # image; fsGroup 70 chowns the PVC group so the non-root process can write
+      # it, and PGDATA is a subdir (set below) that initdb creates owned by 70.
+      # OPERATOR: a FRESH PVC initializes cleanly; if this PVC was previously
+      # initialized as root, chown its pgdata to 70:70 (or recreate it) before
+      # applying, and confirm the pod reaches Ready on first apply.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
         seccompProfile:
           type: RuntimeDefault
       containers:
         - name: postgres
           image: postgres:16.8-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 5432
               name: postgres

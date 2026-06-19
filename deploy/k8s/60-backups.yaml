@@ -165,15 +165,19 @@ spec:
                     -pass env:PASSPHRASE \
                     -in "${dump}" \
                     -out "${encrypted}"
-                  AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
-                  AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
-                    aws s3 cp \
-                      --endpoint-url "${ENDPOINT}" \
-                      --no-progress \
-                      "${encrypted}" \
-                      "s3://${BUCKET}/postgres/$(basename "${encrypted}")"
-                  rm -f "${encrypted}"
-                  echo "offsite upload complete: s3://${BUCKET}/postgres/$(basename "${encrypted}")"
+                  # AES-CBC has no integrity; authenticate the ciphertext
+                  # (encrypt-then-MAC) so offsite tampering is detectable on
+                  # restore (audit 2026-06-19 M15). Verify BEFORE decrypt:
+                  #   openssl dgst -sha256 -hmac "$PASSPHRASE" -binary FILE.enc | cmp - FILE.enc.hmac
+                  openssl dgst -sha256 -hmac "${PASSPHRASE}" -binary "${encrypted}" > "${encrypted}.hmac"
+                  export AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}"
+                  export AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}"
+                  aws s3 cp --endpoint-url "${ENDPOINT}" --no-progress \
+                    "${encrypted}" "s3://${BUCKET}/postgres/$(basename "${encrypted}")"
+                  aws s3 cp --endpoint-url "${ENDPOINT}" --no-progress \
+                    "${encrypted}.hmac" "s3://${BUCKET}/postgres/$(basename "${encrypted}").hmac"
+                  rm -f "${encrypted}" "${encrypted}.hmac"
+                  echo "offsite upload complete (+hmac): s3://${BUCKET}/postgres/$(basename "${encrypted}")"
               volumeMounts:
                 - name: backups
                   mountPath: /backups
@@ -336,15 +340,18 @@ spec:
                     | openssl enc -aes-256-cbc -pbkdf2 -salt \
                         -pass env:PASSPHRASE \
                         -out "${encrypted}"
-                  AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}" \
-                  AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}" \
-                    aws s3 cp \
-                      --endpoint-url "${ENDPOINT}" \
-                      --no-progress \
-                      "${encrypted}" \
-                      "s3://${BUCKET}/minio/$(basename "${encrypted}")"
-                  rm -f "${encrypted}"
-                  echo "minio offsite upload complete: s3://${BUCKET}/minio/$(basename "${encrypted}")"
+                  # Authenticate the ciphertext (encrypt-then-MAC); AES-CBC has
+                  # no integrity (audit 2026-06-19 M15). Verify BEFORE decrypt:
+                  #   openssl dgst -sha256 -hmac "$PASSPHRASE" -binary FILE.enc | cmp - FILE.enc.hmac
+                  openssl dgst -sha256 -hmac "${PASSPHRASE}" -binary "${encrypted}" > "${encrypted}.hmac"
+                  export AWS_ACCESS_KEY_ID="${ACCESS_KEY_ID}"
+                  export AWS_SECRET_ACCESS_KEY="${SECRET_ACCESS_KEY}"
+                  aws s3 cp --endpoint-url "${ENDPOINT}" --no-progress \
+                    "${encrypted}" "s3://${BUCKET}/minio/$(basename "${encrypted}")"
+                  aws s3 cp --endpoint-url "${ENDPOINT}" --no-progress \
+                    "${encrypted}.hmac" "s3://${BUCKET}/minio/$(basename "${encrypted}").hmac"
+                  rm -f "${encrypted}" "${encrypted}.hmac"
+                  echo "minio offsite upload complete (+hmac): s3://${BUCKET}/minio/$(basename "${encrypted}")"
               volumeMounts:
                 - name: backups
                   mountPath: /backups
