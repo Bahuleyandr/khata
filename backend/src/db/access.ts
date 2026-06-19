@@ -153,7 +153,11 @@ function mapLedgerMember(row: LedgerMemberRow): LedgerMember {
   };
 }
 
-function virtualBootstrapOwner(telegramUserId: number, profile: AccessProfile = {}): AccessUser {
+function virtualBootstrapOwner(
+  telegramUserId: number,
+  profile: AccessProfile = {},
+  sessionsInvalidBefore: Date | null = null,
+): AccessUser {
   const normalized = normalizeProfile(profile);
   const now = new Date();
   return {
@@ -168,7 +172,7 @@ function virtualBootstrapOwner(telegramUserId: number, profile: AccessProfile = 
     updatedAt: now,
     lastLoginAt: now,
     revokedAt: null,
-    sessionsInvalidBefore: null,
+    sessionsInvalidBefore,
   };
 }
 
@@ -296,7 +300,17 @@ export async function resolveSessionAccessForTelegramUser(
   profile: AccessProfile = {},
 ): Promise<AccessUser | null> {
   if (isBootstrapOwner(telegramUserId)) {
-    return virtualBootstrapOwner(telegramUserId, profile);
+    // Bootstrap owners resolve virtually (no per-request DB upsert), but the
+    // session-revocation epoch is real, persisted state. Read it so that
+    // "log out everywhere" / revoke actually invalidates existing owner
+    // sessions instead of letting a stolen cookie live to the 7-day max age
+    // (audit 2026-06-19 H4).
+    const [row] = await sql<Array<{ sessions_invalid_before: Date | null }>>`
+      SELECT sessions_invalid_before
+      FROM access_users
+      WHERE telegram_user_id = ${telegramUserId}
+    `;
+    return virtualBootstrapOwner(telegramUserId, profile, row?.sessions_invalid_before ?? null);
   }
   return resolveAccessForTelegramUser(telegramUserId, profile);
 }

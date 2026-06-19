@@ -5,7 +5,24 @@ import crypto from "node:crypto";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const sqlMock = vi.hoisted(() => Object.assign(vi.fn(), { begin: vi.fn() }));
+const { sqlMock, sqlForDb } = vi.hoisted(() => {
+  const sqlMock = Object.assign(vi.fn(), { begin: vi.fn() });
+  // getSession resolves a bootstrap owner's session-revocation epoch on every
+  // authenticated request (audit 2026-06-19 H4). These route tests are not about
+  // revocation, so answer that single query transparently with "no revocation"
+  // ([]) — without consuming each test's ordered sqlMock queue or inflating its
+  // call counts. Revocation behaviour itself is covered by access-authz H1.
+  const sqlForDb = Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join(" ").includes("sessions_invalid_before")) {
+        return Promise.resolve([]);
+      }
+      return sqlMock(strings, ...values);
+    },
+    { begin: sqlMock.begin },
+  );
+  return { sqlMock, sqlForDb };
+});
 const merchantMocks = vi.hoisted(() => ({
   getOrCreateMerchantCanonical: vi.fn(),
   setMerchantCategory: vi.fn(),
@@ -54,7 +71,7 @@ vi.mock("../config.js", () => ({
   },
 }));
 
-vi.mock("../db/index.js", () => ({ sql: sqlMock }));
+vi.mock("../db/index.js", () => ({ sql: sqlForDb }));
 vi.mock("../db/merchants.js", () => merchantMocks);
 vi.mock("../storage/index.js", () => storageMocks);
 vi.mock("../statement/parser.js", () => statementParserMocks);

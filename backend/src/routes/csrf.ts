@@ -35,6 +35,21 @@ export function isTrustedMutationOrigin(
     // cross-site request (the actual CSRF shape, which the prod SameSite=None
     // cookie would otherwise allow); same-origin/same-site/none and old
     // browsers that send neither header still pass.
+    //
+    // This headerless-allow is a DELIBERATE, reviewed tradeoff (audit
+    // 2026-06-19 D1), not an oversight — do NOT "harden" it to fail closed
+    // without a replacement, or the Mini-App breaks:
+    //   * The prod session cookie is SameSite=None (auth.ts) because the
+    //     Telegram Mini-App loads cross-site; it is load-bearing and cannot
+    //     become Lax while one cookie serves both the webview and the browser
+    //     dashboard (SameSite is fixed at cookie-write time, not per client).
+    //   * Real browser CSRF (a cross-site fetch/form POST) DOES send
+    //     Sec-Fetch-Site: cross-site and is rejected above. The only residual
+    //     gap is a pre-Sec-Fetch-era browser or a non-browser HTTP client —
+    //     both negligible on a Tailnet-only deploy with two trusted users.
+    //   * Future hardening, if ever exposed beyond the Tailnet: give the
+    //     Mini-App its own origin, split the cookie jar, then use SameSite=Lax
+    //     for the browser dashboard (or add a double-submit / initData token).
     const site = Array.isArray(secFetchSite) ? secFetchSite[0] : secFetchSite;
     return site !== "cross-site" && site !== "cross-origin";
   }

@@ -61,6 +61,7 @@ type MonthlyReviewPayload = {
   overview: {
     transaction_count: number;
     total_cents: string;
+    confirmed_total_cents: string;
     uncategorized_count: number;
     uncategorized_cents: string;
     needs_review_count: number;
@@ -206,7 +207,7 @@ function monthlyCloseInput(
     periodMonth: periodMonthDate(review.period.year, review.period.month),
     readinessScore: review.close.readiness_score,
     openTaskCount: review.overview.open_task_count,
-    totalCents: Number(review.overview.total_cents),
+    totalCents: Number(review.overview.confirmed_total_cents),
     transactionCount: review.overview.transaction_count,
     snapshot: snapshotForClose(review),
   };
@@ -231,6 +232,7 @@ async function buildMonthlyReview(
     sql<Array<{
       transaction_count: string;
       total_cents: string;
+      confirmed_total_cents: string;
       uncategorized_count: string;
       uncategorized_cents: string;
       needs_review_count: string;
@@ -239,7 +241,8 @@ async function buildMonthlyReview(
     }>>`
       SELECT
         COUNT(*)::text AS transaction_count,
-        COALESCE(SUM(e.amount_cents), 0)::text AS total_cents,
+        COALESCE(SUM(e.amount_cents) FILTER (WHERE e.review_status <> 'ignored'), 0)::text AS total_cents,
+        COALESCE(SUM(e.amount_cents) FILTER (WHERE e.review_status NOT IN ('ignored', 'needs_review')), 0)::text AS confirmed_total_cents,
         COUNT(*) FILTER (WHERE e.category_id IS NULL)::text AS uncategorized_count,
         COALESCE(SUM(e.amount_cents) FILTER (WHERE e.category_id IS NULL), 0)::text AS uncategorized_cents,
         COUNT(*) FILTER (WHERE e.review_status = 'needs_review')::text AS needs_review_count,
@@ -327,6 +330,7 @@ async function buildMonthlyReview(
   const overview = overviewRows[0] ?? {
     transaction_count: "0",
     total_cents: "0",
+    confirmed_total_cents: "0",
     uncategorized_count: "0",
     uncategorized_cents: "0",
     needs_review_count: "0",
@@ -430,6 +434,7 @@ async function buildMonthlyReview(
     overview: {
       transaction_count: Number(overview.transaction_count),
       total_cents: overview.total_cents,
+      confirmed_total_cents: overview.confirmed_total_cents,
       uncategorized_count: Number(overview.uncategorized_count),
       uncategorized_cents: overview.uncategorized_cents,
       needs_review_count: Number(overview.needs_review_count),

@@ -165,6 +165,76 @@ describe.skipIf(skip)("E: settlement paid_by authz", () => {
 
     expect(res.statusCode).toBe(201);
   });
+
+  it("E3: non-manager member cannot attribute payment to ANOTHER member (forge) → 403", async () => {
+    // MEMBER_E is can_add but NOT can_manage in the household ledger. Forging
+    // paid_by to the owner would inflate the owner's "paid" and erase the
+    // member's own debt (audit 2026-06-19 H2).
+    const cookie = makeSessionCookie(MEMBER_E, "Member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/expenses",
+      headers: {
+        "Cookie": `session=${cookie}`,
+        "Origin": "http://localhost:3000",
+        "Content-Type": "application/json",
+        "x-khata-ledger-id": String(householdLedgerId),
+      },
+      payload: {
+        amount_cents: 700,
+        occurred_at: "2026-05-11",
+        description: "E3 forged attribution",
+        settlement_scope: "shared",
+        paid_by_user_id: OWNER_E,
+      },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("E4: non-manager member MAY attribute payment to themselves → 201", async () => {
+    const cookie = makeSessionCookie(MEMBER_E, "Member");
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/expenses",
+      headers: {
+        "Cookie": `session=${cookie}`,
+        "Origin": "http://localhost:3000",
+        "Content-Type": "application/json",
+        "x-khata-ledger-id": String(householdLedgerId),
+      },
+      payload: {
+        amount_cents: 700,
+        occurred_at: "2026-05-11",
+        description: "E4 self attribution",
+        settlement_scope: "shared",
+        paid_by_user_id: MEMBER_E,
+      },
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("E5: non-manager member cannot PATCH paid_by to another member → 403", async () => {
+    const id = await insertRawExpense({
+      userId: householdLedgerId,
+      amountCents: 500,
+      occurredAt: "2026-05-10T10:00:00Z",
+    });
+    const cookie = makeSessionCookie(MEMBER_E, "Member");
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/expenses/${id}`,
+      headers: {
+        "Cookie": `session=${cookie}`,
+        "Origin": "http://localhost:3000",
+        "Content-Type": "application/json",
+        "x-khata-ledger-id": String(householdLedgerId),
+      },
+      payload: {
+        paid_by_user_id: OWNER_E,
+      },
+    });
+    expect(res.statusCode).toBe(403);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
