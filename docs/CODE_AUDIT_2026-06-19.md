@@ -7,7 +7,7 @@
 - **Audit B (external):** a read-only sweep across source/tests/scripts/deploy that also *executed* the local gates (lint, unit, build, e2e, premerge, integration, migration-smoke).
 - **Decision support:** three design-dependent findings were run through an advocate/challenger/supervisor `[DECIDE]` trio; outcomes in §5.
 
-**Status:** report only. No code changes have been made. The remediation roadmap (§6) is pending sign-off.
+**Status:** remediation in progress on branch `fix/audit-2026-06-19`. **Landed (TDD, backend verify 295/295):** the two Now items (M2 `npm audit fix`, M3 smoke stderr), **H4** (owner revocation), **H2** (paid_by self-attribution), **M1** (receipt ordering/415/cleanup), **D1** (CSRF tradeoff documented), **D2** (review-status in live totals + confirmed-only close, resolves H1), **D3** (statement→MiniMax disclosure, resolves H6 for the current threat model). **H5 withdrawn** as a false positive (§3). Remaining: PR 3 reliability/DB hardening (H3, H7, M4–M11) + ops/infra (M13–M15) — not yet started.
 
 ---
 
