@@ -10,5 +10,12 @@ export const sql = postgres(config.databaseUrl, {
   // pool makes the intent explicit and covers a fresh DB before that migration
   // has run. If a postgres.js version ignores this option the migrated DB
   // default still applies.
-  connection: { timezone: "Asia/Kolkata" },
+  connection: {
+    timezone: "Asia/Kolkata",
+    // Server-side guards (audit 2026-06-19 M7): cap a runaway query and stop a
+    // stuck transaction from pinning a connection / holding month-close locks.
+    // (ssl intentionally omitted: the DB is reached over the in-cluster network.)
+    statement_timeout: 30000,
+    idle_in_transaction_session_timeout: 60000,
+  },
 });
