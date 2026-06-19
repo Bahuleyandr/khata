@@ -1,0 +1,27 @@
+# Audit 2026-06-19 M13 — restrict the sensitive data tier (Postgres + MinIO) to
+# same-namespace ingress. Selecting these pods with an ingress rule isolates
+# them: only pods in the khata namespace (the backend + the backup CronJobs)
+# can reach 5432/9000; anything in another namespace is denied. The entry
+# points (frontend, backend) are intentionally NOT selected, so external /
+# ingress-controller traffic to them is unaffected — keeping this policy
+# low-risk and free of brittle allow-rules.
+#
+# NOTE: enforcement is CNI-dependent. Default k3s ships flannel, which does NOT
+# enforce NetworkPolicy (this is then a documented-intent no-op). To actually
+# enforce it, run k3s with a policy-capable CNI (e.g. Calico) — verify with a
+# cross-namespace `nc khata-postgres.khata 5432` after applying.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: khata-data-tier-same-namespace
+  namespace: khata
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: ["khata-postgres", "khata-minio"]
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {} # any pod in the khata namespace

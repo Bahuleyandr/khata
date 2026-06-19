@@ -7,6 +7,7 @@ import { bot, installMiniAppMenuButton } from "./bot/index.js";
 import { startBudgetCrons } from "./cron/budgets.js";
 import { startInsightsCron } from "./cron/insights.js";
 import { startHealthCron } from "./cron/health.js";
+import { startBotHeartbeat, livenessStatus, getLastBotOkAt } from "./bot/heartbeat.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { shutdownMcp } from "./ai/mcp.js";
 import { dashboardCorsOptions } from "./http/cors.js";
@@ -28,11 +29,33 @@ app.get("/health", async (_request, reply) => {
   }
 });
 
+// Liveness probe (k8s livenessProbe → here; readiness stays on /health). Fails
+// only on an unreachable DB or a confirmed-stale bot poller, so a wedged bot
+// triggers a pod restart while a low-traffic-but-healthy bot ("starting"/"ok")
+// and a brief Telegram blip do not (audit 2026-06-19 M9).
+app.get("/live", async (_request, reply) => {
+  const bot = livenessStatus(getLastBotOkAt(), Date.now());
+  let db: "ok" | "unreachable" = "ok";
+  try {
+    await sql`SELECT 1`;
+  } catch (err) {
+    app.log.error({ err }, "live check: db probe failed");
+    db = "unreachable";
+  }
+  if (db !== "ok" || bot === "stale") {
+    reply.status(503);
+    return { status: "degraded", db, bot };
+  }
+  return { status: "ok", db, bot };
+});
+
 await app.register(dashboardRoutes);
 
 startBudgetCrons(bot.api);
 startInsightsCron();
 startHealthCron(bot.api);
+
+let stopBotHeartbeat: (() => void) | null = null;
 
 // Bot runs in long-polling mode (no public webhook needed → works behind NAT
 // and on Tailscale-only deployments). Drop any leftover webhook registration
@@ -56,10 +79,17 @@ async function startBotPolling(): Promise<void> {
       app.log.error({ err }, "bot polling crashed");
       process.exit(1);
     });
+
+  // Bot liveness heartbeat feeds /live (audit 2026-06-19 M9).
+  stopBotHeartbeat = startBotHeartbeat(
+    () => bot.api.getMe(),
+    (err) => app.log.warn({ err }, "bot heartbeat getMe failed"),
+  );
 }
 
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, "shutting down");
+  stopBotHeartbeat?.();
   try {
     await bot.stop();
   } catch (err) {

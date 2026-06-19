@@ -406,6 +406,12 @@ async function main() {
     },
   });
 
+  // Seed the ledgers the behavioural checks reference so the expenses.user_id
+  // -> ledgers FK (migration 034) is satisfied (audit 2026-06-19 M4).
+  await psql(
+    "INSERT INTO ledgers (id, owner_telegram_user_id, name, kind) VALUES (995, 995, 'Smoke', 'personal'), (996, 996, 'Smoke', 'personal'), (997, 997, 'Smoke', 'personal'), (998, 998, 'Smoke', 'personal'), (999, 999, 'Smoke', 'personal') ON CONFLICT (id) DO NOTHING",
+  );
+
   await assertMonthCloseImmutability();
   await assertTimezoneBucketing();
   await assertUpdatedAtTrigger();
