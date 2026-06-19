@@ -48,6 +48,7 @@ export async function totalSpendInCategory(
         AND c.name ILIKE ${category}
         AND e.occurred_at >= ${start}::date
         AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+        AND e.review_status <> 'ignored'
       GROUP BY e.currency
     `;
   }
@@ -57,6 +58,7 @@ export async function totalSpendInCategory(
     WHERE e.user_id = ${userId}
       AND e.occurred_at >= ${start}::date
       AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+      AND e.review_status <> 'ignored'
     GROUP BY e.currency
   `;
 }
@@ -76,6 +78,7 @@ export async function topExpenses(
     WHERE e.user_id = ${userId}
       AND e.occurred_at >= ${start}::date
       AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+      AND e.review_status <> 'ignored'
     ORDER BY e.amount_cents DESC
     LIMIT ${limit}
   `;
@@ -95,6 +98,7 @@ export async function spendByCategory(
     WHERE e.user_id = ${userId}
       AND e.occurred_at >= ${start}::date
       AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+      AND e.review_status <> 'ignored'
     GROUP BY c.name, e.currency
     ORDER BY SUM(e.amount_cents) DESC
   `;
@@ -119,6 +123,7 @@ export async function topMerchants(
     WHERE e.user_id = ${userId}
       AND e.occurred_at >= ${start}::date
       AND e.occurred_at < (${end}::date + INTERVAL '1 day')
+      AND e.review_status <> 'ignored'
     GROUP BY merchant, e.currency
     ORDER BY SUM(e.amount_cents) DESC, COUNT(*) DESC
     LIMIT ${limit}

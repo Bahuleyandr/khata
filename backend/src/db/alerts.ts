@@ -104,6 +104,7 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
         AND e.category_id IS NOT NULL
         AND e.occurred_at >= cm.month_start
         AND e.occurred_at < cm.month_end
+        AND e.review_status <> 'ignored'
       GROUP BY e.category_id
     )
     SELECT COUNT(*)::text AS over_budget_count
@@ -135,6 +136,7 @@ export async function refreshUserAlerts(userId: number): Promise<void> {
         AND e.category_id IS NOT NULL
         AND e.occurred_at >= cm.month_start
         AND e.occurred_at < cm.month_end
+        AND e.review_status <> 'ignored'
       GROUP BY e.category_id
     )
     SELECT c.name AS category_name,
