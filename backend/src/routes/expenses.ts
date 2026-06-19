@@ -502,11 +502,19 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
         return reply.status(400).send({ error: "Account not found" });
       }
-      if (
-        body.paid_by_user_id != null &&
-        !(await isActiveLedgerMember(session.userId, body.paid_by_user_id))
-      ) {
-        return reply.status(400).send({ error: "Payer must be a member of this ledger" });
+      if (body.paid_by_user_id != null) {
+        // A non-manager may only attribute payment to themselves. Forging
+        // paid_by to another member would inflate that member's "paid" and
+        // erase the actor's own debt — fabricating who-owes-whom in the
+        // shared-settlement math (audit 2026-06-19 H2).
+        if (!session.canManage && Number(body.paid_by_user_id) !== session.telegramUserId) {
+          return reply
+            .status(403)
+            .send({ error: "Only a ledger manager can set the payer to another member" });
+        }
+        if (!(await isActiveLedgerMember(session.userId, body.paid_by_user_id))) {
+          return reply.status(400).send({ error: "Payer must be a member of this ledger" });
+        }
       }
 
       const merchant = normalizeNullableText(body.merchant) ?? null;
@@ -807,11 +815,19 @@ export async function expensesRoutes(app: FastifyInstance) {
       if (body.account_id && !(await accountBelongsToUser(session.userId, body.account_id))) {
         return reply.status(400).send({ error: "Account not found" });
       }
-      if (
-        body.paid_by_user_id != null &&
-        !(await isActiveLedgerMember(session.userId, body.paid_by_user_id))
-      ) {
-        return reply.status(400).send({ error: "Payer must be a member of this ledger" });
+      if (body.paid_by_user_id != null) {
+        // A non-manager may only attribute payment to themselves. Forging
+        // paid_by to another member would inflate that member's "paid" and
+        // erase the actor's own debt — fabricating who-owes-whom in the
+        // shared-settlement math (audit 2026-06-19 H2).
+        if (!session.canManage && Number(body.paid_by_user_id) !== session.telegramUserId) {
+          return reply
+            .status(403)
+            .send({ error: "Only a ledger manager can set the payer to another member" });
+        }
+        if (!(await isActiveLedgerMember(session.userId, body.paid_by_user_id))) {
+          return reply.status(400).send({ error: "Payer must be a member of this ledger" });
+        }
       }
 
       const merchant =
