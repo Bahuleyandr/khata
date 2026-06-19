@@ -12,7 +12,7 @@ import { attachTagToExpense, getOrCreateTag, getTagsForExpenses } from "../db/ta
 import { buildCaptureConfidence, reviewStatusFromConfidence, type CaptureConfidence } from "../capture/confidence.js";
 import { currentMonthBounds } from "../export/xlsx.js";
 import { nowIstParts } from "../lib/time.js";
-import { uploadStatement } from "../storage/index.js";
+import { uploadStatement, deleteStatement } from "../storage/index.js";
 import { getSession } from "./auth.js";
 import { isActiveLedgerMember } from "../db/access.js";
 
@@ -1008,8 +1008,25 @@ export async function expensesRoutes(app: FastifyInstance) {
       const file = await request.file({ limits: { fileSize: MAX_RECEIPT_UPLOAD_BYTES } });
       if (!file) return reply.status(400).send({ error: "Receipt file is required" });
       const supported = ["image/jpeg", "image/png", "image/webp", "image/gif"];
-      const mimeType = supported.includes(file.mimetype) ? file.mimetype : "image/jpeg";
       const buffer = await file.toBuffer();
+      // Reject unsupported types instead of silently mislabeling them as JPEG
+      // (audit 2026-06-19 M1).
+      if (!supported.includes(file.mimetype)) {
+        return reply
+          .status(415)
+          .send({ error: "Unsupported receipt type — use JPEG, PNG, WebP, or GIF" });
+      }
+      const mimeType = file.mimetype;
+
+      // Prove the expense exists and belongs to the caller BEFORE uploading, so a
+      // bad id/owner can't leave an orphan blob in object storage (M1).
+      const [owned] = await sql<Array<{ id: string }>>`
+        SELECT id FROM expenses
+        WHERE id = ${request.params.id} AND user_id = ${session.userId}
+        LIMIT 1
+      `;
+      if (!owned) return reply.status(404).send({ error: "Transaction not found" });
+
       const contentHash = createHash("sha256").update(buffer).digest("hex");
       const imageKey = `receipts/${session.userId}/${randomUUID()}`;
       await uploadStatement(imageKey, buffer, mimeType);
@@ -1038,7 +1055,12 @@ export async function expensesRoutes(app: FastifyInstance) {
       `;
 
       const updated = rows[0];
-      if (!updated) return reply.status(404).send({ error: "Transaction not found" });
+      if (!updated) {
+        // Raced delete between the ownership check and the update — clean up the
+        // just-uploaded blob so it doesn't orphan (M1).
+        await deleteStatement(imageKey).catch(() => {});
+        return reply.status(404).send({ error: "Transaction not found" });
+      }
       const [updatedWithTags] = await withTags([updated]);
       await recordAuditEvent({
         userId: session.userId,
