@@ -152,8 +152,8 @@ spec:
                     exit 0
                   fi
                   if ! command -v openssl >/dev/null 2>&1; then
-                    echo "WARNING: openssl not found in this image; skipping offsite upload"
-                    exit 0
+                    echo "ERROR: offsite is configured but openssl is missing — failing so the CronJob is visibly red instead of silently skipping the upload (audit 2026-06-19 M15)"
+                    exit 1
                   fi
                   dump="$(ls -1t /backups/khata-postgres-*.dump 2>/dev/null | head -n 1 || true)"
                   if [ -z "$dump" ]; then
@@ -318,8 +318,8 @@ spec:
                     exit 0
                   fi
                   if ! command -v openssl >/dev/null 2>&1; then
-                    echo "WARNING: openssl not found in this image; skipping minio offsite upload"
-                    exit 0
+                    echo "ERROR: minio offsite is configured but openssl is missing — failing so the CronJob is visibly red instead of silently skipping the upload (audit 2026-06-19 M15)"
+                    exit 1
                   fi
                   # Find the newest khata-minio-* stamped dir written by minio-mirror.
                   # minio-mirror writes: /backups/khata-minio-<stamp>/<S3_BUCKET>/

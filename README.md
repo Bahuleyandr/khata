@@ -242,6 +242,8 @@ Dashboard sessions are HMAC-signed, HTTP-only cookies. Session verification re-c
 
 Mutating dashboard APIs (`POST`, `PATCH`, `PUT`, `DELETE`) are protected by an Origin guard before route handlers run. Same-host requests are accepted for the production Tailscale hostname; explicitly configured `ALLOWED_ORIGINS` are accepted for local/dev flows. Other browser origins receive `403 Cross-site request blocked`. The cookie is `sameSite: none` in production to support Telegram webview/Mini App behavior, so keep the Origin guard in place for any new mutating dashboard route.
 
+**Network exposure — "Tailnet-only" depends on the node's networking, not the manifests.** The frontend Service is `NodePort 30080` and the Ingress is deliberately host-unrestricted (portable across tailnets; `tailscale serve` targets a stable port). k3s binds NodePort `30080` on `0.0.0.0`, so the "Tailnet-only" property is enforced by the **node's firewall/interface posture**, not by Kubernetes: any host that can reach the node on `:30080` (e.g. another device on the same LAN) can reach the dashboard, bypassing the Tailscale hostname. On Dalekdefender this is mitigated by the box sitting behind home NAT with no public ingress. If you deploy elsewhere, verify the node restricts `:30080` to the Tailscale interface (firewall allow only `tailscale0`), or switch the Service to `ClusterIP` and rely solely on `tailscale serve`. (Audit 2026-06-19 M14.)
+
 ## Runbook
 
 ### Local test run (frontend)
