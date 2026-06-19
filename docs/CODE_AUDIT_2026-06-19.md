@@ -7,7 +7,11 @@
 - **Audit B (external):** a read-only sweep across source/tests/scripts/deploy that also *executed* the local gates (lint, unit, build, e2e, premerge, integration, migration-smoke).
 - **Decision support:** three design-dependent findings were run through an advocate/challenger/supervisor `[DECIDE]` trio; outcomes in §5.
 
-**Status:** remediation in progress on branch `fix/audit-2026-06-19`. **Landed (TDD, backend verify 295/295):** the two Now items (M2 `npm audit fix`, M3 smoke stderr), **H4** (owner revocation), **H2** (paid_by self-attribution), **M1** (receipt ordering/415/cleanup), **D1** (CSRF tradeoff documented), **D2** (review-status in live totals + confirmed-only close, resolves H1), **D3** (statement→MiniMax disclosure, resolves H6 for the current threat model). **H5 withdrawn** as a false positive (§3). Remaining: PR 3 reliability/DB hardening (H3, H7, M4–M11) + ops/infra (M13–M15) — not yet started.
+**Status:** remediation merged in two waves.
+
+- **Wave 1 — merged to main `5cf195c`** (Forgejo CI green): the two Now items (M2 `npm audit fix`, M3 smoke stderr), **H4** (owner revocation), **H2** (paid_by self-attribution), **M1** (receipt ordering/415/cleanup), **D1** (CSRF tradeoff documented), **D2** (review-status in live totals + confirmed-only close, resolves H1), **D3** (statement→MiniMax disclosure, resolves H6 for the current threat model). **H5 withdrawn** as a false positive (§3).
+- **Wave 2 (PR 3) — branch `fix/audit-2026-06-19-pr3`, TDD, backend verify 301/301:** **H7** (one reminder per threshold day), **H3** (settlement balances net to zero), **M7** (pool statement/idle timeouts), **M8** (validate LLM import amounts), **M10** (transactional audit across insert/update/delete + route + bot), **M11** (merge only genuine duplicates).
+- **Deferred (with rationale):** **M4** FK + **M5** ENABLE-ALWAYS + **L8** amount_cents CHECK — DB-hardening *migrations*; defense-in-depth (the invariants hold by construction today) with real risk of failing on existing data / test fixtures, so they belong in a separately data-validated migration batch. **M6** migration checksum — dev-hygiene, no runtime risk. **M9** bot-liveness watchdog — more involved, needs careful lifecycle testing. **L1** media rate-limit ordering — trusted 2-user app, low value. **Ops/infra M13–M15** — operator tasks (non-root DB/MinIO, NetworkPolicy, NodePort/firewall doc, offsite-backup hardening).
 
 ---
 
