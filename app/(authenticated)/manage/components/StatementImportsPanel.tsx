@@ -239,6 +239,10 @@ export default function StatementImportsPanel({
         </button>
         {statementUploadResult ? <span>{statementUploadResult}</span> : null}
       </div>
+      <small className="disclosure-note">
+        Statement contents (including account and card numbers) are sent to MiniMax for
+        transaction extraction.
+      </small>
       <div className="statement-list">
         {statements.length === 0 ? <p>No statement imports yet.</p> : statements.map((statement) => (
           <div key={statement.id} className="statement-row">
