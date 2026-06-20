@@ -71,6 +71,24 @@ async function migrate() {
     console.log(`  apply ${file}`);
   }
 
+  // Provision the least-privilege app role's LOGIN password from the
+  // environment (audit 2026-06-19 M5). The role is created by migration 035;
+  // its password is set here so it never lives in a migration file. Skipped
+  // when APP_DB_PASSWORD is unset (e.g. trust-auth CI / smoke).
+  const appDbPassword = process.env["APP_DB_PASSWORD"];
+  if (appDbPassword) {
+    const [role] = await sql<Array<{ ok: number }>>`
+      SELECT 1 AS ok FROM pg_roles WHERE rolname = 'khata_app'
+    `;
+    if (role) {
+      const escaped = appDbPassword.replace(/'/g, "''");
+      await sql.unsafe(`ALTER ROLE khata_app WITH LOGIN PASSWORD '${escaped}'`);
+      console.log("Provisioned khata_app role password.");
+    } else {
+      console.warn("APP_DB_PASSWORD set but khata_app role missing — ensure migration 035 applied.");
+    }
+  }
+
   await sql.end();
   console.log("Migrations complete.");
 }

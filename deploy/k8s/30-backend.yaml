@@ -43,15 +43,21 @@ spec:
               value: production
             - name: PORT
               value: "3001"
-            # POSTGRES_PASSWORD is also pulled from envFrom; redeclared so
-            # kubelet expands it inside DATABASE_URL below.
-            - name: POSTGRES_PASSWORD
+            # The app connects as the least-privilege khata_app role (audit
+            # 2026-06-19 M5), NOT the owner — it can do DML but cannot disable
+            # the month-close immutability triggers. APP_DB_PASSWORD is
+            # redeclared so the kubelet expands it inside DATABASE_URL.
+            # ORDERING: the khata_app role + its password are provisioned by
+            # `migrate` (run as the owner with APP_DB_PASSWORD set) and migration
+            # 035 — run that BEFORE this pod starts, or it cannot connect. See
+            # the deploy runbook.
+            - name: APP_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: khata-secrets
-                  key: POSTGRES_PASSWORD
+                  key: APP_DB_PASSWORD
             - name: DATABASE_URL
-              value: postgres://khata:$(POSTGRES_PASSWORD)@khata-postgres.khata.svc.cluster.local:5432/khata
+              value: postgres://khata_app:$(APP_DB_PASSWORD)@khata-postgres.khata.svc.cluster.local:5432/khata
             # Same-origin in production (frontend + backend on one Tailscale
             # hostname via Traefik path routing). Localhost stays in the list
             # so port-forward dev still works.
