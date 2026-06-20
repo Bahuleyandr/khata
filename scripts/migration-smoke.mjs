@@ -363,6 +363,40 @@ async function assertUpdatedAtTrigger() {
   console.log("updated_at trigger verified.");
 }
 
+/**
+ * Audit 2026-06-19 M5: the app connects as the least-privilege khata_app role,
+ * which must do DML but must NOT be able to disable the immutability triggers
+ * (or DDL / TRUNCATE) — that owner-only ability is exactly what let the old
+ * owner-role connection bypass month-close protection.
+ */
+async function assertAppRolePrivileges() {
+  console.log("Verifying khata_app least-privilege role...");
+  const exists = await psql("SELECT 1 FROM pg_roles WHERE rolname = 'khata_app'");
+  if (exists !== "1") throw new Error("khata_app role was not created by migration 035");
+
+  await psql(
+    "INSERT INTO ledgers (id, owner_telegram_user_id, name, kind) VALUES (994, 994, 'AppRole', 'personal') ON CONFLICT (id) DO NOTHING",
+  );
+  const dml = await psql(
+    "SET ROLE khata_app; INSERT INTO expenses (user_id, amount_cents, occurred_at) VALUES (994, 1234, '2026-05-02T10:00:00Z'); SELECT amount_cents FROM expenses WHERE user_id = 994; RESET ROLE;",
+  );
+  if (!/1234/.test(dml)) throw new Error(`khata_app DML did not work (got '${dml}')`);
+
+  const disableTrigger = await psql(
+    "SET ROLE khata_app; ALTER TABLE expenses DISABLE TRIGGER expenses_assert_month_open;",
+    { expectError: true },
+  );
+  if (!/permission denied|must be owner/i.test(disableTrigger)) {
+    throw new Error(`khata_app was able to disable a trigger (got '${disableTrigger}')`);
+  }
+
+  const truncate = await psql("SET ROLE khata_app; TRUNCATE expenses;", { expectError: true });
+  if (!/permission denied/i.test(truncate)) {
+    throw new Error(`khata_app was able to TRUNCATE (got '${truncate}')`);
+  }
+  console.log("khata_app role verified (DML allowed; trigger-disable + TRUNCATE denied).");
+}
+
 async function main() {
   console.log(`Starting disposable Postgres container ${container}`);
   await detectDocker();
@@ -417,6 +451,7 @@ async function main() {
   await assertUpdatedAtTrigger();
   await assertConfidenceDecode();
   await assertRemainingJsonbDecode();
+  await assertAppRolePrivileges();
 
   console.log("Migration smoke passed.");
 }

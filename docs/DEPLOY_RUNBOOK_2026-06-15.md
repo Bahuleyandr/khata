@@ -54,6 +54,21 @@ kubectl exec -n khata deploy/khata-postgres -- psql -U khata -d khata -c "select
 ```
 **⏸ CHECKPOINT D** — `make migrate` should print `apply 025_… … apply 032_…` then "Migrations complete.", and `max(filename)` = `032_ops_health_heartbeats.sql`.
 
+> **Non-owner DB role (audit 2026-06-19 M5) — applies once migrations 033–035 ship.**
+> The backend now connects as the least-privilege `khata_app` role (DML only;
+> cannot disable the month-close triggers), not the owner. Two consequences:
+> 1. Add **`APP_DB_PASSWORD`** to the `khata-secrets` Secret first. `make migrate`
+>    runs as the owner; migration 035 creates `khata_app` and the migrate step
+>    sets its login password from `APP_DB_PASSWORD` (so it must be in the migrate
+>    environment, alongside the owner `DATABASE_URL`).
+> 2. Migrate must provision `khata_app` **before** the backend can connect — the
+>    backend's `DATABASE_URL` now points at `khata_app`. If the backend rolls out
+>    first it CrashLoops ("password authentication failed for user khata_app")
+>    until migrate runs; run migrate promptly, or migrate before scaling the
+>    backend up. Verify with
+>    `kubectl exec -n khata deploy/khata-postgres -- psql -U khata -d khata -c "\\du khata_app"`
+>    (no Superuser / Create role / Create DB attributes).
+
 ## 5. Verify
 ```bash
 make smoke      # rollouts Ready + the 3 backup CronJobs exist + /health ok
