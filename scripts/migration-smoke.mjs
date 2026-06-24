@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -9,6 +9,20 @@ const container = `khata-migration-smoke-${randomUUID().slice(0, 8)}`;
 const dbName = "khata_smoke";
 const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
 let dockerCommand = { cmd: "docker", prefixArgs: [] };
+let wslKeepAlive = null;
+
+function startWslKeepAlive() {
+  if (dockerCommand.cmd !== "wsl" || wslKeepAlive) return;
+  wslKeepAlive = spawn("wsl", ["sh", "-lc", "while sleep 60; do :; done"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+}
+
+function stopWslKeepAlive() {
+  if (wslKeepAlive) wslKeepAlive.kill();
+  wslKeepAlive = null;
+}
 
 async function detectDocker() {
   try {
@@ -400,6 +414,7 @@ async function assertAppRolePrivileges() {
 async function main() {
   console.log(`Starting disposable Postgres container ${container}`);
   await detectDocker();
+  startWslKeepAlive();
   await docker([
     "run",
     "-d",
@@ -461,4 +476,7 @@ main()
     console.error(err);
     process.exitCode = 1;
   })
-  .finally(cleanup);
+  .finally(async () => {
+    await cleanup();
+    stopWslKeepAlive();
+  });

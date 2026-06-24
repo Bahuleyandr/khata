@@ -31,6 +31,7 @@ import {
   handleExport,
   handleDashboard,
 } from "./handlers.js";
+import { isPrivateChatType } from "./chat-policy.js";
 
 export const bot = new Bot(config.telegramBotToken);
 
@@ -43,6 +44,10 @@ bot.use(async (ctx, next) => {
   const userId = from?.id;
   if (!from || userId == null) {
     await ctx.reply("Unauthorized.");
+    return;
+  }
+  if (!isPrivateChatType(ctx.chat?.type)) {
+    await ctx.reply("Khata only handles money data in a private chat. Open a DM with me to continue.");
     return;
   }
   (ctx as typeof ctx & { khataActorUserId?: number }).khataActorUserId = userId;

@@ -888,7 +888,7 @@ test('manage workspace renders categories, budgets, tags, and statements', async
   await expect(page.getByText(/99 · @grace/)).toBeVisible()
   await expect(page.getByText('Budgets')).toBeVisible()
   await expect(page.getByText('#team · 1')).toBeVisible()
-  await expect(page.getByText('MiniMax')).toBeVisible()
+  await expect(page.getByText('MiniMax', { exact: true })).toBeVisible()
   await expect(page.getByText('Learning Suggestions')).toBeVisible()
   await expect(page.getByText('Manual transaction correction')).toBeVisible()
   await expect(page.getByText('Capture Workbench')).toBeVisible()

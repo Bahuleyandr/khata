@@ -81,6 +81,7 @@ import { ocrReceiptImage } from "../receipt/ocr.js";
 import { tryParseReceiptText } from "../receipt/parse.js";
 import { clearPendingEdit, getPendingEdit, setPendingEdit, type PendingEdit } from "./session.js";
 import { askLimiter, captureLimiter, statementLimiter } from "../lib/rate-limit.js";
+import { escapeMarkdown, hashtag } from "./format.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -395,6 +396,7 @@ async function runStatementPipeline(
 ): Promise<void> {
   const userId = ctx.from!.id;
   const chatId = ctx.chat!.id;
+  const actorId = actorUserId(ctx);
 
   await ctx.reply(`⏳ Downloading ${fileName}…`);
 
@@ -423,7 +425,7 @@ async function runStatementPipeline(
       metadata: { file_name: fileName, statement_id: statementId, telegram_file_id: fileId },
     });
   } catch (err) {
-    await updateStatementStatus(statementId, "failed", undefined, redactError(err));
+    await updateStatementStatus(statementId, "failed", undefined, redactError(err), undefined, undefined, userId);
     await ctx.reply(`❌ Upload failed: ${String(err)}`);
     return;
   }
@@ -434,14 +436,14 @@ async function runStatementPipeline(
   try {
     transactions = await parseStatementBuffer(buffer, mimeType);
   } catch (err) {
-    await updateStatementStatus(statementId, "failed", undefined, redactError(err));
+    await updateStatementStatus(statementId, "failed", undefined, redactError(err), undefined, undefined, userId);
     await markCaptureFailed(userId, captureEventId, redactError(err));
     await ctx.reply(`❌ Parsing failed: ${String(err)}`);
     return;
   }
 
   if (transactions.length === 0) {
-    await updateStatementStatus(statementId, "failed", 0, "No transactions found");
+    await updateStatementStatus(statementId, "failed", 0, "No transactions found", undefined, undefined, userId);
     await markCaptureFailed(userId, captureEventId, "No transactions found");
     await ctx.reply("⚠️ No transactions found in the statement.");
     return;
@@ -457,10 +459,13 @@ async function runStatementPipeline(
     undefined,
     undefined,
     alreadyLoggedCount,
+    userId,
   );
 
-  await setPendingImport(chatId, {
+  await setPendingImport(chatId, actorId, {
     statementId,
+    actorUserId: actorId,
+    ledgerUserId: userId,
     results,
     totalCount: results.length,
     alreadyLoggedCount,
@@ -620,8 +625,8 @@ async function processUpiPayment(
         ).catch(() => false);
       }
       const note = attached
-        ? `📎 Receipt attached — same UPI txn (\`${upi.reference}\`) was already logged.`
-        : `🔁 Already logged (UPI ref \`${upi.reference}\`).`;
+        ? `📎 Receipt attached — same UPI txn (\`${escapeMarkdown(upi.reference)}\`) was already logged.`
+        : `🔁 Already logged (UPI ref \`${escapeMarkdown(upi.reference)}\`).`;
       await markCaptureProcessed(userId, opts.captureEventId, existing.id);
       await ctx.reply(note, { parse_mode: "Markdown" });
       return;
@@ -731,7 +736,7 @@ async function processUpiPayment(
         : "UPI logged";
   const methodLabel = paymentMethodLabel(upi.app);
   await ctx.reply(
-    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${description} — ${categoryName} _via ${methodLabel}_\n` +
+    `✅ ${sourceLabel}: ${formatAmount(amount_cents, "INR")} ${escapeMarkdown(description)} — ${escapeMarkdown(categoryName)} _via ${escapeMarkdown(methodLabel)}_\n` +
       `Reply \`category: <name>\` or use the buttons.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
@@ -776,7 +781,7 @@ export async function handleAsk(ctx: Context): Promise<void> {
 
   try {
     const result = await chatWithData(question, userId, todayString());
-    await ctx.reply(result.text, { parse_mode: "Markdown" });
+    await ctx.reply(result.text);
   } catch (err) {
     console.error("Ask error:", err);
     await ctx.reply(`⚠️ Couldn't answer that: ${err instanceof Error ? err.message : String(err)}`);
@@ -796,7 +801,7 @@ export async function handleListTags(ctx: Context): Promise<void> {
     );
     return;
   }
-  const lines = tags.map((t) => `• #${t.name} — ${t.count} expense${t.count !== 1 ? "s" : ""}`);
+  const lines = tags.map((t) => `• ${hashtag(t.name)} — ${t.count} expense${t.count !== 1 ? "s" : ""}`);
   await ctx.reply(`🏷️ *Your tags:*\n${lines.join("\n")}`, { parse_mode: "Markdown" });
 }
 
@@ -861,7 +866,7 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     .sort((a, b) => b[1].totalCents - a[1].totalCents)
     .map(
       ([name, agg]) =>
-        `• ${name} — ${formatAmount(agg.totalCents, currency)} (${agg.count})`,
+        `• ${escapeMarkdown(name)} — ${formatAmount(agg.totalCents, currency)} (${agg.count})`,
     )
     .join("\n");
 
@@ -877,8 +882,8 @@ export async function handleListExpenses(ctx: Context): Promise<void> {
     const trimmed = name.length > 40 ? name.slice(0, 38) + "…" : name;
     const amt = formatAmount(Number(r.amount_cents), r.currency);
     const tagNames = tagMap.get(r.id) ?? [];
-    const tagSuffix = tagNames.length ? ` ${tagNames.map((n) => `#${n}`).join(" ")}` : "";
-    return `\`${day} ${monAbbr}\` ${amt} — ${trimmed} _(${r.category})_${tagSuffix}`;
+    const tagSuffix = tagNames.length ? ` ${tagNames.map((n) => hashtag(n)).join(" ")}` : "";
+    return `\`${day} ${monAbbr}\` ${amt} — ${escapeMarkdown(trimmed)} _(${escapeMarkdown(r.category)})_${tagSuffix}`;
   });
 
   const noun = rows.length === 1 ? "expense" : "expenses";
@@ -945,14 +950,14 @@ export async function handleMonthSummary(ctx: Context): Promise<void> {
     topExpenses(userId, period.start, period.end, 3),
   ]);
   const topLines = categories.slice(0, 5).map(
-    (row) => `• ${row.category}: ${formatAmount(Number(row.total_cents), row.currency)}`,
+    (row) => `• ${escapeMarkdown(row.category)}: ${formatAmount(Number(row.total_cents), row.currency)}`,
   );
   const merchantLines = merchants.map(
-    (row) => `• ${row.merchant}: ${formatAmount(Number(row.total_cents), row.currency)} (${row.count})`,
+    (row) => `• ${escapeMarkdown(row.merchant)}: ${formatAmount(Number(row.total_cents), row.currency)} (${row.count})`,
   );
   const largestLines = largest.map((row, index) => {
     const name = row.merchant ?? row.description ?? "expense";
-    return `${index + 1}. ${name}: ${formatAmount(Number(row.amount_cents), row.currency)}`;
+    return `${index + 1}. ${escapeMarkdown(name)}: ${formatAmount(Number(row.amount_cents), row.currency)}`;
   });
   const total = Number(overview?.total_cents ?? 0);
   await ctx.reply(
@@ -1053,7 +1058,7 @@ export async function handleNeedsReview(ctx: Context): Promise<void> {
   const lines = rows.map((row) => {
     const name = row.merchant ?? row.description ?? "expense";
     const date = formatIstDate(new Date(row.occurred_at));
-    return `• ${formatAmount(Number(row.amount_cents), row.currency)} ${name} — ${row.category} (${date})`;
+    return `• ${formatAmount(Number(row.amount_cents), row.currency)} ${escapeMarkdown(name)} — ${escapeMarkdown(row.category)} (${date})`;
   });
   await ctx.reply(
     `🧾 *Needs review*\n${lines.join("\n")}\n\nReply \`edit\` after logging, or open /dashboard for bulk fixes.`,
@@ -1143,10 +1148,10 @@ async function handleQueryIntent(
       const lines = rows.map((r, i) => {
         const name = r.merchant ?? r.description;
         const date = formatIstDate(new Date(r.occurred_at));
-        return `${i + 1}. ${name} — ${formatAmount(Number(r.amount_cents), r.currency)} (${date})`;
+        return `${i + 1}. ${escapeMarkdown(name)} — ${formatAmount(Number(r.amount_cents), r.currency)} (${date})`;
       });
       await ctx.reply(
-        `*Top ${rows.length} expenses — ${time_range_label}*\n${lines.join("\n")}`,
+        `*Top ${rows.length} expenses — ${escapeMarkdown(time_range_label)}*\n${lines.join("\n")}`,
         { parse_mode: "Markdown" },
       );
     } else if (group_by_category) {
@@ -1156,29 +1161,29 @@ async function handleQueryIntent(
         return;
       }
       const lines = rows.map(
-        (r) => `- ${r.category}: ${formatAmount(Number(r.total_cents), r.currency)}`,
+        (r) => `- ${escapeMarkdown(r.category)}: ${formatAmount(Number(r.total_cents), r.currency)}`,
       );
       const total = rows.reduce((s, r) => s + Number(r.total_cents), 0);
       const currency = rows[0]!.currency;
       await ctx.reply(
-        `*Spend by category — ${time_range_label}*\n${lines.join("\n")}\n\n*Total: ${formatAmount(total, currency)}*`,
+        `*Spend by category — ${escapeMarkdown(time_range_label)}*\n${lines.join("\n")}\n\n*Total: ${formatAmount(total, currency)}*`,
         { parse_mode: "Markdown" },
       );
     } else {
       const rows = await totalSpendInCategory(userId, category, start_date, end_date);
       if (rows.length === 0) {
-        const catLabel = category ? ` on *${category}*` : "";
+        const catLabel = category ? ` on *${escapeMarkdown(category)}*` : "";
         await ctx.reply(
-          `No expenses found${catLabel} for ${time_range_label}.`,
+          `No expenses found${catLabel} for ${escapeMarkdown(time_range_label)}.`,
           { parse_mode: "Markdown" },
         );
         return;
       }
       const row = rows[0]!;
-      const catLabel = category ? ` on *${category}*` : "";
+      const catLabel = category ? ` on *${escapeMarkdown(category)}*` : "";
       const txn = Number(row.count);
       await ctx.reply(
-        `*${formatAmount(Number(row.total_cents), row.currency)}*${catLabel} — ${time_range_label} (${txn} transaction${txn !== 1 ? "s" : ""})`,
+        `*${formatAmount(Number(row.total_cents), row.currency)}*${catLabel} — ${escapeMarkdown(time_range_label)} (${txn} transaction${txn !== 1 ? "s" : ""})`,
         { parse_mode: "Markdown" },
       );
     }
@@ -1224,6 +1229,7 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   }
 
   const chatId = ctx.chat?.id;
+  const actorId = actorUserId(ctx);
   const pendingEdit = await getPendingEdit(userId);
   const editLedgerUserId = pendingLedgerUserId(userId, pendingEdit);
 
@@ -1281,14 +1287,19 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 
   // Check for a pending statement import confirmation
   if (chatId) {
-    const pendingImport = await getPendingImport(chatId);
+    const pendingImport = await getPendingImport(chatId, actorId);
     if (pendingImport) {
+      if (pendingImport.actorUserId !== actorId || pendingImport.ledgerUserId !== userId) {
+        await clearPendingImport(chatId, actorId);
+        await ctx.reply("That pending statement import no longer matches this chat session. Please upload it again.");
+        return;
+      }
       const lower = text.toLowerCase();
       if (lower === "yes" || lower === "y") {
         await ctx.reply("⏳ Importing…");
         try {
           const inserted = await bulkInsertTransactions(
-            userId,
+            pendingImport.ledgerUserId,
             pendingImport.statementId,
             pendingImport.results,
           );
@@ -1299,8 +1310,9 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
             undefined,
             inserted,
             pendingImport.alreadyLoggedCount,
+            pendingImport.ledgerUserId,
           );
-          await clearPendingImport(chatId);
+          await clearPendingImport(chatId, actorId);
           await ctx.reply(
             `✅ Imported ${inserted} new transaction${inserted !== 1 ? "s" : ""}.`,
           );
@@ -1310,12 +1322,15 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
             "failed",
             undefined,
             redactError(err),
+            undefined,
+            undefined,
+            pendingImport.ledgerUserId,
           );
-          await clearPendingImport(chatId);
+          await clearPendingImport(chatId, actorId);
           await ctx.reply(`❌ Import failed: ${String(err)}`);
         }
       } else if (lower === "no" || lower === "n") {
-        clearPendingImport(chatId);
+        await clearPendingImport(chatId, actorId);
         await ctx.reply("Import cancelled.");
       } else {
         await ctx.reply("Reply *yes* to import or *no* to cancel.", { parse_mode: "Markdown" });
@@ -1958,7 +1973,7 @@ async function runReceiptPipeline(ctx: Context, fileId: string, mimeType: string
 
   const merchantPart = parsed.merchant ? ` at ${parsed.merchant}` : "";
   await ctx.reply(
-    `✅ Receipt logged: ${formatAmount(amount_cents, parsed.currency)}${merchantPart} — ${categoryName}\n` +
+    `✅ Receipt logged: ${formatAmount(amount_cents, parsed.currency)}${escapeMarkdown(merchantPart)} — ${escapeMarkdown(categoryName)}\n` +
       `Date: ${parsed.occurred_at}\n\n` +
       `Reply \`category: <name>\` to change category, or use the buttons below.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
@@ -2049,7 +2064,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
     return;
   }
 
-  await ctx.reply(`🎙️ _"${text}"_`, { parse_mode: "Markdown" });
+  await ctx.reply(`🎙️ "${text}"`);
 
   const captureEventId = await recordCaptureEvent({
     userId,
@@ -2164,7 +2179,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
   });
 
   await ctx.reply(
-    `✅ Logged: ${formatAmount(amount_cents, parsed.currency)} ${parsed.description} — ${categoryName}. Reply \`edit\` to change.`,
+    `✅ Logged: ${formatAmount(amount_cents, parsed.currency)} ${escapeMarkdown(parsed.description)} — ${escapeMarkdown(categoryName)}. Reply \`edit\` to change.`,
     { parse_mode: "Markdown", reply_markup: editKeyboard(expenseId, userId) },
   );
 }
@@ -2189,7 +2204,7 @@ export async function handleBudget(ctx: Context): Promise<void> {
       return;
     }
     const lines = budgets.map(
-      (b) => `• *${b.category_name}*: ${formatAmount(b.target_cents, "INR")}/month`,
+      (b) => `• *${escapeMarkdown(b.category_name)}*: ${formatAmount(b.target_cents, "INR")}/month`,
     );
     await ctx.reply(`💰 *Your budgets:*\n${lines.join("\n")}`, { parse_mode: "Markdown" });
     return;
@@ -2233,7 +2248,7 @@ export async function handleBudget(ctx: Context): Promise<void> {
     const targetCents = Math.round(amount * 100);
     await setBudget(userId, cat.id, targetCents);
     await ctx.reply(
-      `✅ Budget set: *${cat.name}* → ${formatAmount(targetCents, "INR")}/month`,
+      `✅ Budget set: *${escapeMarkdown(cat.name)}* → ${formatAmount(targetCents, "INR")}/month`,
       { parse_mode: "Markdown" },
     );
     return;

@@ -16,6 +16,7 @@ import {
   advanceOverdueSubscriptions,
   sendSubscriptionReminders,
 } from "../db/subscription-renewal.js";
+import { escapeMarkdown } from "../bot/format.js";
 
 function currentYearMonth(): string {
   return yearMonthIst();
@@ -55,7 +56,7 @@ export async function runDailyBudgetNudge(botApi: Api): Promise<void> {
       if (!crossed) continue;
 
       const msg =
-        `📊 *${b.category_name}*: ${b.pct}% of monthly budget used ` +
+        `📊 *${escapeMarkdown(b.category_name)}*: ${b.pct}% of monthly budget used ` +
         `(${fmt(b.spent_cents)} / ${fmt(b.target_cents)}), ` +
         `${daysLeft} day${daysLeft !== 1 ? "s" : ""} left.`;
       try {
@@ -78,14 +79,14 @@ export async function runMonthlyDigest(botApi: Api): Promise<void> {
 
     const lines = budgets.map((b) => {
       const icon = b.pct > 100 ? "🔴" : b.pct >= 75 ? "🟡" : "🟢";
-      return `${icon} *${b.category_name}*: ${fmt(b.spent_cents)} / ${fmt(b.target_cents)} (${b.pct}%)`;
+      return `${icon} *${escapeMarkdown(b.category_name)}*: ${fmt(b.spent_cents)} / ${fmt(b.target_cents)} (${b.pct}%)`;
     });
 
     const topVariances = budgets
       .filter((b) => b.spent_cents > b.target_cents)
       .sort((a, x) => (x.spent_cents - x.target_cents) - (a.spent_cents - a.target_cents))
       .slice(0, 3)
-      .map((b) => `• *${b.category_name}*: over by ${fmt(b.spent_cents - b.target_cents)}`);
+      .map((b) => `• *${escapeMarkdown(b.category_name)}*: over by ${fmt(b.spent_cents - b.target_cents)}`);
 
     let msg = `📅 *${prevMonth} Budget Summary*\n\n${lines.join("\n")}`;
     if (topVariances.length > 0) {

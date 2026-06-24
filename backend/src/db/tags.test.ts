@@ -74,6 +74,8 @@ describe("attach / detach", () => {
     expect(sqlMock).toHaveBeenCalledOnce();
     const fragment = (sqlMock.mock.calls[0]![0] as TemplateStringsArray).join("").toLowerCase();
     expect(fragment).toContain("insert into expense_tags");
+    expect(fragment).toContain("join tags");
+    expect(fragment).toContain("t.user_id = e.user_id");
     expect(fragment).toContain("on conflict do nothing");
   });
 
@@ -100,6 +102,9 @@ describe("getTagsForExpenses", () => {
       { expense_id: "e2", name: "personal" },
     ]);
     const result = await getTagsForExpenses(["e1", "e2"]);
+    const fragment = (sqlMock.mock.calls[0]![0] as TemplateStringsArray).join("").toLowerCase();
+    expect(fragment).toContain("join expenses");
+    expect(fragment).toContain("e.user_id = t.user_id");
     expect(result.size).toBe(2);
     expect(result.get("e1")).toEqual(["lunch", "work"]);
     expect(result.get("e2")).toEqual(["personal"]);

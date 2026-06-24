@@ -8,7 +8,7 @@
  * If docker is unavailable: sets INTEGRATION_SKIP=1 and returns without error
  * — every test file checks that flag and skips the whole describe block.
  */
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
@@ -25,6 +25,22 @@ interface DockerCommand {
 }
 
 let dockerCommand: DockerCommand = { cmd: "docker", prefixArgs: [] };
+let wslKeepAlive: ChildProcess | null = null;
+
+function startWslKeepAlive(): void {
+  if (dockerCommand.cmd !== "wsl" || wslKeepAlive) return;
+  // Keep WSL alive while Windows-side Vitest talks to a WSL Docker container.
+  // Otherwise this host can tear down the distro, taking Postgres with it.
+  wslKeepAlive = spawn("wsl", ["sh", "-lc", "while sleep 60; do :; done"], {
+    stdio: "ignore",
+    windowsHide: true,
+  });
+}
+
+function stopWslKeepAlive(): void {
+  wslKeepAlive?.kill();
+  wslKeepAlive = null;
+}
 
 async function detectDocker(): Promise<boolean> {
   // Try native docker first.
@@ -148,6 +164,7 @@ export async function setup(): Promise<void> {
     process.env["INTEGRATION_SKIP"] = "1";
     return;
   }
+  startWslKeepAlive();
 
   console.log(`[integration] Starting container ${container}`);
   await docker([
@@ -247,4 +264,5 @@ export async function teardown(): Promise<void> {
       { windowsHide: true },
     ).catch(() => {});
   }
+  stopWslKeepAlive();
 }

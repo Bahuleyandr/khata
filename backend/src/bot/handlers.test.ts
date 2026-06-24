@@ -3,7 +3,7 @@ import type { Context } from "grammy";
 
 // vi.hoisted lets us share state between the mock factory and test body.
 const { importStore, editStore } = vi.hoisted(() => ({
-  importStore: new Map<number, unknown>(),
+  importStore: new Map<string, unknown>(),
   editStore: new Map<number, unknown>(),
 }));
 
@@ -95,9 +95,15 @@ vi.mock("../statement/dedup.js", () => ({
 }));
 
 vi.mock("../statement/session.js", () => ({
-  setPendingImport: vi.fn((chatId: number, data: unknown) => importStore.set(chatId, data)),
-  getPendingImport: vi.fn((chatId: number) => importStore.get(chatId)),
-  clearPendingImport: vi.fn((chatId: number) => importStore.delete(chatId)),
+  setPendingImport: vi.fn((chatId: number, actorUserId: number, data: unknown) =>
+    importStore.set(`${chatId}:${actorUserId}`, data),
+  ),
+  getPendingImport: vi.fn((chatId: number, actorUserId: number) =>
+    importStore.get(`${chatId}:${actorUserId}`),
+  ),
+  clearPendingImport: vi.fn((chatId: number, actorUserId: number) =>
+    importStore.delete(`${chatId}:${actorUserId}`),
+  ),
 }));
 
 vi.mock("./session.js", () => ({
@@ -387,6 +393,7 @@ import {
   handleVoice,
 } from "./handlers.js";
 import { clearPendingImport } from "../statement/session.js";
+import * as mockStatementImporter from "../statement/importer.js";
 import { sql as mockSql } from "../db/index.js";
 import * as mockXlsx from "../export/xlsx.js";
 import * as mockAI from "../ai/parse.js";
@@ -748,8 +755,10 @@ describe("handleTextMessage", () => {
   });
 
   it("asks for clarification on unrecognised reply during pending import", async () => {
-    importStore.set(111111, {
+    importStore.set("111111:111111", {
       statementId: "stmt-1",
+      actorUserId: 111111,
+      ledgerUserId: 111111,
       results: [],
       totalCount: 5,
       alreadyLoggedCount: 2,
@@ -762,8 +771,10 @@ describe("handleTextMessage", () => {
   });
 
   it("cancels import on 'no'", async () => {
-    importStore.set(111111, {
+    importStore.set("111111:111111", {
       statementId: "stmt-1",
+      actorUserId: 111111,
+      ledgerUserId: 111111,
       results: [],
       totalCount: 5,
       alreadyLoggedCount: 2,
@@ -771,9 +782,51 @@ describe("handleTextMessage", () => {
     });
     const ctx = makeCtx({ message: { text: "no" } as Context["message"] });
     await handleTextMessage(ctx);
-    expect(vi.mocked(clearPendingImport)).toHaveBeenCalledWith(111111);
+    expect(vi.mocked(clearPendingImport)).toHaveBeenCalledWith(111111, 111111);
     const [text] = (ctx.reply as ReturnType<typeof vi.fn>).mock.calls[0] as [string];
     expect(text.toLowerCase()).toContain("cancel");
+  });
+
+  it("imports a pending statement only for the same actor and ledger", async () => {
+    const results = [
+      {
+        transaction: {
+          date: "2026-04-01",
+          description: "Cafe",
+          amountCents: 12000,
+          currency: "INR",
+          suggestedCategory: "Food",
+        },
+        alreadyLogged: false,
+      },
+    ];
+    importStore.set("111111:111111", {
+      statementId: "stmt-1",
+      actorUserId: 111111,
+      ledgerUserId: 111111,
+      results,
+      totalCount: 1,
+      alreadyLoggedCount: 0,
+      newCount: 1,
+    });
+    const ctx = makeCtx({ message: { text: "yes" } as Context["message"] });
+
+    await handleTextMessage(ctx);
+
+    expect(vi.mocked(mockStatementImporter.bulkInsertTransactions)).toHaveBeenCalledWith(
+      111111,
+      "stmt-1",
+      results,
+    );
+    expect(vi.mocked(mockStatementImporter.updateStatementStatus)).toHaveBeenCalledWith(
+      "stmt-1",
+      "imported",
+      1,
+      undefined,
+      1,
+      0,
+      111111,
+    );
   });
 });
 

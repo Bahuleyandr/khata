@@ -57,7 +57,12 @@ export async function findTagByName(userId: number, rawName: string): Promise<Ta
 
 export async function attachTagToExpense(expenseId: string, tagId: string): Promise<void> {
   await sql`
-    INSERT INTO expense_tags (expense_id, tag_id) VALUES (${expenseId}, ${tagId})
+    INSERT INTO expense_tags (expense_id, tag_id)
+    SELECT e.id, t.id
+    FROM expenses e
+    JOIN tags t ON t.id = ${tagId}
+               AND t.user_id = e.user_id
+    WHERE e.id = ${expenseId}
     ON CONFLICT DO NOTHING
   `;
 }
@@ -94,6 +99,8 @@ export async function getTagsForExpense(expenseId: string): Promise<Tag[]> {
   return sql<Tag[]>`
     SELECT t.id, t.name FROM tags t
     JOIN expense_tags et ON et.tag_id = t.id
+    JOIN expenses e ON e.id = et.expense_id
+                   AND e.user_id = t.user_id
     WHERE et.expense_id = ${expenseId}
     ORDER BY t.name
   `;
@@ -112,6 +119,8 @@ export async function getTagsForExpenses(
     SELECT et.expense_id, t.name
     FROM expense_tags et
     JOIN tags t ON t.id = et.tag_id
+    JOIN expenses e ON e.id = et.expense_id
+                   AND e.user_id = t.user_id
     WHERE et.expense_id = ANY(${expenseIds}::uuid[])
     ORDER BY t.name
   `;

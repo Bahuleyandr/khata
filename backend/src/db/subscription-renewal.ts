@@ -6,6 +6,7 @@
  *   sendSubscriptionReminders   — DM users per reminder_days[], with dedup guard
  */
 import { sql } from "./index.js";
+import { escapeMarkdown } from "../bot/format.js";
 import type { Api } from "grammy";
 import type { BillingCycle } from "./subscription-records.js";
 import { advanceUntilFuture } from "../lib/subscription-cadence.js";
@@ -127,7 +128,7 @@ export async function sendSubscriptionReminders(botApi: Api): Promise<void> {
       const amountRupees = Math.round(Number(sub.amount_cents) / 100);
       const symbol = sub.currency === "INR" ? "₹" : `${sub.currency} `;
       const msg =
-        `🔔 *${sub.name}* renews in ${daysUntil}d (${symbol}${amountRupees.toLocaleString("en-IN")})`;
+        `🔔 *${escapeMarkdown(sub.name)}* renews in ${daysUntil}d (${symbol}${amountRupees.toLocaleString("en-IN")})`;
 
       try {
         await botApi.sendMessage(userId, msg, { parse_mode: "Markdown" });

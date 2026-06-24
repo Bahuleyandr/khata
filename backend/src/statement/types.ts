@@ -14,6 +14,8 @@ export interface DedupeResult {
 
 export interface PendingImport {
   statementId: string;
+  actorUserId: number;
+  ledgerUserId: number;
   results: DedupeResult[];
   totalCount: number;
   alreadyLoggedCount: number;
