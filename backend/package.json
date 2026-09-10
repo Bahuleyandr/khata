@@ -42,7 +42,7 @@
     "eslint": "^10.5.0",
     "tsx": "^4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "uuid": "14.0.0"
